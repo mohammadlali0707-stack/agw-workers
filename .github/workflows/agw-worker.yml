@@ -1,0 +1,118 @@
+name: AGW Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Prompt to run with agy'
+        required: true
+        type: string
+      acc_index:
+        description: 'Account index 1-9 (0=random)'
+        required: false
+        default: '0'
+        type: string
+      callback_id:
+        description: 'Unique request ID for tracking'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  run-agy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Select AGY Account Token
+        id: pick_token
+        run: |
+          IDX="${{ inputs.acc_index }}"
+          if [ "$IDX" = "0" ]; then
+            IDX=$(( (RANDOM % 9) + 1 ))
+          fi
+          echo "acc_idx=$IDX" >> $GITHUB_OUTPUT
+          echo "Selected account: acc${IDX}"
+
+      - name: Install AGY CLI from HF Dataset
+        run: |
+          echo "Downloading AGY CLI binary (public)..."
+          curl -L \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+
+          echo "Extracting..."
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+
+          echo "Installing..."
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          echo "Found binary: $CLI_BIN"
+          sudo install -m 0755 "$CLI_BIN" /usr/local/bin/agy
+          agy --version 2>/dev/null || echo "agy ready"
+
+      - name: Restore AGY OAuth Token
+        run: |
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+
+          ACC_IDX="${{ steps.pick_token.outputs.acc_idx }}"
+          echo "Using account acc${ACC_IDX}"
+
+          # انتخاب token
+          TOKEN_B64=""
+          case "$ACC_IDX" in
+            1) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
+            2) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
+            3) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
+            4) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
+            5) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
+            6) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
+            7) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
+            8) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
+            9) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC9 }}" ;;
+          esac
+
+          echo "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+
+          # installation_id و config
+          cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+
+          echo "Token size: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes"
+
+      - name: Run AGY Prompt
+        id: run_agy
+        run: |
+          PROMPT="${{ inputs.prompt }}"
+          echo "Running agy prompt..."
+
+          OUTPUT=$(timeout 300 agy --dangerously-skip-permissions -p "$PROMPT" 2>&1) || true
+
+          echo "$OUTPUT" > /tmp/agy_output.txt
+          echo "Exit status: $?"
+          echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
+          head -20 /tmp/agy_output.txt
+
+      - name: Upload Output as Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agy-output-${{ inputs.callback_id || github.run_id }}
+          path: /tmp/agy_output.txt
+          retention-days: 1
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## AGW Worker Result" >> $GITHUB_STEP_SUMMARY
+          echo "- **Account:** acc${{ steps.pick_token.outputs.acc_idx }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Callback ID:** ${{ inputs.callback_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          head -50 /tmp/agy_output.txt 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "(no output)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
