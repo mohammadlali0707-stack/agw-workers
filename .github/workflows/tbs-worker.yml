@@ -1,0 +1,211 @@
+# One account's eleven workers, run on GitHub's machines instead of a laptop.
+#
+# This file is the AUTHORITATIVE copy. It lives in the hub repository and is
+# synced out to `agw-workers` in each of the nine accounts. Editing a copy in
+# a runner repo is the same mistake as storing a rule in an IDE's private
+# config: eight other accounts never see it.
+#
+# Per-account configuration lives in the runner repo, not here:
+#   vars.TBS_ACCOUNT      "1".."9" -- which account this repo belongs to
+#   vars.TBS_BRANCH       hub branch to work on
+#   vars.TBS_WORKER_IMAGE ghcr.io/mohammadlali/tbs-worker:<sha> -- an
+#                         IMMUTABLE tag. Superseded vars.AGW_CLI_INSTALL and
+#                         vars.AGW_CLI_VERSION, which no longer do anything:
+#                         the CLI is baked into the image at a pinned version.
+#   secrets.TBS_HUB_TOKEN GitHub PAT that can read AND write the hub repo
+#   secrets.AGW_TOKEN_ACC<N>  base64 of the Antigravity oauth token file
+#
+# Two things in here are not style, and both were bought elsewhere in this
+# project. They are commented where they appear.
+
+name: TBS worker
+
+on:
+  repository_dispatch:
+    types: [tbs-cycle]
+  workflow_dispatch:
+    inputs:
+      workers:
+        description: 'slots to wake, space separated'
+        default: 'w01 w02 w03 w04 w05 w06 w07 w08 w09 w10 w11'
+      max_parallel:
+        description: 'how many may run at once (see STAGGER note)'
+        default: '11'
+      stagger_seconds:
+        description: 'seconds between starts, per account'
+        default: '5'
+
+# One cycle per account at a time. Two overlapping cycles would put two
+# agents on the same worker slot, and the second would deliver over the first.
+concurrency:
+  group: tbs-worker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      parallel: ${{ steps.build.outputs.parallel }}
+    steps:
+      - id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          SLOTS="${{ github.event.inputs.workers || github.event.client_payload.workers || 'w01 w02 w03 w04 w05 w06 w07 w08 w09 w10 w11' }}"
+          PAR="${{ github.event.inputs.max_parallel || github.event.client_payload.max_parallel || '11' }}"
+          ACC="${{ vars.TBS_ACCOUNT }}"
+          if [ -z "$ACC" ]; then
+            echo "::error::vars.TBS_ACCOUNT is not set in this repository."
+            echo "Without it the wrong account's Antigravity token would be used."
+            exit 1
+          fi
+          ITEMS=""
+          for s in $SLOTS; do
+            ITEMS="$ITEMS{\"slot\":\"$s\",\"name\":\"agw-acc$ACC-$s\"},"
+          done
+          echo "matrix={\"include\":[${ITEMS%,}]}" >> "$GITHUB_OUTPUT"
+          echo "parallel=$PAR" >> "$GITHUB_OUTPUT"
+          echo "planned: $SLOTS (account $ACC, max-parallel $PAR)"
+
+  work:
+    needs: plan
+    runs-on: ubuntu-latest
+    # Everything this job needs -- python, git, the agy binary -- is already
+    # in the image, so there is no install step and nothing to cache. Pin
+    # vars.TBS_WORKER_IMAGE to an IMMUTABLE tag (the sha the image workflow
+    # prints), never to :latest. A fleet on a moving tag upgrades itself with
+    # no commit behind it, which is exactly what the image was built to stop.
+    container:
+      image: ${{ vars.TBS_WORKER_IMAGE || 'ghcr.io/mohammadlali/tbs-worker:latest' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false          # one worker's failure is a finding, not a reason
+      max-parallel: 11          # see STAGGER note below before lowering this
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out the hub repository
+        uses: actions/checkout@v4
+        with:
+          repository: Mohammadlali/Claud-Cloud-Project
+          token: ${{ secrets.TBS_HUB_TOKEN }}
+          ref: ${{ vars.TBS_BRANCH }}
+          # NOT optional, and NOT a performance choice. actions/checkout
+          # defaults to depth 1, which is a SHALLOW clone. Measured on this
+          # project 2026-08-21: a shallow checkout made check_changelog report
+          # 76 commits instead of 176, and `git rev-parse HEAD` agreed with
+          # origin the whole time. Every gate goes green against a truncated
+          # history. A worker that cannot see the real history cannot deliver
+          # a trustworthy digest.
+          fetch-depth: 0
+
+      - name: Prove the checkout is a real history
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse --is-shallow-repository)" != "false" ]; then
+            echo "::error::checkout is shallow; every gate below would lie"
+            exit 1
+          fi
+          echo "history ok: $(git rev-list --count HEAD) commits at $(git rev-parse --short HEAD)"
+
+      # No setup-python, no cache, no installer: the image carries python,
+      # git and a pinned agy. What replaces them is a check that the image
+      # is the one we think it is -- a job that silently ran on a stale or
+      # wrong image would produce digests that look exactly like good ones.
+      - name: Prove the image carries what this job needs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v agy >/dev/null 2>&1; then
+            echo "::error::agy is not in the image; check vars.TBS_WORKER_IMAGE"
+            exit 1
+          fi
+          echo "agy:    $(command -v agy)  $(agy --version 2>&1 | head -1)"
+          echo "python: $(python3 --version 2>&1)"
+          echo "git:    $(git --version 2>&1)"
+
+      - name: Restore this account's Antigravity credential
+        env:
+          AGW_TOKEN: ${{ secrets[format('AGW_TOKEN_ACC{0}', vars.TBS_ACCOUNT)] }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${AGW_TOKEN:-}" ]; then
+            echo "::error::secret AGW_TOKEN_ACC${{ vars.TBS_ACCOUNT }} is empty or absent"
+            exit 1
+          fi
+          mkdir -p "$HOME/.gemini/antigravity-cli"
+          printf '%s' "$AGW_TOKEN" | base64 -d > "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+          chmod 600 "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+          # Read back a property of the file, never the file. A decode that
+          # silently produced nothing and one that worked look identical
+          # until something is measured.
+          BYTES=$(wc -c < "$HOME/.gemini/antigravity-cli/antigravity-oauth-token")
+          echo "credential written, $BYTES bytes"
+          if [ "$BYTES" -lt 100 ]; then
+            echo "::error::decoded credential is implausibly small; base64 likely truncated"
+            exit 1
+          fi
+
+      # STAGGER. Owner-supplied and not measured here: eleven simultaneous
+      # requests to one Antigravity account error immediately.
+      #
+      # What this DOES fix: the opening burst, if the limit is on request
+      # rate. What it does NOT fix: a limit on concurrent sessions -- eleven
+      # agents started five seconds apart are still eleven agents running at
+      # minute two. If failures appear mid-run rather than at start, the
+      # limit is concurrency and the lever is max-parallel above, not this.
+      # Which one it is has not been measured. Do not report it as known.
+      - name: Stagger this slot's start
+        shell: bash
+        run: |
+          set -euo pipefail
+          STEP="${{ github.event.inputs.stagger_seconds || github.event.client_payload.stagger_seconds || '5' }}"
+          IDX=$(echo "${{ matrix.slot }}" | sed 's/^w0*//')
+          DELAY=$(( (IDX - 1) * STEP ))
+          echo "slot ${{ matrix.slot }} waiting ${DELAY}s"
+          sleep "$DELAY"
+
+      - name: Is anything assigned to this worker
+        id: poll
+        shell: bash
+        run: |
+          set +e
+          python3 Tools/poll_tasks.py --me "${{ matrix.name }}"
+          RC=$?
+          # poll_tasks exits 1 for "nothing assigned to me", which is a normal
+          # outcome for most slots in most cycles, not an error.
+          if [ $RC -eq 1 ]; then
+            echo "assigned=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [ $RC -ne 0 ] && exit $RC
+          echo "assigned=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity for this worker
+        if: steps.poll.outputs.assigned == 'yes'
+        shell: bash
+        run: |
+          git config user.name "${{ matrix.name }}"
+          git config user.email "${{ matrix.name }}@workers.tbs"
+
+      - name: Run the worker
+        if: steps.poll.outputs.assigned == 'yes'
+        env:
+          TBS_HUB_TOKEN: ${{ secrets.TBS_HUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 Tools/run_worker.py --me "${{ matrix.name }}" --timeout 1500
+
+      - name: Keep the log whatever happened
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ matrix.name }}
+          path: |
+            Reports/**
+            Team/reports/**
+          if-no-files-found: ignore
+          retention-days: 14
