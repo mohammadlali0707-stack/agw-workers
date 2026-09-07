@@ -21,7 +21,7 @@ on:
 jobs:
   run-agy:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
       - name: Select AGY Account Token
@@ -90,7 +90,7 @@ jobs:
           PROMPT="${{ inputs.prompt }}"
           echo "Running agy prompt..."
 
-          OUTPUT=$(timeout 300 agy --dangerously-skip-permissions -p "$PROMPT" 2>&1) || true
+          OUTPUT=$(timeout 540 agy --dangerously-skip-permissions --print-timeout 9m -p "$PROMPT" 2>&1) || true
 
           echo "$OUTPUT" > /tmp/agy_output.txt
           echo "Exit status: $?"
