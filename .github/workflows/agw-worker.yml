@@ -86,8 +86,13 @@ jobs:
 
       - name: Run AGY Prompt
         id: run_agy
+        env:
+          PROMPT_INPUT: ${{ inputs.prompt }}
+          CLAUD_CLOUD_PAT: ${{ secrets.CLAUD_CLOUD_PAT }}
+          CONTROL_ROOM_PAT: ${{ secrets.CONTROL_ROOM_PAT }}
+          AIRBOXVIP_PAT: ${{ secrets.AIRBOXVIP_PAT }}
         run: |
-          PROMPT="${{ inputs.prompt }}"
+          PROMPT="$PROMPT_INPUT"
           echo "Running agy prompt..."
 
           OUTPUT=$(timeout 540 agy --dangerously-skip-permissions --print-timeout 9m -p "$PROMPT" 2>&1) || true
