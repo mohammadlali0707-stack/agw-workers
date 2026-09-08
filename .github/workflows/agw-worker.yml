@@ -1,0 +1,195 @@
+name: AGW Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: 'Prompt to run with agy'
+        required: true
+        type: string
+      target_repo:
+        description: 'owner/repo for the agent to work in (must match a wired token below); empty = no repo checked out'
+        required: false
+        default: ''
+        type: string
+      target_branch:
+        description: 'branch to check out and push back to (empty = repo default branch)'
+        required: false
+        default: ''
+        type: string
+      acc_index:
+        description: 'Account index 1-9 (0=random)'
+        required: false
+        default: '0'
+        type: string
+      callback_id:
+        description: 'Unique request ID for tracking'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  run-agy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Select AGY Account Token
+        id: pick_token
+        env:
+          ACC_INDEX_INPUT: ${{ inputs.acc_index }}
+        run: |
+          IDX="$ACC_INDEX_INPUT"
+          if [ "$IDX" = "0" ]; then
+            IDX=$(( (RANDOM % 9) + 1 ))
+          fi
+          echo "acc_idx=$IDX" >> $GITHUB_OUTPUT
+          echo "Selected account: acc${IDX}"
+
+      - name: Install AGY CLI from HF Dataset
+        run: |
+          echo "Downloading AGY CLI binary (public)..."
+          curl -L \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+
+          echo "Extracting..."
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+
+          echo "Installing..."
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          echo "Found binary: $CLI_BIN"
+          sudo install -m 0755 "$CLI_BIN" /usr/local/bin/agy
+          agy --version 2>/dev/null || echo "agy ready"
+
+      - name: Restore AGY OAuth Token
+        run: |
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+
+          ACC_IDX="${{ steps.pick_token.outputs.acc_idx }}"
+          echo "Using account acc${ACC_IDX}"
+
+          # انتخاب token
+          TOKEN_B64=""
+          case "$ACC_IDX" in
+            1) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
+            2) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
+            3) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
+            4) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
+            5) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
+            6) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
+            7) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
+            8) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
+            9) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC9 }}" ;;
+          esac
+
+          echo "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+
+          # installation_id و config
+          cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+
+          echo "Token size: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes"
+
+      - name: Checkout target repo
+        id: checkout_target
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          ACC0_PAT: ${{ secrets.ACC0_PAT }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          ACC1_PAT: ${{ secrets.ACC1_PAT }}
+        run: |
+          echo "has_repo=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$TARGET_REPO" ]; then
+            echo "No target_repo given -- agent runs with no repo checked out and no git credential."
+            exit 0
+          fi
+          case "$TARGET_REPO" in
+            Mohammadlali/Claud-Cloud-Project) TOKEN="`$ACC0_PAT" ;;
+            mohammadlali0707-stack/Control-Room)        TOKEN="`$ACC6_PAT" ;;
+            momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="`$ACC1_PAT" ;;
+            *)
+              echo "Unknown target_repo '$TARGET_REPO' -- refusing to attach a live credential to it." >&2
+              exit 0
+              ;;
+          esac
+          if [ -z "$TOKEN" ]; then
+            echo "No token wired for $TARGET_REPO -- skipping checkout." >&2
+            exit 0
+          fi
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          mkdir -p /tmp/agent-repo
+          if [ -n "$TARGET_BRANCH" ]; then
+            git -c http.extraheader="$AUTH_HEADER" clone --branch "$TARGET_BRANCH" \
+              "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+          else
+            git -c http.extraheader="$AUTH_HEADER" clone \
+              "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+          fi
+          git -C /tmp/agent-repo config user.email "agy-bot@claud-cloud.local"
+          git -C /tmp/agent-repo config user.name "AGY Bot"
+          echo "Checked out $TARGET_REPO into /tmp/agent-repo. The credential was passed only as a one-shot -c http.extraheader flag on this single git command -- it is NOT written to /tmp/agent-repo/.git/config, so the agent process below cannot read it back out of the working tree."
+          echo "has_repo=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run AGY Prompt
+        id: run_agy
+        env:
+          PROMPT_INPUT: ${{ inputs.prompt }}
+        run: |
+          PROMPT="$PROMPT_INPUT"
+          echo "Running agy prompt..."
+          cd /tmp/agent-repo 2>/dev/null || true
+
+          OUTPUT=$(timeout 300 agy --dangerously-skip-permissions -p "$PROMPT" 2>&1) || true
+
+          echo "$OUTPUT" > /tmp/agy_output.txt
+          echo "Exit status: $?"
+          echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
+          head -20 /tmp/agy_output.txt
+
+      - name: Push changes made by the agent
+        if: steps.checkout_target.outputs.has_repo == 'true'
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          ACC0_PAT: ${{ secrets.ACC0_PAT }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          ACC1_PAT: ${{ secrets.ACC1_PAT }}
+        run: |
+          case "$TARGET_REPO" in
+            Mohammadlali/Claud-Cloud-Project) TOKEN="`$ACC0_PAT" ;;
+            mohammadlali0707-stack/Control-Room)        TOKEN="`$ACC6_PAT" ;;
+            momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="`$ACC1_PAT" ;;
+            *) echo "Unknown target_repo -- not pushing." >&2; exit 0 ;;
+          esac
+          cd /tmp/agent-repo
+          BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git -c http.extraheader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
+
+      - name: Upload Output as Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agy-output-${{ inputs.callback_id || github.run_id }}
+          path: /tmp/agy_output.txt
+          retention-days: 1
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## AGW Worker Result" >> $GITHUB_STEP_SUMMARY
+          echo "- **Account:** acc${{ steps.pick_token.outputs.acc_idx }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Callback ID:** ${{ inputs.callback_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target repo:** ${{ inputs.target_repo || '(none)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          head -50 /tmp/agy_output.txt 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "(no output)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
