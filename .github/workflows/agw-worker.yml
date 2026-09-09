@@ -146,7 +146,20 @@ jobs:
           echo "Running agy prompt..."
           cd /tmp/agent-repo 2>/dev/null || true
 
-          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions -p "$PROMPT" 2>&1) || true
+          # --print-timeout is agy's OWN internal wait-for-a-response ceiling,
+          # separate from the outer shell `timeout` below. The old local-docker
+          # gateway (Gateway/gateway_win.py in Claud-Cloud-Project) always
+          # passed it, defaulting to 200s when the caller did not ask for
+          # longer. This step dropped the flag entirely when it was ported to
+          # GitHub Actions, so agy fell back to whatever its own default is
+          # (short) instead of getting anywhere near the outer 1700s budget --
+          # measured live 2026-09-09 (Claud-Cloud-Project issue #87): agy's own
+          # output was the literal string "Error: timeout waiting for
+          # response", well before the 1700s wrapper or the dispatcher's own
+          # ~20-minute poll loop could have been the cause. 1680s here, just
+          # under the outer wrapper, so the outer `timeout` stays a real
+          # backstop rather than firing at the same instant.
+          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1) || true
 
           echo "$OUTPUT" > /tmp/agy_output.txt
           echo "Exit status: $?"
