@@ -114,6 +114,7 @@ jobs:
             Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
             mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
             momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="$ACC1_PAT" ;;
+            Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
             *)
               echo "Unknown target_repo '$TARGET_REPO' -- refusing to attach a live credential to it." >&2
               exit 0
@@ -179,12 +180,60 @@ jobs:
             Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
             mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
             momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="$ACC1_PAT" ;;
+            Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
             *) echo "Unknown target_repo -- not pushing." >&2; exit 0 ;;
           esac
           cd /tmp/agent-repo
           BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          git -c http.extraheader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
+          MAX_RETRIES=3
+          total_attempts=$((MAX_RETRIES + 1))
+          attempt=1
+          success=false
+
+          while [ "$attempt" -le "$total_attempts" ]; do
+            if [ "$attempt" -eq 1 ]; then
+              echo "Push attempt 1 of $total_attempts (initial push)..."
+            else
+              echo "Push attempt $attempt of $total_attempts (retry $((attempt - 1)) of $MAX_RETRIES)..."
+            fi
+
+            if git -c http.extraheader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
+              echo "Successfully pushed changes to origin/$BRANCH on attempt $attempt."
+              success=true
+              break
+            fi
+
+            echo "Push attempt $attempt failed." >&2
+
+            if [ "$attempt" -lt "$total_attempts" ]; then
+              retry_num=$attempt
+              echo "Attempting retry $retry_num of $MAX_RETRIES: fetching origin/$BRANCH fresh and rebasing..."
+              if ! git -c http.extraheader="$AUTH_HEADER" fetch origin "$BRANCH"; then
+                echo "Error: Failed to fetch origin/$BRANCH on retry $retry_num." >&2
+                sleep 2
+                attempt=$((attempt + 1))
+                continue
+              fi
+
+              echo "Rebasing local commits onto origin/$BRANCH..."
+              if ! git rebase "origin/$BRANCH"; then
+                echo "Error: Rebase failed (e.g. conflict detected) on retry $retry_num. Aborting rebase." >&2
+                git rebase --abort 2>/dev/null || true
+                exit 1
+              fi
+
+              echo "Rebase onto origin/$BRANCH succeeded. Waiting before next push attempt..."
+              sleep 2
+            fi
+
+            attempt=$((attempt + 1))
+          done
+
+          if [ "$success" != "true" ]; then
+            echo "Error: Failed to push to origin/$BRANCH after $total_attempts attempts ($MAX_RETRIES retries)." >&2
+            exit 1
+          fi
 
       - name: Upload Output as Artifact
         if: always()
