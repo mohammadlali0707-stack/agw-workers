@@ -127,10 +127,10 @@ jobs:
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
           mkdir -p /tmp/agent-repo
           if [ -n "$TARGET_BRANCH" ]; then
-            git -c http.extraheader="$AUTH_HEADER" clone --branch "$TARGET_BRANCH" \
+            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --branch "$TARGET_BRANCH" \
               "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
           else
-            git -c http.extraheader="$AUTH_HEADER" clone \
+            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
               "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
           fi
           git -C /tmp/agent-repo config user.email "agy-bot@claud-cloud.local"
@@ -198,7 +198,7 @@ jobs:
               echo "Push attempt $attempt of $total_attempts (retry $((attempt - 1)) of $MAX_RETRIES)..."
             fi
 
-            if git -c http.extraheader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
+            if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
               echo "Successfully pushed changes to origin/$BRANCH on attempt $attempt."
               success=true
               break
@@ -209,7 +209,7 @@ jobs:
             if [ "$attempt" -lt "$total_attempts" ]; then
               retry_num=$attempt
               echo "Attempting retry $retry_num of $MAX_RETRIES: fetching origin/$BRANCH fresh and rebasing..."
-              if ! git -c http.extraheader="$AUTH_HEADER" fetch origin "$BRANCH"; then
+              if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" fetch origin "$BRANCH"; then
                 echo "Error: Failed to fetch origin/$BRANCH on retry $retry_num." >&2
                 sleep 2
                 attempt=$((attempt + 1))
