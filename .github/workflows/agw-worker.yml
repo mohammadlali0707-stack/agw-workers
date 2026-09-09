@@ -146,7 +146,7 @@ jobs:
           echo "Running agy prompt..."
           cd /tmp/agent-repo 2>/dev/null || true
 
-          OUTPUT=$(timeout 300 agy --dangerously-skip-permissions -p "$PROMPT" 2>&1) || true
+          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions -p "$PROMPT" 2>&1) || true
 
           echo "$OUTPUT" > /tmp/agy_output.txt
           echo "Exit status: $?"
