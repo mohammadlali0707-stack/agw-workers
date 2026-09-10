@@ -1,0 +1,63 @@
+name: AGW Worker AGY Issue Bot (same-repo, no relay)
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  actions: write
+  contents: read
+
+jobs:
+  agy-same-repo:
+    runs-on: ubuntu-latest
+    if: >
+      (github.event_name == 'issues' && startsWith(github.event.issue.body, '@agy') && github.event.issue.author_association == 'OWNER') ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@agy') && github.event.comment.user.type != 'Bot' && github.event.comment.author_association == 'OWNER')
+    steps:
+      - name: Ack on the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "AGY is on it (same-repo listener, no relay)."
+
+      - name: Build prompt
+        id: prompt
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
+          SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
+          SAFE_BODY=$(printf '%s' "$ISSUE_BODY" | sanitize)
+          SAFE_COMMENT=$(printf '%s' "$COMMENT_BODY" | sanitize)
+          {
+            printf '%s\n' 'You are AGY, an AI worker running inside this agw-workers repo itself.'
+            printf 'TASK - Issue #%s: %s\n' "$ISSUE_NUM" "$SAFE_TITLE"
+            printf '%s\n' "$SAFE_BODY"
+            if [ -n "$SAFE_COMMENT" ]; then
+              printf '%s\n' 'LATEST COMMENT:'
+              printf '%s\n' "$SAFE_COMMENT"
+            fi
+          } > /tmp/prompt.txt
+          echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch agw-worker.yml in this same repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PROMPT=$(cat /tmp/prompt.txt)
+          gh workflow run agw-worker.yml \
+            --repo "${{ github.repository }}" \
+            --field "prompt=$PROMPT" \
+            --field "target_repo=mohammadlali0707-stack/Control-Room" \
+            --field "target_branch=" \
+            --field "acc_index=0" \
+            --field "callback_id=same-repo-${{ github.event.issue.number }}-${{ github.run_id }}"
