@@ -113,6 +113,7 @@ jobs:
           case "$TARGET_REPO" in
             Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
             mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
+            mohammadlali0707-stack/Claud-Cloud-Project) TOKEN="$ACC6_PAT" ;;
             momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="$ACC1_PAT" ;;
             Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
             *)
@@ -179,6 +180,7 @@ jobs:
           case "$TARGET_REPO" in
             Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
             mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
+            mohammadlali0707-stack/Claud-Cloud-Project) TOKEN="$ACC6_PAT" ;;
             momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="$ACC1_PAT" ;;
             Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
             *) echo "Unknown target_repo -- not pushing." >&2; exit 0 ;;
