@@ -10,23 +10,21 @@ import sys
 import time
 
 from google import genai
-from google.genai import types
 
-DEFAULT_IMAGE_MODEL = "imagen-4.0-generate-001"
+DEFAULT_IMAGE_MODEL = "gemini-2.5-flash-image"
 DEFAULT_VIDEO_MODEL = "veo-3.0-generate-001"
 VIDEO_POLL_SECONDS = 10
 VIDEO_TIMEOUT_SECONDS = 600
 
 
 def generate_image(client: "genai.Client", prompt: str, model: str, out_path: str) -> None:
-    response = client.models.generate_images(
-        model=model,
-        prompt=prompt,
-        config=types.GenerateImagesConfig(number_of_images=1),
-    )
-    if not response.generated_images:
-        raise RuntimeError("API returned zero images")
-    response.generated_images[0].image.save(out_path)
+    response = client.models.generate_content(model=model, contents=prompt)
+    for part in response.candidates[0].content.parts:
+        if part.inline_data is not None:
+            with open(out_path, "wb") as f:
+                f.write(part.inline_data.data)
+            return
+    raise RuntimeError("API response contained no image data")
 
 
 def generate_video(client: "genai.Client", prompt: str, model: str, out_path: str) -> None:
