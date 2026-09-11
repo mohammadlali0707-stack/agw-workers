@@ -4,17 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "open_issue or comment"
+        description: "open_issue, comment, or view"
         required: true
         type: choice
-        options: ["open_issue", "comment"]
+        options: ["open_issue", "comment", "view"]
       account_index:
         description: "Target account (ACC6 needs no relay -- act directly instead)"
         required: true
         type: choice
         options: ["1", "2", "3", "4", "5", "7", "8"]
       issue_number:
-        description: "Issue number (required for action=comment)"
+        description: "Issue number (required for action=comment or action=view)"
         required: false
         type: string
       title:
@@ -22,8 +22,8 @@ on:
         required: false
         type: string
       body:
-        description: "Issue body (must start with @agy or @media) or comment text"
-        required: true
+        description: "Issue body (must start with @agy or @media) or comment text (not used for action=view)"
+        required: false
         type: string
 
 permissions:
@@ -62,8 +62,14 @@ jobs:
             exit 1
           fi
           export GH_TOKEN="$TOKEN"
-          if [ "${{ inputs.action }}" = "open_issue" ]; then
-            gh issue create --repo "$OWNER/agw-workers" --title "${{ inputs.title }}" --body "${{ inputs.body }}"
-          else
-            gh issue comment "${{ inputs.issue_number }}" --repo "$OWNER/agw-workers" --body "${{ inputs.body }}"
-          fi
+          case "${{ inputs.action }}" in
+            open_issue)
+              gh issue create --repo "$OWNER/agw-workers" --title "${{ inputs.title }}" --body "${{ inputs.body }}"
+              ;;
+            comment)
+              gh issue comment "${{ inputs.issue_number }}" --repo "$OWNER/agw-workers" --body "${{ inputs.body }}"
+              ;;
+            view)
+              gh issue view "${{ inputs.issue_number }}" --repo "$OWNER/agw-workers" --comments
+              ;;
+          esac
