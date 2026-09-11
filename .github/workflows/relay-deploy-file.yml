@@ -26,6 +26,8 @@ jobs:
           FILES=(
             ".github/workflows/media-request-bot.yml"
             ".github/workflows/agw-claude.yml"
+            ".github/workflows/agy-issue-bot.yml"
+            ".github/workflows/agw-worker.yml"
             "media/README.md"
           )
           declare -A OWNERS=(
