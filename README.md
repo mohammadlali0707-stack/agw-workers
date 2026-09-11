@@ -4,7 +4,7 @@ This same repo exists, byte-identical in its `.github/workflows/`, on eight
 GitHub accounts (`ACC1`..`ACC8`; see the owner mapping below). Each account's
 copy runs entirely on its own Actions minutes -- nothing here calls across
 accounts except the relay tools in the last section, which only work from
-`mohammadlali0707-stack` (`ACC6`).
+`mohammadlali0707-stack` (`ACC6`), the relay host.
 
 ## Three entry points, mutually exclusive by prefix
 
@@ -71,25 +71,25 @@ never gets a live GitHub token, not even a narrowly-scoped one. Instead:
 
 ## Cross-account relay (only usable from `mohammadlali0707-stack`/ACC6)
 
-This session's own GitHub access reaches only `mohammadlali0707-stack`.
-`add_repo` refuses to attach a repo under a different owner (`cross-tier
-adds are not supported`) -- confirmed live, not assumed. To read or act on
-the other 7 accounts, two workflows here use each account's own
-`ACC{N}_PAT` secret (all 9, `ACC0`..`ACC8`, confirmed present on this
-repo -- `check-secrets.yml`):
+A cloud coding session's own GitHub access reaches only one owner at a time
+-- `add_repo` refuses to attach a repo under a different owner
+(`cross-tier adds are not supported`), confirmed live, not assumed. To read
+or act on the other 7 accounts from a session opened on ACC6, two workflows
+here use each account's own `ACC{N}_PAT` secret (all 9, `ACC0`..`ACC8`,
+confirmed present on this repo -- see `check-secrets.yml`):
 
 - **`relay-open-issue.yml`** (`workflow_dispatch`): `open_issue`, `comment`,
   or `view` an Issue on `<owner>/agw-workers` for a chosen account
   (`account_index` 1,2,3,4,5,7,8 -- ACC6 needs no relay, act on it
   directly). `view` exists because even a plain `curl` to another account's
-  *public* repo gets 403'd by this session's own proxy; reading another
+  *public* repo gets 403'd by a session's own proxy; reading another
   account's state has the same access problem as writing to it.
 - **`relay-deploy-file.yml`** (`workflow_dispatch`, no inputs): copies a
   fixed file list (currently `media-request-bot.yml`, `agw-claude.yml`,
-  `agy-issue-bot.yml`, `agw-worker.yml`, `media/README.md`) from this repo
-  to each of the other 7, one runner boot for all seven, skipping an account
-  cleanly if its PAT is missing, the clone fails, or the content is already
-  identical.
+  `agy-issue-bot.yml`, `agw-worker.yml`, `media/README.md`, this file) from
+  this repo to each of the other 7, one runner boot for all seven, skipping
+  an account cleanly if its PAT is missing, the clone fails, or the content
+  is already identical.
 
 Owner mapping (`ACC1`..`ACC8`, confirmed by the owner directly, not from any
 file):
@@ -101,7 +101,7 @@ file):
 | 3 | ngocgminh5-debug |
 | 4 | hmmletssee7-design |
 | 5 | kidding602 |
-| 6 | mohammadlali0707-stack (this account -- no relay needed) |
+| 6 | mohammadlali0707-stack -- relay host, run `relay-*.yml` from here |
 | 7 | mohammad97okk |
 | 8 | moradzahra85-png |
 
