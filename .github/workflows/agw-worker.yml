@@ -18,7 +18,7 @@ on:
         default: ''
         type: string
       acc_index:
-        description: 'Account index 1-9 to force a specific identity (0=this repo''s own account, falling back to one random other on quota error)'
+        description: 'Account index 1-8 to force a specific identity (0=this repo''s own account, falling back to one random other on quota error). ACC9 is retired and never used.'
         required: false
         default: '0'
         type: string
@@ -63,6 +63,9 @@ jobs:
           echo "own_idx=$OWN" >> "$GITHUB_OUTPUT"
           echo "Repo owner: $GITHUB_REPOSITORY_OWNER -> account index: $OWN"
 
+      # ACC9 is retired ("should not be in any cycle") -- an explicit
+      # request for it falls back to this repo's own identity instead of
+      # doing nothing useful.
       - name: Select AGY Account Token
         id: pick_token
         env:
@@ -70,11 +73,15 @@ jobs:
           OWN_IDX: ${{ steps.own_identity.outputs.own_idx }}
         run: |
           IDX="$ACC_INDEX_INPUT"
+          if [ "$IDX" = "9" ]; then
+            echo "::warning::acc_index=9 (ACC9) is retired and never valid -- using this repo's own account instead"
+            IDX="0"
+          fi
           if [ "$IDX" = "0" ]; then
             if [ "$OWN_IDX" != "0" ]; then
               IDX="$OWN_IDX"
             else
-              IDX=$(( (RANDOM % 9) + 1 ))
+              IDX=$(( (RANDOM % 8) + 1 ))
               echo "::warning::could not map this repo's owner to an account index, falling back to random"
             fi
           fi
@@ -155,6 +162,10 @@ jobs:
         run: |
           set +e
 
+          # ACC9 is retired ("should not be in any cycle") -- no case for it
+          # here at all, deliberately. If it's ever passed in anyway,
+          # token_b64 stays empty and the run fails loudly on auth rather
+          # than silently using a stale/wrong credential.
           restore_token() {
             local idx="$1"
             mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
@@ -168,7 +179,6 @@ jobs:
               6) token_b64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
               7) token_b64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
               8) token_b64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
-              9) token_b64="${{ secrets.AGW_TOKEN_ACC9 }}" ;;
             esac
             echo "$token_b64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
             chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
@@ -208,7 +218,7 @@ jobs:
             echo "::warning::acc${USED_IDX} hit a quota/rate-limit error, retrying once with a random other identity"
             FALLBACK_IDX="$USED_IDX"
             while [ "$FALLBACK_IDX" = "$USED_IDX" ]; do
-              FALLBACK_IDX=$(( (RANDOM % 9) + 1 ))
+              FALLBACK_IDX=$(( (RANDOM % 8) + 1 ))
             done
             USED_IDX="$FALLBACK_IDX"
             restore_token "$USED_IDX"
