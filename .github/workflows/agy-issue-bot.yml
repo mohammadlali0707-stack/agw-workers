@@ -15,8 +15,17 @@ jobs:
   agy-same-repo:
     runs-on: ubuntu-latest
     if: >
-      (github.event_name == 'issues' && startsWith(github.event.issue.body, '@agy') && github.event.issue.author_association == 'OWNER') ||
-      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@agy') && github.event.comment.user.type != 'Bot' && github.event.comment.author_association == 'OWNER')
+      (github.event_name == 'issues' &&
+        (endsWith(github.event.issue.body, '@agy') || endsWith(github.event.issue.body, '@agy\n') || endsWith(github.event.issue.body, '@agy\r\n')) &&
+        github.event.issue.author_association == 'OWNER'
+      ) ||
+      (github.event_name == 'issue_comment' &&
+        (endsWith(github.event.comment.body, '@agy') || endsWith(github.event.comment.body, '@agy\n') || endsWith(github.event.comment.body, '@agy\r\n')) &&
+        (
+          (github.event.comment.user.type != 'Bot' && github.event.comment.author_association == 'OWNER') ||
+          github.event.comment.user.login == 'github-actions[bot]'
+        )
+      )
     steps:
       - name: Ack on the issue
         env:
@@ -43,6 +52,7 @@ jobs:
             printf 'TASK - Issue #%s: %s\n' "$ISSUE_NUM" "$SAFE_TITLE"
             printf '%s\n' "$SAFE_BODY"
             printf '%s\n' 'If this task needs an image or video asset, do not try to generate it yourself and do not ask for GitHub access to do so. Print a line starting exactly with ##MEDIA_REQUEST## followed by a one-line description of what is needed, then continue the rest of your task without waiting for it. Something else will open the request for you.'
+            printf '%s\n' 'When you have COMPLETELY finished this task -- not a partial draft, nothing left to do -- end your final message with the line "@claude" on its own line, so Claude can continue from your result. If you are not fully done, do not include that line.'
             if [ -n "$SAFE_COMMENT" ]; then
               printf '%s\n' 'LATEST COMMENT:'
               printf '%s\n' "$SAFE_COMMENT"
@@ -61,4 +71,5 @@ jobs:
             --field "target_repo=mohammadlali0707-stack/Control-Room" \
             --field "target_branch=" \
             --field "acc_index=0" \
+            --field "issue_number=${{ github.event.issue.number }}" \
             --field "callback_id=same-repo-${{ github.event.issue.number }}-${{ github.run_id }}"
