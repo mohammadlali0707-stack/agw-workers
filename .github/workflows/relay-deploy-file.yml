@@ -29,6 +29,7 @@ jobs:
             ".github/workflows/agy-issue-bot.yml"
             ".github/workflows/agw-worker.yml"
             "media/README.md"
+            "README.md"
           )
           declare -A OWNERS=(
             [1]="momonakikugava-pixel"
