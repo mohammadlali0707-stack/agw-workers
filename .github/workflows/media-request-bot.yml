@@ -1,0 +1,94 @@
+name: media-request-bot
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  ack:
+    if: >
+      github.event_name == 'issues' &&
+      startsWith(github.event.issue.body, '@media') &&
+      github.event.issue.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ack the request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "درخواست رسانه ثبت شد. هروقت لینک خروجی (تصویر/ویدیو) آماده شد، همینجا کامنت بذارید — یک لینک http(s) کافیه، این ایشو خودکار بسته می‌شه."
+
+  deliver:
+    if: >
+      github.event_name == 'issue_comment' &&
+      startsWith(github.event.issue.body, '@media') &&
+      github.event.comment.user.type != 'Bot' &&
+      github.event.comment.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract link and record it
+        id: record
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -euo pipefail
+          LINK=$(printf '%s' "$COMMENT_BODY" | grep -oE 'https?://[^[:space:]]+' | head -1 || true)
+          if [ -z "$LINK" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "link=$LINK" >> "$GITHUB_OUTPUT"
+          mkdir -p media
+          python3 - "$ISSUE_NUM" "$ISSUE_TITLE" "$LINK" <<'PYEOF'
+          import json, sys, datetime
+          issue_num, title, link = sys.argv[1], sys.argv[2], sys.argv[3]
+          row = {
+              "issue": int(issue_num),
+              "title": title,
+              "link": link,
+              "delivered_at": datetime.datetime.utcnow().isoformat() + "Z",
+          }
+          with open("media/manifest.jsonl", "a") as f:
+              f.write(json.dumps(row, ensure_ascii=False) + "\n")
+          PYEOF
+
+      - name: Commit manifest
+        if: steps.record.outputs.found == 'true'
+        run: |
+          git config user.name "media-request-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add media/manifest.jsonl
+          git commit -m "media: record delivered link for issue #${{ github.event.issue.number }}"
+          git push origin HEAD:${{ github.event.repository.default_branch }}
+
+      - name: Confirm and close
+        if: steps.record.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "ثبت شد در media/manifest.jsonl: ${{ steps.record.outputs.link }}"
+          gh issue close "${{ github.event.issue.number }}" --repo "${{ github.repository }}"
+
+      - name: No link found
+        if: steps.record.outputs.found == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "لینکی توی این کامنت پیدا نشد — یک URL که با http یا https شروع بشه بفرستید."
