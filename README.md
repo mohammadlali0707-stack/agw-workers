@@ -17,11 +17,24 @@ other two prefixes.
 
 Open an Issue starting with `@agy` followed by the task, as the repo owner.
 `agy-issue-bot.yml` acks on the issue and dispatches `agw-worker.yml` in this
-same repo (no cross-account relay). `agw-worker.yml` picks one of 9
-Antigravity/Gemini OAuth identities (`acc_index` input, random 1-9 if 0),
-runs the `agy` CLI with the task as its prompt, optionally checks out and
-pushes to one of a handful of hardcoded target repos, and uploads the raw
-output as a build artifact + Job Summary -- **not** as an issue comment.
+same repo (no cross-account relay). Each of the 8 GitHub accounts has
+**exactly one** Antigravity/Gemini identity (one Gmail) of its own; up to 11
+concurrent runner slots within an account (`agw-ACC{N}-w{X}` naming) all
+share that same identity. Deciding *which* of the 8 accounts handles a
+request is the relay layer's job (see below) -- once a request has landed on
+an account, everything that runs there uses that one account's own
+identity, never another account's. `agw-worker.yml` runs the `agy` CLI with
+the task as its prompt, optionally checks out and pushes to one of a
+handful of hardcoded target repos, and uploads the raw output as a build
+artifact + Job Summary -- **not** as an issue comment.
+
+**Known bug, deliberately not fixed here (owner's call, deferred):** every
+account's copy of this repo currently carries all 9
+`AGW_TOKEN_ACC1`..`AGW_TOKEN_ACC9` secrets, and `agw-worker.yml`'s default
+dispatch (`acc_index=0`) picks one at random (`RANDOM % 9`) instead of
+always using its own -- so a run can end up authenticated as a *different*
+account's Gmail. Each account should only ever carry, and use, its own
+single identity. Left as-is for now; do not "fix" this without asking.
 
 ### `@media` -- image/video requests (always human-fulfilled)
 
