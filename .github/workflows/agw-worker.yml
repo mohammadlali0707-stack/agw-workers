@@ -22,6 +22,11 @@ on:
         required: false
         default: '0'
         type: string
+      issue_number:
+        description: 'Issue number to post agy''s final output back to as a comment (empty = do not post)'
+        required: false
+        default: ''
+        type: string
       callback_id:
         description: 'Unique request ID for tracking'
         required: false
@@ -260,6 +265,35 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Media request from agy (${{ inputs.callback_id }})" \
             --body "@media $DESC"
+
+      # Same reasoning as the media relay above: agy never gets a token, this
+      # step (using the default GITHUB_TOKEN) posts its final output back to
+      # the triggering issue as a real comment -- previously it only went to
+      # the Job Summary + artifact, so nothing could ever pick up from it.
+      # Truncated from the START (keeping the tail) because the @claude
+      # handoff line, when agy is fully done, is the LAST line it printed.
+      - name: Post agy's output as a comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          set +e
+          if [ -z "$ISSUE_NUMBER" ]; then
+            echo "no issue_number given, not posting a comment"
+            exit 0
+          fi
+          if [ ! -f /tmp/agy_output.txt ]; then
+            echo "no agy output file, nothing to post"
+            exit 0
+          fi
+          SIZE=$(wc -c < /tmp/agy_output.txt)
+          if [ "$SIZE" -gt 60000 ]; then
+            { echo "[output truncated, showing the last part]"; echo "..."; tail -c 60000 /tmp/agy_output.txt; } > /tmp/agy_comment.txt
+          else
+            cp /tmp/agy_output.txt /tmp/agy_comment.txt
+          fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/agy_comment.txt
 
       - name: Push changes made by the agent
         if: steps.checkout_target.outputs.has_repo == 'true'
