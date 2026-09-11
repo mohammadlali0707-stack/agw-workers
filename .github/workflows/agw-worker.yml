@@ -18,7 +18,7 @@ on:
         default: ''
         type: string
       acc_index:
-        description: 'Account index 1-9 (0=random)'
+        description: 'Account index 1-9 to force a specific identity (0=this repo''s own account, falling back to one random other on quota error)'
         required: false
         default: '0'
         type: string
@@ -35,20 +35,51 @@ permissions:
 jobs:
   run-agy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 was enough for one attempt; a same-run retry needs headroom too. A
+    # quota/rate-limit rejection surfaces near-instantly, so this only bites
+    # in the rare case where attempt 1 burns real time before failing.
+    timeout-minutes: 45
 
     steps:
+      # This file is byte-identical across all 8 accounts (deployed by
+      # relay-deploy-file.yml from mohammadlali0707-stack), so it cannot
+      # hardcode which account it is. GITHUB_REPOSITORY_OWNER is filled in
+      # by GitHub itself at run time; this table is the same
+      # owner<->index mapping relay-open-issue.yml uses, inverted.
+      - name: Determine this repo's own account index
+        id: own_identity
+        run: |
+          case "$GITHUB_REPOSITORY_OWNER" in
+            momonakikugava-pixel) OWN=1 ;;
+            lali94m-max) OWN=2 ;;
+            ngocgminh5-debug) OWN=3 ;;
+            hmmletssee7-design) OWN=4 ;;
+            kidding602) OWN=5 ;;
+            mohammadlali0707-stack) OWN=6 ;;
+            mohammad97okk) OWN=7 ;;
+            moradzahra85-png) OWN=8 ;;
+            *) OWN=0 ;;
+          esac
+          echo "own_idx=$OWN" >> "$GITHUB_OUTPUT"
+          echo "Repo owner: $GITHUB_REPOSITORY_OWNER -> account index: $OWN"
+
       - name: Select AGY Account Token
         id: pick_token
         env:
           ACC_INDEX_INPUT: ${{ inputs.acc_index }}
+          OWN_IDX: ${{ steps.own_identity.outputs.own_idx }}
         run: |
           IDX="$ACC_INDEX_INPUT"
           if [ "$IDX" = "0" ]; then
-            IDX=$(( (RANDOM % 9) + 1 ))
+            if [ "$OWN_IDX" != "0" ]; then
+              IDX="$OWN_IDX"
+            else
+              IDX=$(( (RANDOM % 9) + 1 ))
+              echo "::warning::could not map this repo's owner to an account index, falling back to random"
+            fi
           fi
           echo "acc_idx=$IDX" >> $GITHUB_OUTPUT
-          echo "Selected account: acc${IDX}"
+          echo "Primary account for this run: acc${IDX}"
 
       - name: Install AGY CLI from HF Dataset
         run: |
@@ -69,36 +100,6 @@ jobs:
           echo "Found binary: $CLI_BIN"
           sudo install -m 0755 "$CLI_BIN" /usr/local/bin/agy
           agy --version 2>/dev/null || echo "agy ready"
-
-      - name: Restore AGY OAuth Token
-        run: |
-          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
-
-          ACC_IDX="${{ steps.pick_token.outputs.acc_idx }}"
-          echo "Using account acc${ACC_IDX}"
-
-          # انتخاب token
-          TOKEN_B64=""
-          case "$ACC_IDX" in
-            1) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
-            2) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
-            3) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
-            4) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
-            5) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
-            6) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
-            7) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
-            8) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
-            9) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC9 }}" ;;
-          esac
-
-          echo "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
-          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
-
-          # installation_id و config
-          cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
-          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
-
-          echo "Token size: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes"
 
       - name: Checkout target repo
         id: checkout_target
@@ -143,13 +144,48 @@ jobs:
           echo "Checked out $TARGET_REPO into /tmp/agent-repo. The credential was passed only as a one-shot -c http.extraheader flag on this single git command -- it is NOT written to /tmp/agent-repo/.git/config, so the agent process below cannot read it back out of the working tree."
           echo "has_repo=true" >> "$GITHUB_OUTPUT"
 
-      - name: Run AGY Prompt
+      # Restore+run are one step because a quota/rate-limit error needs to
+      # restore a DIFFERENT identity and run again -- two separate steps
+      # would need a third to glue them, for no benefit.
+      - name: Run AGY Prompt (own identity first, one random fallback on quota error)
         id: run_agy
         env:
           PROMPT_INPUT: ${{ inputs.prompt }}
+          PRIMARY_IDX: ${{ steps.pick_token.outputs.acc_idx }}
         run: |
+          set +e
+
+          restore_token() {
+            local idx="$1"
+            mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+            local token_b64=""
+            case "$idx" in
+              1) token_b64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
+              2) token_b64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
+              3) token_b64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
+              4) token_b64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
+              5) token_b64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
+              6) token_b64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
+              7) token_b64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
+              8) token_b64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
+              9) token_b64="${{ secrets.AGW_TOKEN_ACC9 }}" ;;
+            esac
+            echo "$token_b64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+            chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+            cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+            echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+            echo "Restored acc${idx}: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes"
+          }
+
+          is_quota_error() {
+            grep -qiE 'too many requests|rate limit|rate-limit|429|quota' "$1"
+          }
+
           PROMPT="$PROMPT_INPUT"
-          echo "Running agy prompt..."
+          USED_IDX="$PRIMARY_IDX"
+          restore_token "$USED_IDX"
+
+          echo "Running agy prompt with acc${USED_IDX}..."
           cd /tmp/agent-repo 2>/dev/null || true
 
           # --print-timeout is agy's OWN internal wait-for-a-response ceiling,
@@ -165,22 +201,35 @@ jobs:
           # ~20-minute poll loop could have been the cause. 1680s here, just
           # under the outer wrapper, so the outer `timeout` stays a real
           # backstop rather than firing at the same instant.
-          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1) || true
-
+          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           echo "$OUTPUT" > /tmp/agy_output.txt
-          echo "Exit status: $?"
+
+          if is_quota_error /tmp/agy_output.txt; then
+            echo "::warning::acc${USED_IDX} hit a quota/rate-limit error, retrying once with a random other identity"
+            FALLBACK_IDX="$USED_IDX"
+            while [ "$FALLBACK_IDX" = "$USED_IDX" ]; do
+              FALLBACK_IDX=$(( (RANDOM % 9) + 1 ))
+            done
+            USED_IDX="$FALLBACK_IDX"
+            restore_token "$USED_IDX"
+            echo "Retrying with acc${USED_IDX}..."
+            cd /tmp/agent-repo 2>/dev/null || true
+            OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+            echo "$OUTPUT" > /tmp/agy_output.txt
+          fi
+
+          echo "used_idx=$USED_IDX" >> "$GITHUB_OUTPUT"
           echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
           head -20 /tmp/agy_output.txt
 
       # agy never receives a GitHub token -- it only ever prints plain text.
       # This step, running OUTSIDE agy's own process, is what actually opens
       # the @media issue. It uses the default GITHUB_TOKEN (scoped to this
-      # repo's own issues:write above), NOT a PAT keyed by acc_idx: acc_idx
-      # is agy's Antigravity identity (random 1-9), unrelated to which of
-      # the 8 GitHub accounts is hosting this copy of the workflow, so a PAT
-      # keyed by it would often be wrong or missing. media-request-bot.yml
-      # accepts issues opened by the github-actions[bot] identity this
-      # produces.
+      # repo's own issues:write above), never a PAT keyed by which AGY
+      # identity happened to run: that identity is unrelated to which of the
+      # 8 GitHub accounts is hosting this copy of the workflow. media-
+      # request-bot.yml accepts issues opened by the github-actions[bot]
+      # identity this produces.
       - name: Relay any media request from agy's output
         if: always()
         env:
@@ -283,7 +332,7 @@ jobs:
         if: always()
         run: |
           echo "## AGW Worker Result" >> $GITHUB_STEP_SUMMARY
-          echo "- **Account:** acc${{ steps.pick_token.outputs.acc_idx }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Account used:** acc${{ steps.run_agy.outputs.used_idx || steps.pick_token.outputs.acc_idx }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Callback ID:** ${{ inputs.callback_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Run ID:** ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Target repo:** ${{ inputs.target_repo || '(none)' }}" >> $GITHUB_STEP_SUMMARY
