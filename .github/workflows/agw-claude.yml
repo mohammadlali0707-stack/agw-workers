@@ -4,8 +4,10 @@ name: AGW Claude
 # Mirrors Claud-Cloud-Project's tbs-claude.yml, trimmed for this repo:
 # no branch pin (agw-workers works on main directly, actions/checkout
 # defaults to it on an issues/issue_comment event), no game-specific
-# allowedTools list. Excludes @media issues on purpose -- those are
-# handled by media-request-bot.yml and stay human-only.
+# allowedTools list. Excludes @media and @agy issues on purpose -- @media
+# is handled by media-request-bot.yml (human-only) and @agy by
+# agy-issue-bot.yml; without this exclusion an issue opened with both
+# prefixes/mentions would fire two bots on the same branch at once.
 
 on:
   issue_comment:
@@ -20,6 +22,7 @@ jobs:
     if: >
       contains(github.event.comment.body || github.event.issue.body, '@claude') &&
       !startsWith(github.event.issue.body, '@media') &&
+      !startsWith(github.event.issue.body, '@agy') &&
       (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'COLLABORATOR' || github.event.issue.author_association == 'OWNER' || github.event.issue.author_association == 'COLLABORATOR')
     runs-on: ubuntu-latest
     timeout-minutes: 30
