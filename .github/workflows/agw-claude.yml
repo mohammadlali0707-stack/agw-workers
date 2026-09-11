@@ -23,7 +23,16 @@ jobs:
       contains(github.event.comment.body || github.event.issue.body, '@claude') &&
       !startsWith(github.event.issue.body, '@media') &&
       !startsWith(github.event.issue.body, '@agy') &&
-      (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'COLLABORATOR' || github.event.issue.author_association == 'OWNER' || github.event.issue.author_association == 'COLLABORATOR')
+      (
+        github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'COLLABORATOR' ||
+        github.event.issue.author_association == 'OWNER' ||
+        github.event.issue.author_association == 'COLLABORATOR' ||
+        (
+          github.event.comment.user.login == 'github-actions[bot]' &&
+          (endsWith(github.event.comment.body, '@claude') || endsWith(github.event.comment.body, '@claude\n') || endsWith(github.event.comment.body, '@claude\r\n'))
+        )
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -52,6 +61,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true
+          claude_args: '--append-system-prompt "When you have COMPLETELY finished this task -- not a partial draft, nothing left to do -- end your final reply with the line \"@agy\" on its own line, so the agy worker can continue from your result. If you are not fully done yet, do not include that line."'
 
       # Same reasoning as tbs-claude.yml: c1 dying mid-edit can leave the
       # working tree dirty and an issue-branch that collides with c2's own
@@ -86,6 +96,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN2 }}
           show_full_output: true
+          claude_args: '--append-system-prompt "When you have COMPLETELY finished this task -- not a partial draft, nothing left to do -- end your final reply with the line \"@agy\" on its own line, so the agy worker can continue from your result. If you are not fully done yet, do not include that line."'
 
       - name: Log c1/c2 outcomes
         if: always()
