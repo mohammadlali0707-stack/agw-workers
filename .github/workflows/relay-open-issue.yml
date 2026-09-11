@@ -70,6 +70,8 @@ jobs:
               gh issue comment "${{ inputs.issue_number }}" --repo "$OWNER/agw-workers" --body "${{ inputs.body }}"
               ;;
             view)
+              gh issue view "${{ inputs.issue_number }}" --repo "$OWNER/agw-workers" --json number,title,state,closed | tee /dev/stderr
+              echo "---comments---"
               gh issue view "${{ inputs.issue_number }}" --repo "$OWNER/agw-workers" --comments
               ;;
           esac
