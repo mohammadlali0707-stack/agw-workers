@@ -3,17 +3,26 @@ name: relay-open-issue
 on:
   workflow_dispatch:
     inputs:
+      action:
+        description: "open_issue or comment"
+        required: true
+        type: choice
+        options: ["open_issue", "comment"]
       account_index:
-        description: "Target account (ACC6 needs no relay -- open it directly instead)"
+        description: "Target account (ACC6 needs no relay -- act directly instead)"
         required: true
         type: choice
         options: ["1", "2", "3", "4", "5", "7", "8"]
+      issue_number:
+        description: "Issue number (required for action=comment)"
+        required: false
+        type: string
       title:
-        description: "Issue title"
-        required: true
+        description: "Issue title (required for action=open_issue)"
+        required: false
         type: string
       body:
-        description: "Issue body -- must start with @agy or @media for the target's own bot to pick it up"
+        description: "Issue body (must start with @agy or @media) or comment text"
         required: true
         type: string
 
@@ -32,7 +41,7 @@ jobs:
       ACC7_PAT: ${{ secrets.ACC7_PAT }}
       ACC8_PAT: ${{ secrets.ACC8_PAT }}
     steps:
-      - name: Open the issue on the target account's own agw-workers
+      - name: Act on the target account's own agw-workers
         run: |
           set -euo pipefail
           IDX="${{ inputs.account_index }}"
@@ -53,7 +62,8 @@ jobs:
             exit 1
           fi
           export GH_TOKEN="$TOKEN"
-          gh issue create \
-            --repo "$OWNER/agw-workers" \
-            --title "${{ inputs.title }}" \
-            --body "${{ inputs.body }}"
+          if [ "${{ inputs.action }}" = "open_issue" ]; then
+            gh issue create --repo "$OWNER/agw-workers" --title "${{ inputs.title }}" --body "${{ inputs.body }}"
+          else
+            gh issue comment "${{ inputs.issue_number }}" --repo "$OWNER/agw-workers" --body "${{ inputs.body }}"
+          fi
