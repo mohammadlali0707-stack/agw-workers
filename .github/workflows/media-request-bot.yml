@@ -15,7 +15,7 @@ jobs:
     if: >
       github.event_name == 'issues' &&
       startsWith(github.event.issue.body, '@media') &&
-      github.event.issue.author_association == 'OWNER'
+      (github.event.issue.author_association == 'OWNER' || github.event.issue.user.login == 'github-actions[bot]')
     runs-on: ubuntu-latest
     steps:
       - name: Ack the request
