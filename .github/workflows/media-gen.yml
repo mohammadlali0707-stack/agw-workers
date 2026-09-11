@@ -1,0 +1,91 @@
+name: media-gen
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Prompt for the image/video"
+        required: true
+        type: string
+      media_type:
+        description: "image or video"
+        required: true
+        default: "image"
+        type: choice
+        options:
+          - image
+          - video
+      issue_number:
+        description: "Issue number to comment the result on (leave empty to skip)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    env:
+      Studio0: ${{ secrets.Studio0 }}
+      Studio1: ${{ secrets.Studio1 }}
+      Studio2: ${{ secrets.Studio2 }}
+      Studio3: ${{ secrets.Studio3 }}
+      Studio4: ${{ secrets.Studio4 }}
+      Studio5: ${{ secrets.Studio5 }}
+      Studio6: ${{ secrets.Studio6 }}
+      Studio7: ${{ secrets.Studio7 }}
+      Studio8: ${{ secrets.Studio8 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install google-genai
+
+      - name: Generate media
+        id: generate
+        run: |
+          set -euo pipefail
+          KEY_NAME="Studio$(( ${{ github.run_number }} % 9 ))"
+          GEMINI_API_KEY="${!KEY_NAME}"
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "secret $KEY_NAME is empty or missing" >&2
+            exit 1
+          fi
+          export GEMINI_API_KEY
+          mkdir -p media
+          EXT="png"
+          if [ "${{ inputs.media_type }}" = "video" ]; then
+            EXT="mp4"
+          fi
+          OUT="media/${{ github.run_id }}.$EXT"
+          python Tools/generate_media.py \
+            --prompt "${{ inputs.prompt }}" \
+            --media-type "${{ inputs.media_type }}" \
+            --out "$OUT"
+          echo "out_path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "key_name=$KEY_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Commit output
+        run: |
+          git config user.name "media-gen-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add "${{ steps.generate.outputs.out_path }}"
+          git commit -m "media: ${{ inputs.media_type }} for run ${{ github.run_id }} (key ${{ steps.generate.outputs.key_name }})"
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Comment on issue
+        if: ${{ inputs.issue_number != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ inputs.issue_number }}" \
+            --repo "${{ github.repository }}" \
+            --body "Generated ${{ inputs.media_type }}: \`${{ steps.generate.outputs.out_path }}\` (key: ${{ steps.generate.outputs.key_name }}, run: ${{ github.run_id }})"
