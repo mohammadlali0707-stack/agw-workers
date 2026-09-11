@@ -28,6 +28,10 @@ on:
         default: ''
         type: string
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   run-agy:
     runs-on: ubuntu-latest
@@ -170,22 +174,17 @@ jobs:
 
       # agy never receives a GitHub token -- it only ever prints plain text.
       # This step, running OUTSIDE agy's own process, is what actually opens
-      # the @media issue, using the same account's own PAT so it lands with
-      # author_association OWNER (what media-request-bot.yml requires). If
-      # agy asked for something and no PAT is wired for the selected account,
-      # this warns and skips rather than failing the whole run.
+      # the @media issue. It uses the default GITHUB_TOKEN (scoped to this
+      # repo's own issues:write above), NOT a PAT keyed by acc_idx: acc_idx
+      # is agy's Antigravity identity (random 1-9), unrelated to which of
+      # the 8 GitHub accounts is hosting this copy of the workflow, so a PAT
+      # keyed by it would often be wrong or missing. media-request-bot.yml
+      # accepts issues opened by the github-actions[bot] identity this
+      # produces.
       - name: Relay any media request from agy's output
         if: always()
         env:
-          ACC_IDX: ${{ steps.pick_token.outputs.acc_idx }}
-          ACC1_PAT: ${{ secrets.ACC1_PAT }}
-          ACC2_PAT: ${{ secrets.ACC2_PAT }}
-          ACC3_PAT: ${{ secrets.ACC3_PAT }}
-          ACC4_PAT: ${{ secrets.ACC4_PAT }}
-          ACC5_PAT: ${{ secrets.ACC5_PAT }}
-          ACC6_PAT: ${{ secrets.ACC6_PAT }}
-          ACC7_PAT: ${{ secrets.ACC7_PAT }}
-          ACC8_PAT: ${{ secrets.ACC8_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           if [ ! -f /tmp/agy_output.txt ]; then
@@ -198,13 +197,6 @@ jobs:
             exit 0
           fi
           DESC=$(printf '%s' "$LINE" | sed 's/^##MEDIA_REQUEST##[[:space:]]*//')
-          PAT_NAME="ACC${ACC_IDX}_PAT"
-          TOKEN="${!PAT_NAME:-}"
-          if [ -z "$TOKEN" ]; then
-            echo "::warning::agy asked for media but no PAT is wired for account $ACC_IDX -- not opening an issue"
-            exit 0
-          fi
-          export GH_TOKEN="$TOKEN"
           gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "Media request from agy (${{ inputs.callback_id }})" \
