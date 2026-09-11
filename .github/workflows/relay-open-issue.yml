@@ -1,0 +1,59 @@
+name: relay-open-issue
+
+on:
+  workflow_dispatch:
+    inputs:
+      account_index:
+        description: "Target account (ACC6 needs no relay -- open it directly instead)"
+        required: true
+        type: choice
+        options: ["1", "2", "3", "4", "5", "7", "8"]
+      title:
+        description: "Issue title"
+        required: true
+        type: string
+      body:
+        description: "Issue body -- must start with @agy or @media for the target's own bot to pick it up"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    env:
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Open the issue on the target account's own agw-workers
+        run: |
+          set -euo pipefail
+          IDX="${{ inputs.account_index }}"
+          case "$IDX" in
+            1) OWNER="momonakikugava-pixel" ;;
+            2) OWNER="lali94m-max" ;;
+            3) OWNER="ngocgminh5-debug" ;;
+            4) OWNER="hmmletssee7-design" ;;
+            5) OWNER="kidding602" ;;
+            7) OWNER="mohammad97okk" ;;
+            8) OWNER="moradzahra85-png" ;;
+            *) echo "bad account_index: $IDX" >&2; exit 1 ;;
+          esac
+          PAT_NAME="ACC${IDX}_PAT"
+          TOKEN="${!PAT_NAME}"
+          if [ -z "$TOKEN" ]; then
+            echo "no PAT for account $IDX" >&2
+            exit 1
+          fi
+          export GH_TOKEN="$TOKEN"
+          gh issue create \
+            --repo "$OWNER/agw-workers" \
+            --title "${{ inputs.title }}" \
+            --body "${{ inputs.body }}"

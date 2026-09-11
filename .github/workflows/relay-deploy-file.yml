@@ -1,0 +1,69 @@
+name: relay-deploy-file
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy media-request-bot.yml + media/README.md to the other 7 accounts
+        run: |
+          set -euo pipefail
+          declare -A OWNERS=(
+            [1]="momonakikugava-pixel"
+            [2]="lali94m-max"
+            [3]="ngocgminh5-debug"
+            [4]="hmmletssee7-design"
+            [5]="kidding602"
+            [7]="mohammad97okk"
+            [8]="moradzahra85-png"
+          )
+          for IDX in 1 2 3 4 5 7 8; do
+            OWNER="${OWNERS[$IDX]}"
+            PAT_NAME="ACC${IDX}_PAT"
+            TOKEN="${!PAT_NAME}"
+            echo "== account $IDX: $OWNER/agw-workers =="
+            if [ -z "$TOKEN" ]; then
+              echo "::warning::no PAT for account $IDX ($OWNER), skipping"
+              continue
+            fi
+            AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+            WORKDIR=$(mktemp -d)
+            if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --depth 1 \
+                "https://github.com/${OWNER}/agw-workers.git" "$WORKDIR"; then
+              echo "::warning::clone failed for $OWNER/agw-workers, skipping"
+              rm -rf "$WORKDIR"
+              continue
+            fi
+            mkdir -p "$WORKDIR/.github/workflows" "$WORKDIR/media"
+            cp .github/workflows/media-request-bot.yml "$WORKDIR/.github/workflows/media-request-bot.yml"
+            cp media/README.md "$WORKDIR/media/README.md"
+            (
+              cd "$WORKDIR"
+              git config user.name "media-request-bot-deploy"
+              git config user.email "actions@users.noreply.github.com"
+              git add .github/workflows/media-request-bot.yml media/README.md
+              if git diff --cached --quiet; then
+                echo "no changes for $OWNER, skipping push"
+              else
+                git commit -m "Deploy media-request-bot.yml from mohammadlali0707-stack/agw-workers (relay)"
+                git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin HEAD
+                echo "pushed to $OWNER/agw-workers"
+              fi
+            )
+            rm -rf "$WORKDIR"
+          done
