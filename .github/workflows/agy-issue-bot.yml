@@ -23,7 +23,7 @@ jobs:
         (endsWith(github.event.comment.body, '@agy') || endsWith(github.event.comment.body, '@agy\n') || endsWith(github.event.comment.body, '@agy\r\n')) &&
         (
           (github.event.comment.user.type != 'Bot' && github.event.comment.author_association == 'OWNER') ||
-          github.event.comment.user.login == 'github-actions[bot]'
+          github.event.comment.user.login == 'claude[bot]'
         )
       )
     steps:
