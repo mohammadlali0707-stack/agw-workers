@@ -20,17 +20,21 @@ on:
 jobs:
   claude:
     if: >
-      contains(github.event.comment.body || github.event.issue.body, '@claude') &&
+      (
+        endsWith(github.event.comment.body, '@claude') || endsWith(github.event.comment.body, '@claude\n') || endsWith(github.event.comment.body, '@claude\r\n') ||
+        endsWith(github.event.issue.body, '@claude') || endsWith(github.event.issue.body, '@claude\n') || endsWith(github.event.issue.body, '@claude\r\n')
+      ) &&
       !startsWith(github.event.issue.body, '@media') &&
-      !startsWith(github.event.issue.body, '@agy') &&
+      !(
+        endsWith(github.event.issue.body, '@agy') || endsWith(github.event.issue.body, '@agy\n') || endsWith(github.event.issue.body, '@agy\r\n')
+      ) &&
       (
         github.event.comment.author_association == 'OWNER' ||
         github.event.comment.author_association == 'COLLABORATOR' ||
         github.event.issue.author_association == 'OWNER' ||
         github.event.issue.author_association == 'COLLABORATOR' ||
         (
-          github.event.comment.user.login == 'github-actions[bot]' &&
-          (endsWith(github.event.comment.body, '@claude') || endsWith(github.event.comment.body, '@claude\n') || endsWith(github.event.comment.body, '@claude\r\n'))
+          github.event.comment.user.login == 'github-actions[bot]'
         )
       )
     runs-on: ubuntu-latest
