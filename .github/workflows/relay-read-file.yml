@@ -1,0 +1,78 @@
+name: relay-read-file
+
+on:
+  workflow_dispatch:
+    inputs:
+      account_index:
+        description: "Target account (0, or 1-8; ACC6 needs no relay, ACC9 is retired)"
+        required: true
+        type: choice
+        options: ["0", "1", "2", "3", "4", "5", "7", "8"]
+      repo:
+        description: "Repo name (e.g. Claud-Cloud-Project)"
+        required: true
+        type: string
+      ref:
+        description: "Branch or ref"
+        required: true
+        type: string
+      path:
+        description: "File path to read"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Clone with the account's own PAT and print the file
+        run: |
+          set -euo pipefail
+          IDX="${{ inputs.account_index }}"
+          case "$IDX" in
+            0) OWNER="Mohammadlali" ;;
+            1) OWNER="momonakikugava-pixel" ;;
+            2) OWNER="lali94m-max" ;;
+            3) OWNER="ngocgminh5-debug" ;;
+            4) OWNER="hmmletssee7-design" ;;
+            5) OWNER="kidding602" ;;
+            7) OWNER="mohammad97okk" ;;
+            8) OWNER="moradzahra85-png" ;;
+            *) echo "bad account_index: $IDX" >&2; exit 1 ;;
+          esac
+          PAT_NAME="ACC${IDX}_PAT"
+          TOKEN="${!PAT_NAME}"
+          if [ -z "$TOKEN" ]; then
+            echo "no PAT for account $IDX" >&2
+            exit 1
+          fi
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          WORKDIR=$(mktemp -d)
+          echo "cloning ${OWNER}/${{ inputs.repo }}@${{ inputs.ref }} ..."
+          if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --depth 1 --branch "${{ inputs.ref }}" \
+              "https://github.com/${OWNER}/${{ inputs.repo }}.git" "$WORKDIR"; then
+            echo "CLONE FAILED -- repo or branch does not exist, or the PAT cannot see it." >&2
+            exit 1
+          fi
+          echo "clone ok. HEAD:"
+          git -C "$WORKDIR" log -1 --oneline
+          echo "=== ${{ inputs.path }} ==="
+          if [ ! -f "$WORKDIR/${{ inputs.path }}" ]; then
+            echo "FILE DOES NOT EXIST at that path in this checkout." >&2
+            echo "--- top-level listing for reference ---"
+            ls -la "$WORKDIR"
+            exit 1
+          fi
+          cat "$WORKDIR/${{ inputs.path }}"
