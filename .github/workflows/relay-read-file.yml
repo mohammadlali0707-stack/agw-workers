@@ -37,6 +37,30 @@ jobs:
       ACC7_PAT: ${{ secrets.ACC7_PAT }}
       ACC8_PAT: ${{ secrets.ACC8_PAT }}
     steps:
+      - name: Diagnostic - anonymous clone (no credentials)
+        run: |
+          set -uo pipefail
+          IDX="${{ inputs.account_index }}"
+          case "$IDX" in
+            0) OWNER="Mohammadlali" ;;
+            1) OWNER="momonakikugava-pixel" ;;
+            2) OWNER="lali94m-max" ;;
+            3) OWNER="ngocgminh5-debug" ;;
+            4) OWNER="hmmletssee7-design" ;;
+            5) OWNER="kidding602" ;;
+            7) OWNER="mohammad97okk" ;;
+            8) OWNER="moradzahra85-png" ;;
+            *) echo "bad account_index: $IDX" >&2; exit 1 ;;
+          esac
+          ANON_DIR=$(mktemp -d)
+          echo "anonymous clone of ${OWNER}/${{ inputs.repo }}@${{ inputs.ref }} (no auth header) ..."
+          if git clone --depth 1 --branch "${{ inputs.ref }}" \
+              "https://github.com/${OWNER}/${{ inputs.repo }}.git" "$ANON_DIR" 2>&1; then
+            echo "ANON_CLONE_RESULT=success -- repo+branch are genuinely public and reachable." 
+          else
+            echo "ANON_CLONE_RESULT=fail -- repo/branch not reachable at all without credentials (private, or truly missing)."
+          fi
+          echo "--- end diagnostic ---"
       - name: Clone with the account's own PAT and print the file
         run: |
           set -euo pipefail
