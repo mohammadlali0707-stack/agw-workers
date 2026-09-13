@@ -131,7 +131,8 @@ jobs:
             Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
             mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
             mohammadlali0707-stack/Claud-Cloud-Project) TOKEN="$ACC6_PAT" ;;
-            momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="$ACC1_PAT" ;;
+            mohammadlali0707-stack/AirboxVIP_Coffeenet) TOKEN="$ACC6_PAT" ;;
+            mohammadlali0707-stack/AirboxVIP-Private)   TOKEN="$ACC6_PAT" ;;
             Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
             *)
               echo "Unknown target_repo '$TARGET_REPO' -- refusing to attach a live credential to it." >&2
@@ -316,7 +317,8 @@ jobs:
             Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
             mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
             mohammadlali0707-stack/Claud-Cloud-Project) TOKEN="$ACC6_PAT" ;;
-            momonakikugava-pixel/AirboxVIP_Coffeenet) TOKEN="$ACC1_PAT" ;;
+            mohammadlali0707-stack/AirboxVIP_Coffeenet) TOKEN="$ACC6_PAT" ;;
+            mohammadlali0707-stack/AirboxVIP-Private)   TOKEN="$ACC6_PAT" ;;
             Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
             *) echo "Unknown target_repo -- not pushing." >&2; exit 0 ;;
           esac
@@ -419,3 +421,4 @@ jobs:
           if [ -n "${{ inputs.issue_number }}" ]; then
             echo "- **Issue comment:** posted to issue #${{ inputs.issue_number }} in this repo" >> $GITHUB_STEP_SUMMARY
           fi
+
