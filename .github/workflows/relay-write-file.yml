@@ -1,0 +1,95 @@
+name: relay-write-file
+
+on:
+  workflow_dispatch:
+    inputs:
+      account_index:
+        description: "Target account (0, or 1-8; ACC6 needs no relay, ACC9 is retired)"
+        required: true
+        type: choice
+        options: ["0", "1", "2", "3", "4", "5", "7", "8"]
+      repo:
+        description: "Repo name (e.g. AirboxVIP_Coffeenet)"
+        required: true
+        type: string
+      branch:
+        description: "Branch to write to"
+        required: true
+        type: string
+      path:
+        description: "File path to write"
+        required: true
+        type: string
+      content_b64:
+        description: "Base64-encoded file content"
+        required: true
+        type: string
+      message:
+        description: "Commit message"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  write:
+    runs-on: ubuntu-latest
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Write the file via the account's own PAT (Contents API)
+        run: |
+          set -euo pipefail
+          IDX="${{ inputs.account_index }}"
+          case "$IDX" in
+            0) OWNER="Mohammadlali" ;;
+            1) OWNER="momonakikugava-pixel" ;;
+            2) OWNER="lali94m-max" ;;
+            3) OWNER="ngocgminh5-debug" ;;
+            4) OWNER="hmmletssee7-design" ;;
+            5) OWNER="kidding602" ;;
+            7) OWNER="mohammad97okk" ;;
+            8) OWNER="moradzahra85-png" ;;
+            *) echo "bad account_index: $IDX" >&2; exit 1 ;;
+          esac
+          PAT_NAME="ACC${IDX}_PAT"
+          TOKEN="${!PAT_NAME}"
+          if [ -z "$TOKEN" ]; then
+            echo "no PAT for account $IDX" >&2
+            exit 1
+          fi
+          REPO_API="https://api.github.com/repos/${OWNER}/${{ inputs.repo }}"
+          AUTH_HEADER="Authorization: token $TOKEN"
+          PATH_IN_REPO="${{ inputs.path }}"
+          BRANCH="${{ inputs.branch }}"
+
+          GET_RESP=$(curl -sS -H "$AUTH_HEADER" "$REPO_API/contents/$PATH_IN_REPO?ref=$BRANCH")
+          EXISTING_SHA=$(echo "$GET_RESP" | jq -r '.sha // empty')
+
+          if [ -n "$EXISTING_SHA" ]; then
+            BODY=$(jq -n --arg msg "${{ inputs.message }}" --arg content "${{ inputs.content_b64 }}" \
+                          --arg branch "$BRANCH" --arg sha "$EXISTING_SHA" \
+                          '{message: $msg, content: $content, branch: $branch, sha: $sha}')
+          else
+            BODY=$(jq -n --arg msg "${{ inputs.message }}" --arg content "${{ inputs.content_b64 }}" \
+                          --arg branch "$BRANCH" \
+                          '{message: $msg, content: $content, branch: $branch}')
+          fi
+
+          PUT_RESP=$(curl -sS -X PUT -H "$AUTH_HEADER" -H "Content-Type: application/json" \
+            "$REPO_API/contents/$PATH_IN_REPO" -d "$BODY")
+          NEW_SHA=$(echo "$PUT_RESP" | jq -r '.commit.sha // empty')
+          if [ -z "$NEW_SHA" ]; then
+            echo "::error::write failed -- raw response:"
+            echo "$PUT_RESP" | jq .
+            exit 1
+          fi
+          echo "Wrote ${OWNER}/${{ inputs.repo }}@$BRANCH:$PATH_IN_REPO -- commit $NEW_SHA"
