@@ -1,0 +1,27 @@
+name: One-off -- post the approval comment as the real owner identity
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+    steps:
+      - name: Post @agy-plan-approved on issue #10 as mohammadlali0707-stack (real OWNER)
+        run: |
+          CODE=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST \
+            -H "Authorization: token $ACC6_PAT" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/mohammadlali0707-stack/agw-workers/issues/10/comments" \
+            -d '{"body":"تایید شد (تست زنده‌ی مسیر دیسپچ). @agy-plan-approved"}')
+          echo "HTTP $CODE"
+          cat /tmp/resp.json
+          if [ "$CODE" != "201" ]; then
+            echo "::error::comment failed"
+            exit 1
+          fi
