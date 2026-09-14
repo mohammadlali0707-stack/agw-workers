@@ -41,17 +41,44 @@ jobs:
     if: always()
     outputs:
       match: ${{ steps.check.outputs.match }}
+      target_repo: ${{ steps.check.outputs.target_repo }}
+      acc_index: ${{ steps.check.outputs.acc_index }}
     steps:
-      - name: Check for a trailing @agy marker, tolerant of trailing whitespace and case
+      - name: Check for a trailing @agy marker and extract project tag
         id: check
         env:
           BODY: ${{ github.event.issue.body || github.event.comment.body || '' }}
+          TITLE: ${{ github.event.issue.title || '' }}
         run: |
-          TRIMMED="$(printf '%s' "$BODY" | sed -e 's/[[:space:]]*$//')"
+          # Combine title and body, then check if it ends with @agy
+          # We look for <project> @agy at the end.
+          TRIMMED="$(printf '%s\n%s' "$TITLE" "$BODY" | sed -e 's/[[:space:]]*$//')"
           LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
           case "$LOWER" in
-            *"@agy") echo "match=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "match=false" >> "$GITHUB_OUTPUT" ;;
+            *"@agy") 
+              echo "match=true" >> "$GITHUB_OUTPUT" 
+              
+              # Extract the project tag which is the word right before @agy
+              PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy$' | awk '{print $1}')
+              TARGET_REPO=""
+              
+              case "$PROJECT" in
+                ccp) TARGET_REPO="mohammadlali0707-stack/Claud-Cloud-Project" ;;
+                cr) TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
+                coffeenet) TARGET_REPO="mohammadlali0707-stack/AirboxVIP_Coffeenet" ;;
+                status) TARGET_REPO="Mohammadlali/status-dashboard" ;;
+                *) TARGET_REPO="mohammadlali0707-stack/Control-Room" ;; # fallback
+              esac
+              
+              # Pick a random worker from 1 to 8
+              ACC_IDX=$(( (RANDOM % 8) + 1 ))
+              
+              echo "target_repo=$TARGET_REPO" >> "$GITHUB_OUTPUT"
+              echo "acc_index=$ACC_IDX" >> "$GITHUB_OUTPUT"
+              ;;
+            *) 
+              echo "match=false" >> "$GITHUB_OUTPUT" 
+              ;;
           esac
 
   agy-same-repo:
@@ -79,10 +106,12 @@ jobs:
       - name: Ack on the issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
+          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "AGY is on it (same-repo listener, no relay)."
+            --body "Project Manager: Routing to **$TARGET_REPO** via worker **ACC$ACC_IDX**."
 
       - name: Build prompt
         id: prompt
@@ -112,13 +141,15 @@ jobs:
       - name: Dispatch agw-worker.yml in this same repo
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
+          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
         run: |
           PROMPT=$(cat /tmp/prompt.txt)
           gh workflow run agw-worker.yml \
             --repo "${{ github.repository }}" \
             --field "prompt=$PROMPT" \
-            --field "target_repo=mohammadlali0707-stack/Control-Room" \
+            --field "target_repo=$TARGET_REPO" \
             --field "target_branch=" \
-            --field "acc_index=0" \
+            --field "acc_index=$ACC_IDX" \
             --field "issue_number=${{ github.event.issue.number }}" \
             --field "callback_id=same-repo-${{ github.event.issue.number }}-${{ github.run_id }}"

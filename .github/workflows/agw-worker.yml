@@ -128,16 +128,8 @@ jobs:
             exit 0
           fi
           case "$TARGET_REPO" in
-            Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
-            mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
-            mohammadlali0707-stack/Claud-Cloud-Project) TOKEN="$ACC6_PAT" ;;
-            mohammadlali0707-stack/AirboxVIP_Coffeenet) TOKEN="$ACC6_PAT" ;;
-            mohammadlali0707-stack/AirboxVIP-Private)   TOKEN="$ACC6_PAT" ;;
             Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
-            *)
-              echo "Unknown target_repo '$TARGET_REPO' -- refusing to attach a live credential to it." >&2
-              exit 0
-              ;;
+            *) TOKEN="$ACC6_PAT" ;;
           esac
           if [ -z "$TOKEN" ]; then
             echo "No token wired for $TARGET_REPO -- skipping checkout." >&2
@@ -314,13 +306,8 @@ jobs:
           ACC1_PAT: ${{ secrets.ACC1_PAT }}
         run: |
           case "$TARGET_REPO" in
-            Mohammadlali/Claud-Cloud-Project) TOKEN="$ACC0_PAT" ;;
-            mohammadlali0707-stack/Control-Room)        TOKEN="$ACC6_PAT" ;;
-            mohammadlali0707-stack/Claud-Cloud-Project) TOKEN="$ACC6_PAT" ;;
-            mohammadlali0707-stack/AirboxVIP_Coffeenet) TOKEN="$ACC6_PAT" ;;
-            mohammadlali0707-stack/AirboxVIP-Private)   TOKEN="$ACC6_PAT" ;;
             Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
-            *) echo "Unknown target_repo -- not pushing." >&2; exit 0 ;;
+            *) TOKEN="$ACC6_PAT" ;;
           esac
           cd /tmp/agent-repo
           BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
@@ -374,25 +361,21 @@ jobs:
             exit 1
           fi
 
-          # Record the agent's raw output as a file inside this same repo,
-          # using the same credential already used for the push above,
-          # instead of relying only on the (possibly truncated) issue
-          # comment above or a public console/summary/artifact. This repo
-          # is whichever one the caller wired a token for (checkout step
-          # above) -- it may be temporarily public itself, but that is no
-          # different from the code the agent just committed being public;
-          # the point is a complete, size-unlimited audit trail that
-          # doesn't depend on the 60000-byte comment cap above.
+          # Record the agent's raw output as a NEW, CLOSED issue in the private target repo
+          # as requested by the user, instead of committing to Reports/agy/.
           RUN_TAG="${{ inputs.callback_id }}"
           if [ -z "$RUN_TAG" ]; then RUN_TAG="${{ github.run_id }}"; fi
-          mkdir -p Reports/agy
-          cp /tmp/agy_output.txt "Reports/agy/${RUN_TAG}.txt"
-          git add "Reports/agy/${RUN_TAG}.txt"
-          if ! git diff --cached --quiet; then
-            git commit -m "agy: record raw output for ${RUN_TAG}"
-            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
-            echo "output_committed=true" >> "$GITHUB_ENV"
+          
+          export GH_TOKEN="$TOKEN"
+          echo "Creating a new issue in $TARGET_REPO for the report..."
+          NEW_ISSUE_URL=$(gh issue create --repo "$TARGET_REPO" --title "AGY Report: ${RUN_TAG}" --body-file /tmp/agy_output.txt)
+          
+          if [ -n "$NEW_ISSUE_URL" ]; then
+            echo "Closing issue $NEW_ISSUE_URL..."
+            gh issue close "$NEW_ISSUE_URL" --repo "$TARGET_REPO"
           fi
+          
+          echo "output_committed=true" >> "$GITHUB_ENV"
 
       - name: Upload Output as Artifact (fallback -- only when no repo took the output)
         if: always() && steps.checkout_target.outputs.has_repo != 'true'
