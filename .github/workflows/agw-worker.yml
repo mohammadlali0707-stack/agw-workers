@@ -18,9 +18,9 @@ on:
         default: ''
         type: string
       acc_index:
-        description: 'Account index 1-8 to force a specific identity (0=this repo''s own account, falling back to one random other on quota error). ACC9 is retired and never used.'
+        description: 'Account index 0-8 to force a specific identity; empty = this repo''s own account, falling back to one random other on quota error. ACC9 is retired and never used.'
         required: false
-        default: '0'
+        default: ''
         type: string
       issue_number:
         description: 'Issue number to post agy''s final output back to as a comment (empty = do not post)'
@@ -71,6 +71,15 @@ jobs:
       # ACC9 is retired ("should not be in any cycle") -- an explicit
       # request for it falls back to this repo's own identity instead of
       # doing nothing useful.
+      #
+      # Fixed 2026-09-14: acc_index="0" used to be treated as the SAME
+      # sentinel as "no preference given" -- both fell through to OWN_IDX.
+      # That silently redirected any caller asking for the real, distinct
+      # ACC0 (org.json's account 0, e.g. agw-ACC0-w11) to whichever account
+      # hosts this copy of the repo instead. Confirmed live: a task
+      # assigned to ACC0 by agy-plan-dispatch.yml actually ran under ACC6's
+      # identity (run 34882500945). Empty string is now the only "no
+      # preference" sentinel; "0" is a real account index like any other.
       - name: Select AGY Account Token
         id: pick_token
         env:
@@ -80,9 +89,9 @@ jobs:
           IDX="$ACC_INDEX_INPUT"
           if [ "$IDX" = "9" ]; then
             echo "::warning::acc_index=9 (ACC9) is retired and never valid -- using this repo's own account instead"
-            IDX="0"
+            IDX=""
           fi
-          if [ "$IDX" = "0" ]; then
+          if [ -z "$IDX" ]; then
             if [ "$OWN_IDX" != "0" ]; then
               IDX="$OWN_IDX"
             else
