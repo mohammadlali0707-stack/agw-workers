@@ -178,6 +178,7 @@ jobs:
             mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
             local token_b64=""
             case "$idx" in
+              0) token_b64="${{ secrets.AGW_TOKEN_ACC0 }}" ;;
               1) token_b64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
               2) token_b64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
               3) token_b64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
