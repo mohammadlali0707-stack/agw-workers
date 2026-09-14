@@ -1,5 +1,29 @@
 name: AGW Worker AGY Issue Bot (same-repo, no relay)
 
+# Fixed 2026-09-14, two independent bugs, both measured live before being
+# fixed (not guessed):
+#
+# 1. GitHub Actions expression strings have NO escape sequences --
+#    endsWith(body, '@agy\n') matches the literal characters backslash-n,
+#    never a real trailing newline, so a real issue/comment body (which
+#    always ends in an actual newline once GitHub normalizes it) could
+#    never match. Replaced with a real bash check in a separate
+#    check-marker job, same pattern already used to fix this identical bug
+#    in Claud-Cloud-Project's and Mohammadlali/agw-workers's own copies of
+#    this file earlier the same day.
+# 2. `author_association == 'OWNER'` can never be true for issues this
+#    repo's own dashboard chat creates: status-dashboard/api/agy_create.js
+#    posts using AGY_CHAT_ACC0_PAT (the Mohammadlali account), which has NO
+#    relationship at all to this repo (owned by mohammadlali0707-stack) --
+#    confirmed by reading a real such issue (#8) back: author_association
+#    was "NONE", not even "COLLABORATOR" (unlike Claud-Cloud-Project, where
+#    the same PAT/repo-ownership combination reads back as COLLABORATOR).
+#    Rather than adding Mohammadlali as a collaborator on this repo (a real
+#    permissions change outside this fix's scope), trust by login name
+#    instead for that one known account, same as the existing
+#    `user.login == 'claude[bot]'` carve-out just below already does for
+#    comments.
+
 on:
   issues:
     types: [opened]
@@ -12,17 +36,42 @@ permissions:
   contents: read
 
 jobs:
+  check-marker:
+    runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      match: ${{ steps.check.outputs.match }}
+    steps:
+      - name: Check for a trailing @agy marker, tolerant of trailing whitespace and case
+        id: check
+        env:
+          BODY: ${{ github.event.issue.body || github.event.comment.body || '' }}
+        run: |
+          TRIMMED="$(printf '%s' "$BODY" | sed -e 's/[[:space:]]*$//')"
+          LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
+          case "$LOWER" in
+            *"@agy") echo "match=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "match=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
   agy-same-repo:
+    needs: [check-marker]
     runs-on: ubuntu-latest
     if: >
       (github.event_name == 'issues' &&
-        (endsWith(github.event.issue.body, '@agy') || endsWith(github.event.issue.body, '@agy\n') || endsWith(github.event.issue.body, '@agy\r\n')) &&
-        github.event.issue.author_association == 'OWNER'
+        needs.check-marker.outputs.match == 'true' &&
+        (github.event.issue.author_association == 'OWNER' ||
+          github.event.issue.author_association == 'COLLABORATOR' ||
+          github.event.issue.user.login == 'Mohammadlali')
       ) ||
       (github.event_name == 'issue_comment' &&
-        (endsWith(github.event.comment.body, '@agy') || endsWith(github.event.comment.body, '@agy\n') || endsWith(github.event.comment.body, '@agy\r\n')) &&
+        needs.check-marker.outputs.match == 'true' &&
         (
-          (github.event.comment.user.type != 'Bot' && github.event.comment.author_association == 'OWNER') ||
+          (github.event.comment.user.type != 'Bot' &&
+            (github.event.comment.author_association == 'OWNER' ||
+              github.event.comment.author_association == 'COLLABORATOR' ||
+              github.event.comment.user.login == 'Mohammadlali')
+          ) ||
           github.event.comment.user.login == 'claude[bot]'
         )
       )
