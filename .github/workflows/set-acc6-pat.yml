@@ -1,0 +1,23 @@
+name: Set ACC6 Vercel Secret
+on:
+  workflow_dispatch:
+    inputs:
+      pat_token:
+        description: 'The PAT to store in Vercel'
+        required: true
+jobs:
+  set:
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_NEW }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID_NEW }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_NEW }}
+    steps:
+      - name: Update Vercel Env Var via API
+        run: |
+          set -e
+          echo "Adding new env var AGY_CHAT_ACC6_PAT..."
+          curl -sS -X POST -H "Authorization: Bearer $VERCEL_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"key\":\"AGY_CHAT_ACC6_PAT\",\"value\":\"${{ github.event.inputs.pat_token }}\",\"type\":\"encrypted\",\"target\":[\"production\",\"preview\",\"development\"]}" \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env?teamId=$VERCEL_ORG_ID"
+          echo "Done."
