@@ -1,0 +1,142 @@
+name: AGY Final Report (ACC6, runs once all account leads have reported)
+
+# Dispatched by whichever agy-lead-plan.yml run wins the race to see every
+# account's team report present (Reports/agy/team_reports/acc<N>.md in
+# target_repo). Runs AS ACC6's own identity -- this repo's own account,
+# per the owner's spec ("یک بات در ACC6 تریگر شود") -- reads all of them,
+# and posts ONE comprehensive Persian summary as a NEW issue on
+# target_repo (not a comment), plus a link back on the original planning
+# issue here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'owner/repo the whole plan targeted'
+        required: true
+        type: string
+      issue_number:
+        description: 'The original agw-workers planning issue, to link back to'
+        required: false
+        default: ''
+        type: string
+      all_accounts:
+        description: 'JSON array of every account that had a package, e.g. [0,1,3]'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  final-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TARGET_REPO: ${{ inputs.target_repo }}
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      ALL_ACCOUNTS: ${{ inputs.all_accounts }}
+    steps:
+      - name: Install AGY CLI from HF Dataset
+        run: |
+          curl -L \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          sudo install -m 0755 "$CLI_BIN" /usr/local/bin/agy
+          agy --version 2>/dev/null || echo "agy ready"
+
+      - name: Checkout target repo
+        id: checkout_target
+        env:
+          ACC0_PAT: ${{ secrets.ACC0_PAT }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          set -e
+          case "$TARGET_REPO" in
+            Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
+            *) TOKEN="$ACC6_PAT" ;;
+          esac
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No token wired for $TARGET_REPO"
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          mkdir -p /tmp/agent-repo
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
+            "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+
+      - name: Restore ACC6's own AGY identity
+        run: |
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          echo "${{ secrets.AGW_TOKEN_ACC6 }}" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+
+      - name: Build the final-summary prompt from every account's team report
+        run: |
+          cd /tmp/agent-repo
+          python3 - <<'PYEOF'
+          import json, os
+          accounts = json.loads(os.environ['ALL_ACCOUNTS'])
+          parts = []
+          missing = []
+          for a in accounts:
+              path = 'Reports/agy/team_reports/acc{}.md'.format(a)
+              if os.path.isfile(path):
+                  with open(path, encoding='utf-8') as f:
+                      parts.append('--- Account {} ---\n{}'.format(a, f.read()))
+              else:
+                  missing.append(a)
+          with open('/tmp/all_reports.txt', 'w', encoding='utf-8') as f:
+              f.write('\n\n'.join(parts))
+          with open('/tmp/missing.txt', 'w', encoding='utf-8') as f:
+              f.write(','.join(str(m) for m in missing))
+          PYEOF
+          {
+            printf '%s\n' 'You are the ACC6 fleet reviewer. Below are the team reports from every account that was dispatched work on this project.'
+            printf '\n'
+            cat /tmp/all_reports.txt
+            MISSING=$(cat /tmp/missing.txt)
+            if [ -n "$MISSING" ]; then
+              printf '\n(Accounts with NO report on file, do not invent what they did: %s)\n' "$MISSING"
+            fi
+            printf '\nWrite ONE comprehensive Persian report covering: what was accomplished overall, account by account, anything that failed or is incomplete, and what should happen next. This is a final deliverable, not a proposal -- plain prose, no JSON.\n'
+          } > /tmp/final_prompt.txt
+
+      - name: Run AGY to write the final summary
+        run: |
+          set +e
+          cd /tmp/agent-repo
+          PROMPT=$(cat /tmp/final_prompt.txt)
+          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          echo "$OUTPUT" > /tmp/final_report.txt
+
+      - name: Post the final report as a new issue on target_repo
+        id: post
+        env:
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          set -e
+          DATE=$(date -u +%Y-%m-%d)
+          URL=$(GH_TOKEN="$ACC6_PAT" gh issue create \
+            --repo "$TARGET_REPO" \
+            --title "گزارش جامع دیسپچ -- ${DATE}" \
+            --body-file /tmp/final_report.txt)
+          echo "report_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Posted: $URL"
+
+      - name: Link back on the original planning issue
+        if: env.ISSUE_NUMBER != ''
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+            --body "Project Manager: ✅ همه‌ی اکانت‌ها گزارش دادند. گزارش جامع: ${{ steps.post.outputs.report_url }}"

@@ -1,0 +1,376 @@
+name: AGY Account Lead (plan + dispatch 10 subordinates, collect, aggregate)
+
+# Dispatched once per account by agy-plan-dispatch.yml (never triggered by
+# an issue event directly). This is the "account lead" tier the owner
+# asked for: bot #1 (w01) of the given account.
+#
+# 1. Runs agy AS this account's own identity to break package_goal into up
+#    to 10 tasks, one per its subordinate members (w02-w11 per Team/
+#    org.json -- w01 itself is the lead and does not get a worker task).
+# 2. Dispatches agw-worker.yml once per task, same account identity,
+#    5 SECONDS APART (the owner's own anti-rate-limit design -- these
+#    calls share the lead's own Antigravity quota), each writing its
+#    report under Reports/agy/acc<N>/ in target_repo (report_dir input).
+# 3. Polls target_repo (git pull in a loop, not the API, to stay cheap)
+#    until all dispatched reports exist or a time budget runs out.
+# 4. Runs agy once more (same identity) to write ONE Persian account-level
+#    summary from the collected reports, commits it to
+#    Reports/agy/team_reports/acc<N>.md.
+# 5. Checks whether every account named in all_accounts now has a team
+#    report. If so, race-safely (via a git push that only one lead can
+#    win) dispatches agy-final-report.yml -- the ACC6 bot that reads all
+#    team reports and posts the comprehensive summary issue.
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Account index 0-8 (never 6 or 9) this lead plans and dispatches for'
+        required: true
+        type: string
+      package_goal:
+        description: 'The scope of work this account''s lead should break down among its 10 subordinates'
+        required: true
+        type: string
+      target_repo:
+        description: 'owner/repo the whole plan is targeting'
+        required: true
+        type: string
+      issue_number:
+        description: 'Issue to post progress comments to'
+        required: false
+        default: ''
+        type: string
+      callback_id:
+        description: 'Base tag for this account''s dispatches, e.g. plan-11-acc3'
+        required: false
+        default: ''
+        type: string
+      all_accounts:
+        description: 'JSON array of every account in this proposal (e.g. [0,1,3]) -- used to detect "am I the last lead to finish" for the final-report trigger'
+        required: false
+        default: '[]'
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+jobs:
+  lead:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ACCOUNT: ${{ inputs.account }}
+      TARGET_REPO: ${{ inputs.target_repo }}
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      BASE_TAG: ${{ inputs.callback_id }}
+    steps:
+      - name: Ack on the issue
+        if: env.ISSUE_NUMBER != ''
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+            --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌های ۱۰ زیردست..."
+
+      - name: Install AGY CLI from HF Dataset
+        run: |
+          curl -L \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          sudo install -m 0755 "$CLI_BIN" /usr/local/bin/agy
+          agy --version 2>/dev/null || echo "agy ready"
+
+      # Same case statement as agw-worker.yml's own "Checkout target repo"
+      # step -- kept in sync deliberately, not sourced from one place,
+      # since GitHub Actions has no shared-step-library mechanism here.
+      - name: Checkout target repo (kept open for the whole job -- planning, polling and two commits all reuse it)
+        id: checkout_target
+        env:
+          ACC0_PAT: ${{ secrets.ACC0_PAT }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          set -e
+          case "$TARGET_REPO" in
+            Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
+            *) TOKEN="$ACC6_PAT" ;;
+          esac
+          if [ -z "$TOKEN" ]; then
+            echo "::error::No token wired for $TARGET_REPO"
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          echo "::add-mask::$AUTH_HEADER"
+          echo "auth_header=$AUTH_HEADER" >> "$GITHUB_OUTPUT"
+          mkdir -p /tmp/agent-repo
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
+            "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+          git -C /tmp/agent-repo config user.email "agy-bot@claud-cloud.local"
+          git -C /tmp/agent-repo config user.name "AGY Bot"
+          echo "branch=$(git -C /tmp/agent-repo symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore this account's own AGY identity
+        env:
+          T0: ${{ secrets.AGW_TOKEN_ACC0 }}
+          T1: ${{ secrets.AGW_TOKEN_ACC1 }}
+          T2: ${{ secrets.AGW_TOKEN_ACC2 }}
+          T3: ${{ secrets.AGW_TOKEN_ACC3 }}
+          T4: ${{ secrets.AGW_TOKEN_ACC4 }}
+          T5: ${{ secrets.AGW_TOKEN_ACC5 }}
+          T7: ${{ secrets.AGW_TOKEN_ACC7 }}
+          T8: ${{ secrets.AGW_TOKEN_ACC8 }}
+        run: |
+          set -e
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          case "$ACCOUNT" in
+            0) TOKEN_B64="$T0" ;;
+            1) TOKEN_B64="$T1" ;;
+            2) TOKEN_B64="$T2" ;;
+            3) TOKEN_B64="$T3" ;;
+            4) TOKEN_B64="$T4" ;;
+            5) TOKEN_B64="$T5" ;;
+            7) TOKEN_B64="$T7" ;;
+            8) TOKEN_B64="$T8" ;;
+            *) echo "::error::account=$ACCOUNT has no wired identity (6 and 9 are never leads)"; exit 1 ;;
+          esac
+          echo "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+
+      - name: Build the lead-planning prompt
+        id: prompt
+        env:
+          PACKAGE_GOAL: ${{ inputs.package_goal }}
+        run: |
+          sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
+          SAFE_GOAL=$(printf '%s' "$PACKAGE_GOAL" | sanitize)
+          {
+            printf '%s\n' "You are agw-ACC${ACCOUNT}-w01, the LEAD of account ${ACCOUNT} on this fleet. This is a PLANNING request only -- do not write, edit, commit or dispatch anything yourself."
+            printf '\nYOUR PACKAGE (the scope your team owns):\n%s\n' "$SAFE_GOAL"
+            printf '\nDo this, in order:\n'
+            printf '%s\n' '1. Read Team/org.json in this checked-out repo. Find the "members" entries whose "account" is your own account number and whose "role" is NOT "lead" -- those are your 10 subordinates (w02..w11). Note each one'"'"'s id, title, and guild.'
+            printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block for what is already done or in progress, so you do not propose duplicate work.'
+            printf '%s\n' '3. Break YOUR PACKAGE into concrete tasks, one per subordinate whose title/guild is a real fit. You do not have to use all 10 -- skip a subordinate only if your package genuinely has no relevant work for their guild, but prefer using all 10 when the work naturally divides that way. Never invent a member_id, never assign two tasks to the same member_id.'
+            printf '\n%s\n' '4. Output your ENTIRE response as exactly two parts, nothing else:'
+            printf '%s\n' '   a) A short Persian paragraph (2-4 sentences) summarizing your plan.'
+            printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape:'
+            printf '%s\n' "{\"kind\":\"tbs_lead_task_list\",\"account\":${ACCOUNT},\"tasks\":[{\"member_id\":\"<org.json id>\",\"title\":\"<short task title>\",\"task\":\"<the exact, complete instruction this one subordinate should carry out>\"}]}"
+            printf '%s\n' 'Do not include a trailing @agy/@agy-plan marker -- this is a proposal, not a new request.'
+          } > /tmp/plan_prompt.txt
+
+      - name: Run AGY in lead-planning mode
+        run: |
+          set +e
+          cd /tmp/agent-repo
+          PROMPT=$(cat /tmp/plan_prompt.txt)
+          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          echo "$OUTPUT" > /tmp/lead_plan_output.txt
+          echo "Lead plan output lines: $(wc -l < /tmp/lead_plan_output.txt)"
+
+      - name: Parse the lead's task list
+        id: parse
+        run: |
+          set -e
+          python3 - <<'PYEOF'
+          import json, os, re, sys
+          account = os.environ['ACCOUNT']
+          text = open('/tmp/lead_plan_output.txt', encoding='utf-8').read()
+          blocks = re.findall(r'```json\s*(.*?)```', text, re.DOTALL)
+          plan = None
+          for b in blocks:
+              try:
+                  obj = json.loads(b)
+              except Exception:
+                  continue
+              if obj.get('kind') == 'tbs_lead_task_list':
+                  plan = obj
+          if plan is None:
+              print('NO_LEAD_PLAN_FOUND', file=sys.stderr)
+              sys.exit(1)
+          tasks = plan.get('tasks', [])
+          os.makedirs('/tmp/subtasks', exist_ok=True)
+          for i, t in enumerate(tasks):
+              member = t.get('member_id') or 'unknown'
+              title = t.get('title', 'task')
+              body = t.get('task', '')
+              prompt = 'You are {0}, working under account {1}\'s lead. TASK: {2}\n{3}'.format(member, account, title, body)
+              with open('/tmp/subtasks/{0}.txt'.format(i), 'w', encoding='utf-8') as f:
+                  f.write(prompt)
+              with open('/tmp/subtasks/{0}.meta'.format(i), 'w', encoding='utf-8') as f:
+                  f.write(title + '\t' + member)
+          with open('/tmp/subtask_count.txt', 'w') as f:
+              f.write(str(len(tasks)))
+          print('{0} subordinate task(s) parsed'.format(len(tasks)))
+          PYEOF
+          echo "count=$(cat /tmp/subtask_count.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: If parsing failed, report and stop here (do not leave the issue silent)
+        if: failure()
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+            --body "Account ${ACCOUNT} lead: پروپوزال زیرمجموعه پارس نشد. متوقف شد." || true
+
+      - name: Dispatch the 10 subordinates, 5 seconds apart
+        id: dispatch
+        run: |
+          set -e
+          COUNT=$(cat /tmp/subtask_count.txt)
+          REPORT_DIR="acc${ACCOUNT}"
+          for i in $(seq 0 $((COUNT - 1))); do
+            PROMPT=$(cat "/tmp/subtasks/${i}.txt")
+            META=$(cat "/tmp/subtasks/${i}.meta")
+            TITLE="${META%%$'\t'*}"
+            MEMBER="${META##*$'\t'}"
+            TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
+            echo "Dispatching $((i + 1))/$COUNT for account ${ACCOUNT}: $TITLE ($MEMBER) tag=$TAG"
+            gh workflow run agw-worker.yml \
+              --repo "${{ github.repository }}" \
+              --field "prompt=$PROMPT" \
+              --field "target_repo=$TARGET_REPO" \
+              --field "target_branch=" \
+              --field "acc_index=${ACCOUNT}" \
+              --field "report_dir=$REPORT_DIR" \
+              --field "callback_id=$TAG"
+            echo "$TAG" >> /tmp/expected_tags.txt
+            if [ "$i" -lt "$((COUNT - 1))" ]; then
+              sleep 5
+            fi
+          done
+          echo "expected=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Poll target_repo for all subordinate reports (git pull, not the API -- cheap and reuses the same clone)
+        id: poll
+        env:
+          AUTH_HEADER: ${{ steps.checkout_target.outputs.auth_header }}
+          BRANCH: ${{ steps.checkout_target.outputs.branch }}
+        run: |
+          set +e
+          EXPECTED="${{ steps.dispatch.outputs.expected }}"
+          if [ -z "$EXPECTED" ] || [ "$EXPECTED" = "0" ]; then
+            echo "found=0" >> "$GITHUB_OUTPUT"
+            echo "No subordinates were dispatched -- nothing to poll for."
+            exit 0
+          fi
+          DEADLINE=$(( $(date +%s) + 40*60 ))
+          FOUND=0
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+            cd /tmp/agent-repo
+            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
+            FOUND=0
+            : > /tmp/found_reports.txt
+            while read -r TAG; do
+              F="Reports/agy/acc${ACCOUNT}/${TAG}.txt"
+              if [ -f "$F" ]; then
+                FOUND=$((FOUND + 1))
+                echo "$F" >> /tmp/found_reports.txt
+              fi
+            done < /tmp/expected_tags.txt
+            echo "Poll: ${FOUND}/${EXPECTED} subordinate reports present."
+            if [ "$FOUND" -ge "$EXPECTED" ]; then
+              break
+            fi
+            sleep 30
+          done
+          echo "found=$FOUND" >> "$GITHUB_OUTPUT"
+
+      - name: Build and run the account-summary prompt
+        run: |
+          set +e
+          cd /tmp/agent-repo
+          {
+            printf '%s\n' "You are agw-ACC${ACCOUNT}-w01, the lead of account ${ACCOUNT}. Your ${{ steps.poll.outputs.found }} subordinate(s) (of ${{ steps.dispatch.outputs.expected }} dispatched) reported back. Below are their raw reports."
+            printf '\n'
+            if [ -s /tmp/found_reports.txt ]; then
+              while read -r F; do
+                printf -- '--- %s ---\n' "$F"
+                cat "$F" 2>/dev/null
+                printf '\n'
+              done < /tmp/found_reports.txt
+            else
+              printf '(no subordinate reports arrived within the poll window)\n'
+            fi
+            printf '\nWrite ONE comprehensive Persian summary (a few short paragraphs) of what your account accomplished, and note anything that failed or is still missing. This is your final report -- plain text, no JSON needed.\n'
+          } > /tmp/summary_prompt.txt
+          PROMPT=$(cat /tmp/summary_prompt.txt)
+          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          echo "$OUTPUT" > /tmp/account_summary.txt
+
+      - name: Commit the account-level team report
+        id: commit_summary
+        env:
+          AUTH_HEADER: ${{ steps.checkout_target.outputs.auth_header }}
+          BRANCH: ${{ steps.checkout_target.outputs.branch }}
+        run: |
+          set -e
+          cd /tmp/agent-repo
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
+          mkdir -p Reports/agy/team_reports
+          cp /tmp/account_summary.txt "Reports/agy/team_reports/acc${ACCOUNT}.md"
+          git add "Reports/agy/team_reports/acc${ACCOUNT}.md"
+          if ! git diff --cached --quiet; then
+            git commit -m "agy: account ${ACCOUNT} team report (${{ steps.poll.outputs.found }}/${{ steps.dispatch.outputs.expected }} subordinates reported)"
+            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
+          fi
+
+      - name: Report to the issue
+        if: env.ISSUE_NUMBER != ''
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+            --body "Account ${ACCOUNT} lead: ${{ steps.poll.outputs.found }}/${{ steps.dispatch.outputs.expected }} زیردست گزارش دادند. خلاصه در \`Reports/agy/team_reports/acc${ACCOUNT}.md\` ثبت شد."
+
+      - name: If I am the last account to finish, trigger the final ACC6 summary (race-safe via git push)
+        env:
+          AUTH_HEADER: ${{ steps.checkout_target.outputs.auth_header }}
+          BRANCH: ${{ steps.checkout_target.outputs.branch }}
+          ALL_ACCOUNTS: ${{ inputs.all_accounts }}
+        run: |
+          set +e
+          cd /tmp/agent-repo
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
+          ALL_DONE=$(python3 - <<'PYEOF'
+          import json, os
+          accounts = json.loads(os.environ['ALL_ACCOUNTS'])
+          missing = [a for a in accounts if not os.path.isfile('Reports/agy/team_reports/acc{}.md'.format(a))]
+          print('yes' if not missing else 'no:' + ','.join(str(m) for m in missing))
+          PYEOF
+          )
+          echo "All-accounts check: $ALL_DONE"
+          if [ "$ALL_DONE" != "yes" ]; then
+            echo "Not every account has reported yet -- not the last lead, nothing more to do."
+            exit 0
+          fi
+
+          # Race guard: only the lead whose push of this marker actually
+          # succeeds is "the last one" -- a second lead finishing in the
+          # same window will find the marker already there and its own
+          # push will fail (non-fast-forward), so it skips cleanly. This
+          # is the same "git is the only channel" pattern the rest of this
+          # fleet relies on, not a new mechanism.
+          mkdir -p Reports/agy/team_reports
+          MARKER="Reports/agy/team_reports/.final_dispatched_${ISSUE_NUMBER:-noissue}"
+          if [ -f "$MARKER" ]; then
+            echo "Marker already exists -- another lead already triggered the final report."
+            exit 0
+          fi
+          echo "account ${ACCOUNT} triggered this at $(date -u +%FT%TZ)" > "$MARKER"
+          git add "$MARKER"
+          git commit -m "agy: final-report trigger marker (issue ${ISSUE_NUMBER:-unknown})"
+          if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
+            echo "Won the race -- dispatching agy-final-report.yml"
+            gh workflow run agy-final-report.yml \
+              --repo "${{ github.repository }}" \
+              --field "target_repo=$TARGET_REPO" \
+              --field "issue_number=${ISSUE_NUMBER}" \
+              --field "all_accounts=$ALL_ACCOUNTS"
+          else
+            echo "Push of the marker failed (another lead won the race) -- not dispatching."
+          fi

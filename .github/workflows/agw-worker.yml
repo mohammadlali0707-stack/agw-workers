@@ -32,6 +32,11 @@ on:
         required: false
         default: ''
         type: string
+      report_dir:
+        description: 'Optional subfolder under Reports/agy/ in target_repo to nest this run''s output under (e.g. "acc3" for an account-scoped report). Empty = flat Reports/agy/<callback_id>.txt, the original layout.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -375,9 +380,15 @@ jobs:
           # using the same credential already used for the push above.
           RUN_TAG="${{ inputs.callback_id }}"
           if [ -z "$RUN_TAG" ]; then RUN_TAG="${{ github.run_id }}"; fi
-          mkdir -p Reports/agy
-          cp /tmp/agy_output.txt "Reports/agy/${RUN_TAG}.txt"
-          git add "Reports/agy/${RUN_TAG}.txt"
+          REPORT_DIR="${{ inputs.report_dir }}"
+          if [ -n "$REPORT_DIR" ]; then
+            OUT_PATH="Reports/agy/${REPORT_DIR}/${RUN_TAG}.txt"
+          else
+            OUT_PATH="Reports/agy/${RUN_TAG}.txt"
+          fi
+          mkdir -p "$(dirname "$OUT_PATH")"
+          cp /tmp/agy_output.txt "$OUT_PATH"
+          git add "$OUT_PATH"
           if ! git diff --cached --quiet; then
             git commit -m "agy: record raw output for ${RUN_TAG}"
             git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
@@ -404,7 +415,9 @@ jobs:
           if [ "${{ steps.checkout_target.outputs.has_repo }}" = "true" ]; then
             RUN_TAG="${{ inputs.callback_id }}"
             if [ -z "$RUN_TAG" ]; then RUN_TAG="${{ github.run_id }}"; fi
-            echo "- **Full output:** committed to \`Reports/agy/${RUN_TAG}.txt\` in \`${{ inputs.target_repo }}\` (not printed here -- see that repo's own access controls)" >> $GITHUB_STEP_SUMMARY
+            REPORT_DIR="${{ inputs.report_dir }}"
+            if [ -n "$REPORT_DIR" ]; then OUT_PATH="Reports/agy/${REPORT_DIR}/${RUN_TAG}.txt"; else OUT_PATH="Reports/agy/${RUN_TAG}.txt"; fi
+            echo "- **Full output:** committed to \`${OUT_PATH}\` in \`${{ inputs.target_repo }}\` (not printed here -- see that repo's own access controls)" >> $GITHUB_STEP_SUMMARY
           else
             echo "- **Full output:** no target repo was given, so it is only in the fallback artifact above" >> $GITHUB_STEP_SUMMARY
           fi

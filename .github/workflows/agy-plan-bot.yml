@@ -1,14 +1,16 @@
-name: AGY Project Planning Bot (propose a task breakdown, do not dispatch)
+name: AGY Project Planning Bot (propose an account-level breakdown, do not dispatch)
 
 # Triggered by a message ending in "@agy-plan" (distinct from the existing
 # "@agy" single-task marker in agy-issue-bot.yml, so this does not collide
 # with that actively-evolving pipeline). Reads the target project's own
-# Team/org.json roster + Team/MAP.md state, then asks agy to PROPOSE a
-# task breakdown -- one task per org.json member_id, never dispatched from
-# here. Posted as a comment containing a fenced ```json block a human (or
-# the dashboard UI) reviews before anything runs. See agy-plan-dispatch.yml
-# for the separate workflow that actually dispatches, gated on an explicit
-# approval comment.
+# Team/org.json roster + Team/MAP.md state, then asks agy to PROPOSE an
+# ACCOUNT-LEVEL breakdown -- up to 8 packages, one per relevant account,
+# each a self-contained scope for that account's own lead to break down
+# further among its 10 subordinates (see agy-lead-plan.yml), never
+# dispatched from here. Posted as a comment containing a fenced ```json
+# block a human (or the dashboard UI) reviews before anything runs. See
+# agy-plan-dispatch.yml for the workflow that dispatches one lead per
+# account on approval, and agy-lead-plan.yml for what each lead then does.
 #
 # Same trigger contract as agy-issue-bot.yml's own fix earlier today:
 # whitespace/case-tolerant trailing-marker check in a real bash job (not a
@@ -169,11 +171,11 @@ jobs:
             printf '%s\n' '1. Read Team/org.json in this checked-out repo (if present) for the full member roster: each entry has id, account (ACC0-ACC8; ACC6 and ACC9 never appear here), role, guild, domain_is, title. If Team/org.json does not exist in this repo, say so plainly in your prose summary and propose a flat task list instead (no member_id/account fields) rather than inventing IDs.'
             printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block (top of file) for what is already done, blocked, or in progress, so you do not propose duplicate or already-finished work.'
             printf '%s\n' '3. Read the repo'"'"'s README and the most recent entries of Team/CHANGELOG.md (if present) for scope and recent history.'
-            printf '%s\n' '4. Break the GOAL into concrete, non-overlapping tasks. If Team/org.json exists, assign each task to exactly one existing member_id whose title/guild is the best real fit -- never invent an id, never assign the same member_id to two tasks in this one proposal, and do not exceed the number of members that actually exist per account.'
+            printf '%s\n' '4. Break the GOAL into up to 8 ACCOUNT-LEVEL packages -- NOT per-member tasks. Team/org.json has an "accounts" map with entries ACC0..ACC8 (ACC6 and ACC9 never appear as work targets); each has a "lead" (its w01 member) plus a primary/secondary domain. For each account whose domain is actually relevant to this GOAL, write ONE package: a self-contained scope of work for that account'"'"'s TEAM (its lead plus 10 subordinates) to plan and execute on its own -- not individual task instructions. Skip an account entirely if this GOAL genuinely has no work for its domain; do not force all 8 to have a package.'
             printf '\n%s\n' '5. Output your ENTIRE response as exactly two parts, nothing else:'
             printf '%s\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
             printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
-            printf '%s\n' '{"kind":"tbs_task_proposal","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","tasks":[{"member_id":"<org.json id or empty string if no org.json>","account":<int 0-8, never 6 or 9, or -1 if no org.json>,"title":"<short task title>","task":"<the exact, complete instruction this one member should carry out>"}]}'
+            printf '%s\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
             printf '%s\n' 'Do not include a trailing @agy or @agy-plan marker anywhere in your response -- this response is a proposal, not a new request.'
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
