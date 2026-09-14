@@ -327,52 +327,54 @@ jobs:
           cd /tmp/agent-repo
           BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          MAX_RETRIES=3
-          total_attempts=$((MAX_RETRIES + 1))
-          attempt=1
-          success=false
 
-          while [ "$attempt" -le "$total_attempts" ]; do
-            if [ "$attempt" -eq 1 ]; then
-              echo "Push attempt 1 of $total_attempts (initial push)..."
-            else
-              echo "Push attempt $attempt of $total_attempts (retry $((attempt - 1)) of $MAX_RETRIES)..."
-            fi
-
-            if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
-              echo "Successfully pushed changes to origin/$BRANCH on attempt $attempt."
-              success=true
-              break
-            fi
-
-            echo "Push attempt $attempt failed." >&2
-
-            if [ "$attempt" -lt "$total_attempts" ]; then
-              retry_num=$attempt
-              echo "Attempting retry $retry_num of $MAX_RETRIES: fetching origin/$BRANCH fresh and rebasing..."
-              if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" fetch origin "$BRANCH"; then
-                echo "Error: Failed to fetch origin/$BRANCH on retry $retry_num." >&2
+          # Shared by BOTH pushes below -- the agent's own commits (if any)
+          # and the raw-output commit. Needed for real once agy-lead-plan.yml
+          # started dispatching up to 10 of these in a tight stagger: several
+          # workers finishing near-simultaneously all push to the SAME branch,
+          # and a single un-retried push loses the race and the report with
+          # it. Measured live 2026-09-14 (run 34894884199, leadtest-12-acc1-w05):
+          # the FIRST push here already retried and succeeded, but the SECOND
+          # (the raw-output commit) had no retry loop at all and died on its
+          # first "fetch first" rejection -- a real report silently lost, not
+          # a hypothetical race.
+          push_with_retry() {
+            local max_retries=3
+            local total_attempts=$((max_retries + 1))
+            local attempt=1
+            while [ "$attempt" -le "$total_attempts" ]; do
+              if [ "$attempt" -eq 1 ]; then
+                echo "Push attempt 1 of $total_attempts (initial push)..."
+              else
+                echo "Push attempt $attempt of $total_attempts (retry $((attempt - 1)) of $max_retries)..."
+              fi
+              if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
+                echo "Successfully pushed to origin/$BRANCH on attempt $attempt."
+                return 0
+              fi
+              echo "Push attempt $attempt failed." >&2
+              if [ "$attempt" -lt "$total_attempts" ]; then
+                echo "Retry $attempt of $max_retries: fetching origin/$BRANCH fresh and rebasing..."
+                if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" fetch origin "$BRANCH"; then
+                  echo "Error: fetch failed on retry $attempt." >&2
+                  sleep 2
+                  attempt=$((attempt + 1))
+                  continue
+                fi
+                if ! git rebase "origin/$BRANCH"; then
+                  echo "Error: rebase failed (conflict) on retry $attempt. Aborting rebase." >&2
+                  git rebase --abort 2>/dev/null || true
+                  return 1
+                fi
                 sleep 2
-                attempt=$((attempt + 1))
-                continue
               fi
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
 
-              echo "Rebasing local commits onto origin/$BRANCH..."
-              if ! git rebase "origin/$BRANCH"; then
-                echo "Error: Rebase failed (e.g. conflict detected) on retry $retry_num. Aborting rebase." >&2
-                git rebase --abort 2>/dev/null || true
-                exit 1
-              fi
-
-              echo "Rebase onto origin/$BRANCH succeeded. Waiting before next push attempt..."
-              sleep 2
-            fi
-
-            attempt=$((attempt + 1))
-          done
-
-          if [ "$success" != "true" ]; then
-            echo "Error: Failed to push to origin/$BRANCH after $total_attempts attempts ($MAX_RETRIES retries)." >&2
+          if ! push_with_retry; then
+            echo "Error: Failed to push agent commits to origin/$BRANCH." >&2
             exit 1
           fi
 
@@ -391,7 +393,10 @@ jobs:
           git add "$OUT_PATH"
           if ! git diff --cached --quiet; then
             git commit -m "agy: record raw output for ${RUN_TAG}"
-            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
+            if ! push_with_retry; then
+              echo "Error: Failed to push raw-output commit to origin/$BRANCH." >&2
+              exit 1
+            fi
             echo "output_committed=true" >> "$GITHUB_ENV"
           fi
 
