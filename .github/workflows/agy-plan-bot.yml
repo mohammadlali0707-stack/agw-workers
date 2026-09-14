@@ -1,0 +1,201 @@
+name: AGY Project Planning Bot (propose a task breakdown, do not dispatch)
+
+# Triggered by a message ending in "@agy-plan" (distinct from the existing
+# "@agy" single-task marker in agy-issue-bot.yml, so this does not collide
+# with that actively-evolving pipeline). Reads the target project's own
+# Team/org.json roster + Team/MAP.md state, then asks agy to PROPOSE a
+# task breakdown -- one task per org.json member_id, never dispatched from
+# here. Posted as a comment containing a fenced ```json block a human (or
+# the dashboard UI) reviews before anything runs. See agy-plan-dispatch.yml
+# for the separate workflow that actually dispatches, gated on an explicit
+# approval comment.
+#
+# Same trigger contract as agy-issue-bot.yml's own fix earlier today:
+# whitespace/case-tolerant trailing-marker check in a real bash job (not a
+# GitHub Actions expression, which has no escape sequences), and
+# author_association OWNER/COLLABORATOR or login == Mohammadlali (the
+# dashboard chat's own account, which has no relationship to this repo).
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  actions: write
+  contents: read
+
+jobs:
+  check-marker:
+    runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      match: ${{ steps.check.outputs.match }}
+      project_tag: ${{ steps.check.outputs.project_tag }}
+    steps:
+      - name: Check for a trailing @agy-plan marker and extract the project tag
+        id: check
+        env:
+          BODY: ${{ github.event.issue.body || github.event.comment.body || '' }}
+          TITLE: ${{ github.event.issue.title || '' }}
+        run: |
+          TRIMMED="$(printf '%s\n%s' "$TITLE" "$BODY" | sed -e 's/[[:space:]]*$//')"
+          LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
+          case "$LOWER" in
+            *"@agy-plan")
+              echo "match=true" >> "$GITHUB_OUTPUT"
+              PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy-plan$' | awk '{print $1}')
+              echo "project_tag=${PROJECT:-ccp}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "match=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+  propose:
+    needs: [check-marker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >
+      (github.event_name == 'issues' &&
+        needs.check-marker.outputs.match == 'true' &&
+        (github.event.issue.author_association == 'OWNER' ||
+          github.event.issue.author_association == 'COLLABORATOR' ||
+          github.event.issue.user.login == 'Mohammadlali')
+      ) ||
+      (github.event_name == 'issue_comment' &&
+        needs.check-marker.outputs.match == 'true' &&
+        github.event.comment.user.type != 'Bot' &&
+        (github.event.comment.author_association == 'OWNER' ||
+          github.event.comment.author_association == 'COLLABORATOR' ||
+          github.event.comment.user.login == 'Mohammadlali')
+      )
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      PROJECT_TAG: ${{ needs.check-marker.outputs.project_tag }}
+    steps:
+      - name: Resolve the project tag to a target repo
+        id: resolve
+        run: |
+          case "$PROJECT_TAG" in
+            ccp) echo "target_repo=mohammadlali0707-stack/Claud-Cloud-Project" >> "$GITHUB_OUTPUT" ;;
+            cr) echo "target_repo=mohammadlali0707-stack/Control-Room" >> "$GITHUB_OUTPUT" ;;
+            coffeenet) echo "target_repo=mohammadlali0707-stack/AirboxVIP_Coffeenet" >> "$GITHUB_OUTPUT" ;;
+            status) echo "target_repo=mohammadlali0707-stack/status-dashboard" >> "$GITHUB_OUTPUT" ;;
+            *) echo "target_repo=mohammadlali0707-stack/Claud-Cloud-Project" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Ack on the issue
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "Project Manager: در حال آماده‌سازی پروپوزال برای **${{ steps.resolve.outputs.target_repo }}**..."
+
+      - name: Checkout target repo
+        env:
+          TARGET_REPO: ${{ steps.resolve.outputs.target_repo }}
+        run: |
+          set -e
+          if [ -z "$ACC6_PAT" ]; then
+            echo "::error::ACC6_PAT not set -- cannot check out $TARGET_REPO"
+            exit 1
+          fi
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          mkdir -p /tmp/agent-repo
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
+            "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+
+      - name: Install AGY CLI from HF Dataset
+        run: |
+          curl -L \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          sudo install -m 0755 "$CLI_BIN" /usr/local/bin/agy
+          agy --version 2>/dev/null || echo "agy ready"
+
+      - name: Restore this repo's own AGY identity (planning is read-only, no fallback needed)
+        run: |
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          echo "${{ secrets.AGW_TOKEN_ACC6 }}" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+
+      - name: Fetch the full issue thread for context (matters on a revision round)
+        id: thread
+        run: |
+          gh issue view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json title,body,comments \
+            --jq '"ISSUE: " + .title + "\n" + .body + "\n\n" + ([.comments[] | "--- COMMENT by " + .author.login + " ---\n" + .body] | join("\n\n"))' \
+            > /tmp/thread.txt || echo "(could not fetch thread)" > /tmp/thread.txt
+
+      - name: Build the planning prompt
+        id: prompt
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          TARGET_REPO: ${{ steps.resolve.outputs.target_repo }}
+        run: |
+          sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
+          SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
+          SAFE_BODY=$(printf '%s' "$ISSUE_BODY" | sanitize)
+          SAFE_COMMENT=$(printf '%s' "$COMMENT_BODY" | sanitize)
+          GOAL="$SAFE_BODY"
+          IS_REVISION=false
+          if [ -n "$SAFE_COMMENT" ]; then GOAL="$SAFE_COMMENT"; IS_REVISION=true; fi
+          {
+            printf '%s\n' 'You are the Project Manager AI for this fleet. This is a PLANNING request only.'
+            printf '%s\n' 'Do NOT write, edit, or commit any files. Do NOT perform any of the tasks yourself. Do NOT run any dispatch command. Only read and propose.'
+            if [ "$IS_REVISION" = "true" ]; then
+              printf '\n%s\n' 'This is a REVISION round. Below is the full conversation so far, including your own earlier proposal(s) and any @agy-plan-approved marker (ignore that marker, it is not addressed to you). Read it, understand what was already proposed and why the requester wants it changed (their newest message is the actual revision instruction), then produce a NEW, complete, corrected proposal -- not a diff or a partial patch to the old one.'
+              printf '\n--- CONVERSATION SO FAR ---\n'
+              cat /tmp/thread.txt | sanitize
+              printf '\n--- END CONVERSATION ---\n'
+            fi
+            printf '\nGOAL / LATEST INSTRUCTION (may include a leading project tag and a trailing marker -- ignore both, they are routing metadata, not part of the goal):\n'
+            printf '%s\n' "$GOAL"
+            printf '\nDo this, in order:\n'
+            printf '%s\n' '1. Read Team/org.json in this checked-out repo (if present) for the full member roster: each entry has id, account (ACC0-ACC8; ACC6 and ACC9 never appear here), role, guild, domain_is, title. If Team/org.json does not exist in this repo, say so plainly in your prose summary and propose a flat task list instead (no member_id/account fields) rather than inventing IDs.'
+            printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block (top of file) for what is already done, blocked, or in progress, so you do not propose duplicate or already-finished work.'
+            printf '%s\n' '3. Read the repo'"'"'s README and the most recent entries of Team/CHANGELOG.md (if present) for scope and recent history.'
+            printf '%s\n' '4. Break the GOAL into concrete, non-overlapping tasks. If Team/org.json exists, assign each task to exactly one existing member_id whose title/guild is the best real fit -- never invent an id, never assign the same member_id to two tasks in this one proposal, and do not exceed the number of members that actually exist per account.'
+            printf '\n%s\n' '5. Output your ENTIRE response as exactly two parts, nothing else:'
+            printf '%s\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
+            printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
+            printf '%s\n' '{"kind":"tbs_task_proposal","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","tasks":[{"member_id":"<org.json id or empty string if no org.json>","account":<int 0-8, never 6 or 9, or -1 if no org.json>,"title":"<short task title>","task":"<the exact, complete instruction this one member should carry out>"}]}'
+            printf '%s\n' 'Do not include a trailing @agy or @agy-plan marker anywhere in your response -- this response is a proposal, not a new request.'
+          } > /tmp/prompt.txt
+          echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Run AGY in planning mode
+        id: run_agy
+        run: |
+          set +e
+          cd /tmp/agent-repo 2>/dev/null || true
+          PROMPT=$(cat /tmp/prompt.txt)
+          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          echo "$OUTPUT" > /tmp/agy_output.txt
+          echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
+
+      - name: Post the proposal as a comment
+        run: |
+          if [ ! -s /tmp/agy_output.txt ]; then
+            gh issue comment "${{ github.event.issue.number }}" \
+              --repo "${{ github.repository }}" \
+              --body "Project Manager: پروپوزال ساخته نشد (خروجی خالی). دوباره تلاش کنید."
+            exit 0
+          fi
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/agy_output.txt

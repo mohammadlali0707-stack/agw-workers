@@ -1,0 +1,183 @@
+name: AGY Project Planning -- Batch Dispatch on Approval
+
+# Triggered by a comment ending in "@agy-plan-approved" on an issue that
+# carries a tbs_task_proposal (posted by agy-plan-bot.yml). Parses the
+# LATEST such proposal from the issue's own comment history, groups its
+# tasks by account (0-8, never 6 or 9 -- ACC6 hosts this repo/Control-Room
+# and is not a task-execution identity, ACC9 is retired), and for each
+# account that has tasks, dispatches agw-worker.yml once per task with a
+# 5-second gap between consecutive dispatches WITHIN that account (so the
+# same Antigravity identity's calls don't burst and hit its rate limit).
+# Different accounts dispatch in parallel with each other (one matrix job
+# per account) since they are independent Antigravity identities/quotas.
+#
+# Same trigger contract as agy-issue-bot.yml/agy-plan-bot.yml: a real bash
+# check (GitHub Actions expressions have no escape sequences) and
+# author_association OWNER/COLLABORATOR or login == Mohammadlali.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  actions: write
+  contents: read
+
+jobs:
+  check-marker:
+    runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      match: ${{ steps.check.outputs.match }}
+    steps:
+      - name: Check for a trailing @agy-plan-approved marker
+        id: check
+        env:
+          BODY: ${{ github.event.comment.body || '' }}
+        run: |
+          TRIMMED="$(printf '%s' "$BODY" | sed -e 's/[[:space:]]*$//')"
+          LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
+          case "$LOWER" in
+            *"@agy-plan-approved") echo "match=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "match=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  parse-proposal:
+    needs: [check-marker]
+    runs-on: ubuntu-latest
+    if: >
+      needs.check-marker.outputs.match == 'true' &&
+      github.event.comment.user.type != 'Bot' &&
+      (github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'COLLABORATOR' ||
+        github.event.comment.user.login == 'Mohammadlali')
+    outputs:
+      skip: ${{ steps.parse.outputs.skip }}
+      accounts: ${{ steps.parse.outputs.accounts }}
+      proposal: ${{ steps.parse.outputs.proposal }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Fetch comments, find the latest proposal, guard against a duplicate approval
+        id: parse
+        run: |
+          set -e
+          gh issue view "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --json comments --jq '.comments[].body' > /tmp/all_comments.txt
+
+          if grep -q '^Project Manager: 🚀 Batch dispatch started' /tmp/all_comments.txt; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already dispatched once on this issue -- refusing to dispatch again."
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          # Extract every fenced ```json block, keep the LAST one that
+          # parses as a tbs_task_proposal (the most recent revision wins).
+          python3 - <<'PYEOF'
+          import json, re, sys
+          text = open('/tmp/all_comments.txt', encoding='utf-8').read()
+          blocks = re.findall(r'```json\s*(.*?)```', text, re.DOTALL)
+          proposal = None
+          for b in blocks:
+              try:
+                  obj = json.loads(b)
+              except Exception:
+                  continue
+              if obj.get('kind') == 'tbs_task_proposal':
+                  proposal = obj
+          if proposal is None:
+              print('NO_PROPOSAL_FOUND', file=sys.stderr)
+              sys.exit(1)
+          accounts = sorted({t.get('account') for t in proposal.get('tasks', [])
+                              if isinstance(t.get('account'), int) and t['account'] not in (6, 9) and t['account'] >= 0})
+          with open('/tmp/proposal.json', 'w', encoding='utf-8') as f:
+              json.dump(proposal, f)
+          with open('/tmp/accounts.json', 'w', encoding='utf-8') as f:
+              json.dump(accounts, f)
+          print('parsed', len(proposal.get('tasks', [])), 'tasks across', len(accounts), 'accounts')
+          PYEOF
+
+          {
+            echo "proposal<<PROPOSALEOF"
+            cat /tmp/proposal.json
+            echo ""
+            echo "PROPOSALEOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "accounts=$(cat /tmp/accounts.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Post start marker (also the duplicate-approval guard for next time)
+        if: steps.parse.outputs.skip != 'true'
+        run: |
+          COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/proposal.json'))['tasks']))")
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "Project Manager: 🚀 Batch dispatch started -- ${COUNT} task(s) across ${{ steps.parse.outputs.accounts }}."
+
+  dispatch:
+    needs: [parse-proposal]
+    if: >
+      needs.parse-proposal.result == 'success' &&
+      needs.parse-proposal.outputs.skip != 'true' &&
+      needs.parse-proposal.outputs.accounts != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        account: ${{ fromJson(needs.parse-proposal.outputs.accounts) }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PROPOSAL_JSON: ${{ needs.parse-proposal.outputs.proposal }}
+    steps:
+      - name: Dispatch this account's tasks, 5s apart
+        run: |
+          set -e
+          echo "$PROPOSAL_JSON" > /tmp/proposal.json
+
+          # Split this account's tasks into one file per task (prompt text
+          # written directly by Python, never round-tripped through shell
+          # quoting -- task text is free-form human/AI prose and may
+          # contain quotes, backticks or newlines that would otherwise
+          # break a $(...)-embedded json.loads('$VAR') one-liner).
+          python3 - <<PYEOF
+          import json, os
+          p = json.load(open('/tmp/proposal.json'))
+          mine = [t for t in p['tasks'] if t.get('account') == ${{ matrix.account }}]
+          os.makedirs('/tmp/tasks', exist_ok=True)
+          for i, t in enumerate(mine):
+              member = t.get('member_id') or 'a worker on this fleet'
+              title = t.get('title', 'task')
+              body = t.get('task', '')
+              prompt = 'You are {0}. TASK: {1}\n{2}'.format(member, title, body)
+              with open('/tmp/tasks/{0}.txt'.format(i), 'w', encoding='utf-8') as f:
+                  f.write(prompt)
+              with open('/tmp/tasks/{0}.meta'.format(i), 'w', encoding='utf-8') as f:
+                  f.write(title + '\t' + member)
+          with open('/tmp/target_repo.txt', 'w', encoding='utf-8') as f:
+              f.write(p['target_repo'])
+          print('{0} task(s) for account ${{ matrix.account }}'.format(len(mine)))
+          PYEOF
+
+          TARGET_REPO=$(cat /tmp/target_repo.txt)
+          COUNT=$(ls /tmp/tasks/*.txt 2>/dev/null | wc -l)
+          for i in $(seq 0 $((COUNT - 1))); do
+            PROMPT=$(cat "/tmp/tasks/${i}.txt")
+            META=$(cat "/tmp/tasks/${i}.meta")
+            TITLE="${META%%$'\t'*}"
+            MEMBER="${META##*$'\t'}"
+            echo "Dispatching task $((i + 1))/$COUNT for account ${{ matrix.account }}: $TITLE ($MEMBER)"
+            gh workflow run agw-worker.yml \
+              --repo "${{ github.repository }}" \
+              --field "prompt=$PROMPT" \
+              --field "target_repo=$TARGET_REPO" \
+              --field "target_branch=" \
+              --field "acc_index=${{ matrix.account }}" \
+              --field "issue_number=${{ github.event.issue.number }}" \
+              --field "callback_id=plan-${{ github.event.issue.number }}-acc${{ matrix.account }}-$i"
+            if [ "$i" -lt "$((COUNT - 1))" ]; then
+              sleep 5
+            fi
+          done
