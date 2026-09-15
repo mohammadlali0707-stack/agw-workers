@@ -1,0 +1,33 @@
+name: One-off -- fetch account 1's failed agy-lead-plan.yml run log
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+    steps:
+      - name: Get jobs for the failed run
+        run: |
+          set -euo pipefail
+          curl -sS -H "Authorization: token $ACC1_PAT" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/momonakikugava-pixel/agw-workers/actions/runs/34932866381/jobs" \
+            > /tmp/jobs.json
+          cat /tmp/jobs.json | jq -r '.jobs[] | "\(.id) \(.name) \(.status) \(.conclusion)"'
+          JOB_ID=$(jq -r '.jobs[0].id' /tmp/jobs.json)
+          echo "JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
+
+      - name: Fetch that job's raw log
+        run: |
+          set -euo pipefail
+          curl -sSL -H "Authorization: token $ACC1_PAT" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/momonakikugava-pixel/agw-workers/actions/jobs/${JOB_ID}/logs" \
+            -o /tmp/job.log
+          echo "----- last 300 lines -----"
+          tail -n 300 /tmp/job.log
