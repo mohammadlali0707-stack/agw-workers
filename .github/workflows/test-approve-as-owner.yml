@@ -13,12 +13,12 @@ jobs:
     env:
       ACC6_PAT: ${{ secrets.ACC6_PAT }}
     steps:
-      - name: Post @agy-plan-approved on issue #13 as mohammadlali0707-stack (real OWNER)
+      - name: Post @agy-plan-approved on issue #14 as mohammadlali0707-stack (real OWNER)
         run: |
           CODE=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST \
             -H "Authorization: token $ACC6_PAT" -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/mohammadlali0707-stack/agw-workers/issues/13/comments" \
-            -d '{"body":"تایید شد -- پروپوزال ۶ بسته‌ای برای پیش‌بردن CCP روی Ren'"'"'Py قابل قبول است. @agy-plan-approved"}')
+            "https://api.github.com/repos/mohammadlali0707-stack/agw-workers/issues/14/comments" \
+            -d '{"body":"تایید شد -- پروپوزال ۶ بسته‌ای برای پیش‌بردن CCP روی Ren'"'"'Py قابل قبول است (اجرای تمیز پس از فیکس دیسپچ cross-account). @agy-plan-approved"}')
           echo "HTTP $CODE"
           cat /tmp/resp.json
           if [ "$CODE" != "201" ]; then
