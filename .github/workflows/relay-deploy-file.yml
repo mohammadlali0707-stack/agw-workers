@@ -10,6 +10,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
       ACC1_PAT: ${{ secrets.ACC1_PAT }}
       ACC2_PAT: ${{ secrets.ACC2_PAT }}
       ACC3_PAT: ${{ secrets.ACC3_PAT }}
@@ -20,7 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy shared files to the other 7 accounts' agw-workers
+      # Account 0 (Mohammadlali) added 2026-09-15: previously excluded here
+      # on the assumption it had no separate Actions-capable copy of this
+      # repo -- wrong, disproved live by a relay-read-file.yml diagnostic
+      # (Mohammadlali/agw-workers exists, is reachable, and has its own
+      # .github/workflows/ with a real agw-worker.yml already in it, just
+      # never kept in sync by this relay). agy-lead-plan.yml added to the
+      # list: agy-plan-dispatch.yml now cross-dispatches each account's
+      # lead to run inside that account's own repo (see its own comment for
+      # why), which requires this file to exist there first.
+      - name: Deploy shared files to the other 8 accounts' agw-workers
         run: |
           set -euo pipefail
           FILES=(
@@ -28,10 +38,12 @@ jobs:
             ".github/workflows/agw-claude.yml"
             ".github/workflows/agy-issue-bot.yml"
             ".github/workflows/agw-worker.yml"
+            ".github/workflows/agy-lead-plan.yml"
             "media/README.md"
             "README.md"
           )
           declare -A OWNERS=(
+            [0]="Mohammadlali"
             [1]="momonakikugava-pixel"
             [2]="lali94m-max"
             [3]="ngocgminh5-debug"
@@ -40,7 +52,7 @@ jobs:
             [7]="mohammad97okk"
             [8]="moradzahra85-png"
           )
-          for IDX in 1 2 3 4 5 7 8; do
+          for IDX in 0 1 2 3 4 5 7 8; do
             OWNER="${OWNERS[$IDX]}"
             PAT_NAME="ACC${IDX}_PAT"
             TOKEN="${!PAT_NAME}"

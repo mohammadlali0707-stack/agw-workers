@@ -131,11 +131,78 @@ jobs:
       matrix:
         account: ${{ fromJson(needs.parse-proposal.outputs.accounts) }}
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PROPOSAL_JSON: ${{ needs.parse-proposal.outputs.proposal }}
       ALL_ACCOUNTS: ${{ needs.parse-proposal.outputs.accounts }}
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+      AGW_TOKEN_ACC0: ${{ secrets.AGW_TOKEN_ACC0 }}
+      AGW_TOKEN_ACC1: ${{ secrets.AGW_TOKEN_ACC1 }}
+      AGW_TOKEN_ACC2: ${{ secrets.AGW_TOKEN_ACC2 }}
+      AGW_TOKEN_ACC3: ${{ secrets.AGW_TOKEN_ACC3 }}
+      AGW_TOKEN_ACC4: ${{ secrets.AGW_TOKEN_ACC4 }}
+      AGW_TOKEN_ACC5: ${{ secrets.AGW_TOKEN_ACC5 }}
+      AGW_TOKEN_ACC7: ${{ secrets.AGW_TOKEN_ACC7 }}
+      AGW_TOKEN_ACC8: ${{ secrets.AGW_TOKEN_ACC8 }}
     steps:
-      - name: Dispatch this account's lead
+      # CROSS-ACCOUNT DISPATCH, fixed 2026-09-15: a lead for account N now
+      # runs INSIDE that account's own copy of agw-workers (dispatched with
+      # that account's own ACC{N}_PAT, the same relay pattern relay-open-
+      # issue.yml/relay-deploy-file.yml already use), not inside this repo.
+      # Before this fix every lead AND all of its subordinates ran here, in
+      # mohammadlali0707-stack/agw-workers, piling 6-88 jobs onto ONE
+      # account's Actions concurrency queue instead of spreading them across
+      # up to 8 independent ones -- the owner caught this live (issue #13:
+      # dozens of "Queued" AGW Worker runs, all in this one repo) by asking
+      # directly why ACC6's own Actions tab was full when the design called
+      # for each account's own. Confirmed by measurement, not assumed: a
+      # relay-read-file.yml diagnostic showed Mohammadlali/agw-workers (ACC0)
+      # is a real, independently-reachable repo with its own .github/
+      # workflows/ -- account 0 was wrongly treated as a same-repo-only
+      # exception earlier the same day; it needed the same fix as 1-8, not a
+      # carve-out. Since the OTHER account's own repo has none of ACC6's
+      # AGW_TOKEN_ACC*/ACC{n}_PAT secrets, this job resolves them HERE (where
+      # they all exist) and passes the two the lead needs -- its own
+      # Antigravity token and the PAT to push target_repo -- as
+      # workflow_dispatch inputs, masked before use on the far side. agy-
+      # lead-plan.yml and agw-worker.yml must already be deployed to that
+      # account's repo (relay-deploy-file.yml) before this can find them.
+      - name: Resolve this account's owner login and credentials
+        id: resolve
+        run: |
+          set -e
+          case "${{ matrix.account }}" in
+            0) OWNER="Mohammadlali"; DISPATCH_PAT="$ACC0_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC0" ;;
+            1) OWNER="momonakikugava-pixel"; DISPATCH_PAT="$ACC1_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC1" ;;
+            2) OWNER="lali94m-max"; DISPATCH_PAT="$ACC2_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC2" ;;
+            3) OWNER="ngocgminh5-debug"; DISPATCH_PAT="$ACC3_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC3" ;;
+            4) OWNER="hmmletssee7-design"; DISPATCH_PAT="$ACC4_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC4" ;;
+            5) OWNER="kidding602"; DISPATCH_PAT="$ACC5_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC5" ;;
+            7) OWNER="mohammad97okk"; DISPATCH_PAT="$ACC7_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC7" ;;
+            8) OWNER="moradzahra85-png"; DISPATCH_PAT="$ACC8_PAT"; AGY_TOKEN="$AGW_TOKEN_ACC8" ;;
+            *) echo "::error::account ${{ matrix.account }} has no cross-account owner (6 and 9 are never leads)"; exit 1 ;;
+          esac
+          if [ -z "$DISPATCH_PAT" ]; then
+            echo "::error::no PAT for account ${{ matrix.account }} ($OWNER) -- cannot cross-dispatch"
+            exit 1
+          fi
+          echo "::add-mask::$DISPATCH_PAT"
+          echo "::add-mask::$AGY_TOKEN"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+          echo "dispatch_pat=$DISPATCH_PAT" >> "$GITHUB_OUTPUT"
+          echo "agy_token=$AGY_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch this account's lead, in its OWN repo
+        env:
+          DISPATCH_OWNER: ${{ steps.resolve.outputs.owner }}
+          GH_TOKEN: ${{ steps.resolve.outputs.dispatch_pat }}
+          AGY_TOKEN: ${{ steps.resolve.outputs.agy_token }}
         run: |
           set -e
           echo "$PROPOSAL_JSON" > /tmp/proposal.json
@@ -154,12 +221,26 @@ jobs:
 
           TARGET_REPO=$(cat /tmp/target_repo.txt)
           PACKAGE_GOAL=$(cat /tmp/package_goal.txt)
-          echo "Dispatching lead for account ${{ matrix.account }} against $TARGET_REPO"
+
+          # Same TARGET_REPO -> push-PAT mapping agw-worker.yml's own
+          # "Checkout target repo" step uses locally -- resolved HERE
+          # instead, since the lead's own repo won't have ACC6_PAT/ACC0_PAT
+          # as local secrets, and handed over as target_repo_pat.
+          case "$TARGET_REPO" in
+            Mohammadlali/agw-workers) TARGET_REPO_PAT="$ACC0_PAT" ;;
+            *) TARGET_REPO_PAT="$ACC6_PAT" ;;
+          esac
+          echo "::add-mask::$TARGET_REPO_PAT"
+
+          echo "Dispatching lead for account ${{ matrix.account }} (${DISPATCH_OWNER}/agw-workers) against $TARGET_REPO"
           gh workflow run agy-lead-plan.yml \
-            --repo "${{ github.repository }}" \
+            --repo "${DISPATCH_OWNER}/agw-workers" \
             --field "account=${{ matrix.account }}" \
             --field "package_goal=$PACKAGE_GOAL" \
             --field "target_repo=$TARGET_REPO" \
+            --field "agy_token_b64=$AGY_TOKEN" \
+            --field "target_repo_pat=$TARGET_REPO_PAT" \
+            --field "control_repo_pat=$ACC6_PAT" \
             --field "issue_number=${{ github.event.issue.number }}" \
             --field "callback_id=plan-${{ github.event.issue.number }}-acc${{ matrix.account }}" \
             --field "all_accounts=$ALL_ACCOUNTS"

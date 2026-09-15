@@ -51,6 +51,26 @@ on:
         required: false
         default: '[]'
         type: string
+      agy_token_b64:
+        description: 'CROSS-ACCOUNT MODE: this account''s own base64 Antigravity token, supplied by agy-plan-dispatch.yml when cross-dispatching this lead to run inside its own account''s copy of this repo (where the local secrets.AGW_TOKEN_ACC* below do not exist). Empty = look it up locally, the same-repo/legacy behavior.'
+        required: false
+        default: ''
+        type: string
+      target_repo_pat:
+        description: 'CROSS-ACCOUNT MODE: PAT to check out/push target_repo, supplied by the caller instead of looking one up locally (which also does not exist outside ACC6). Empty = resolve locally the original way.'
+        required: false
+        default: ''
+        type: string
+      control_repo:
+        description: 'The repo hosting the planning issue and agy-final-report.yml -- always mohammadlali0707-stack/agw-workers, kept as an input rather than hardcoded since this file itself is deployed byte-identical to every account.'
+        required: false
+        default: 'mohammadlali0707-stack/agw-workers'
+        type: string
+      control_repo_pat:
+        description: 'CROSS-ACCOUNT MODE: PAT with write access to control_repo, needed when this job runs inside a DIFFERENT account''s own repo (its local default GITHUB_TOKEN only reaches that repo, not control_repo). Empty = use this job''s own default token, correct when control_repo IS the repo this job is running in (same-repo/legacy mode).'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -63,6 +83,12 @@ jobs:
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CONTROL_REPO: ${{ inputs.control_repo }}
+      # Used only by the steps that talk to control_repo (issue comments,
+      # the final-report trigger) -- everything else (subordinate dispatch)
+      # keeps using the job-level GH_TOKEN above, which is correctly scoped
+      # to whichever repo this job itself is running in.
+      CONTROL_GH_TOKEN: ${{ inputs.control_repo_pat != '' && inputs.control_repo_pat || secrets.GITHUB_TOKEN }}
       ACCOUNT: ${{ inputs.account }}
       TARGET_REPO: ${{ inputs.target_repo }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
@@ -70,8 +96,10 @@ jobs:
     steps:
       - name: Ack on the issue
         if: env.ISSUE_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+          gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
             --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌های ۱۰ زیردست..."
 
       - name: Install AGY CLI from HF Dataset
@@ -94,19 +122,26 @@ jobs:
       - name: Checkout target repo (kept open for the whole job -- planning, polling and two commits all reuse it)
         id: checkout_target
         env:
+          TARGET_REPO_PAT_INPUT: ${{ inputs.target_repo_pat }}
           ACC0_PAT: ${{ secrets.ACC0_PAT }}
           ACC6_PAT: ${{ secrets.ACC6_PAT }}
         run: |
           set -e
-          case "$TARGET_REPO" in
-            Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
-            *) TOKEN="$ACC6_PAT" ;;
-          esac
+          if [ -n "$TARGET_REPO_PAT_INPUT" ]; then
+            echo "::add-mask::$TARGET_REPO_PAT_INPUT"
+            TOKEN="$TARGET_REPO_PAT_INPUT"
+          else
+            case "$TARGET_REPO" in
+              Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
+              *) TOKEN="$ACC6_PAT" ;;
+            esac
+          fi
           if [ -z "$TOKEN" ]; then
             echo "::error::No token wired for $TARGET_REPO"
             exit 1
           fi
           echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
           echo "::add-mask::$AUTH_HEADER"
           echo "auth_header=$AUTH_HEADER" >> "$GITHUB_OUTPUT"
@@ -119,6 +154,7 @@ jobs:
 
       - name: Restore this account's own AGY identity
         env:
+          AGY_TOKEN_INPUT: ${{ inputs.agy_token_b64 }}
           T0: ${{ secrets.AGW_TOKEN_ACC0 }}
           T1: ${{ secrets.AGW_TOKEN_ACC1 }}
           T2: ${{ secrets.AGW_TOKEN_ACC2 }}
@@ -130,17 +166,21 @@ jobs:
         run: |
           set -e
           mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
-          case "$ACCOUNT" in
-            0) TOKEN_B64="$T0" ;;
-            1) TOKEN_B64="$T1" ;;
-            2) TOKEN_B64="$T2" ;;
-            3) TOKEN_B64="$T3" ;;
-            4) TOKEN_B64="$T4" ;;
-            5) TOKEN_B64="$T5" ;;
-            7) TOKEN_B64="$T7" ;;
-            8) TOKEN_B64="$T8" ;;
-            *) echo "::error::account=$ACCOUNT has no wired identity (6 and 9 are never leads)"; exit 1 ;;
-          esac
+          if [ -n "$AGY_TOKEN_INPUT" ]; then
+            TOKEN_B64="$AGY_TOKEN_INPUT"
+          else
+            case "$ACCOUNT" in
+              0) TOKEN_B64="$T0" ;;
+              1) TOKEN_B64="$T1" ;;
+              2) TOKEN_B64="$T2" ;;
+              3) TOKEN_B64="$T3" ;;
+              4) TOKEN_B64="$T4" ;;
+              5) TOKEN_B64="$T5" ;;
+              7) TOKEN_B64="$T7" ;;
+              8) TOKEN_B64="$T8" ;;
+              *) echo "::error::account=$ACCOUNT has no wired identity (6 and 9 are never leads)"; exit 1 ;;
+            esac
+          fi
           echo "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
           chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
           cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
@@ -215,12 +255,17 @@ jobs:
 
       - name: If parsing failed, report and stop here (do not leave the issue silent)
         if: failure()
+        env:
+          GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+          gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
             --body "Account ${ACCOUNT} lead: پروپوزال زیرمجموعه پارس نشد. متوقف شد." || true
 
       - name: Dispatch the 10 subordinates, 5 seconds apart
         id: dispatch
+        env:
+          AGY_TOKEN_INPUT: ${{ inputs.agy_token_b64 }}
+          TARGET_REPO_PAT: ${{ steps.checkout_target.outputs.token }}
         run: |
           set -e
           COUNT=$(cat /tmp/subtask_count.txt)
@@ -232,6 +277,13 @@ jobs:
             MEMBER="${META##*$'\t'}"
             TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
             echo "Dispatching $((i + 1))/$COUNT for account ${ACCOUNT}: $TITLE ($MEMBER) tag=$TAG"
+            # This job may itself be running inside this account's OWN copy
+            # of the repo (cross-dispatched by agy-plan-dispatch.yml) --
+            # github.repository already resolves to the right place either
+            # way, so subordinates land in the same repo/account as their
+            # lead. agy_token_b64/target_repo_pat pass the same cross-
+            # account credentials through (empty in same-repo/legacy mode,
+            # where a subordinate just does its own local lookup as before).
             gh workflow run agw-worker.yml \
               --repo "${{ github.repository }}" \
               --field "prompt=$PROMPT" \
@@ -239,7 +291,9 @@ jobs:
               --field "target_branch=" \
               --field "acc_index=${ACCOUNT}" \
               --field "report_dir=$REPORT_DIR" \
-              --field "callback_id=$TAG"
+              --field "callback_id=$TAG" \
+              --field "agy_token_b64=$AGY_TOKEN_INPUT" \
+              --field "target_repo_pat=$TARGET_REPO_PAT"
             echo "$TAG" >> /tmp/expected_tags.txt
             if [ "$i" -lt "$((COUNT - 1))" ]; then
               sleep 5
@@ -323,8 +377,10 @@ jobs:
 
       - name: Report to the issue
         if: env.ISSUE_NUMBER != ''
+        env:
+          GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
+          gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
             --body "Account ${ACCOUNT} lead: ${{ steps.poll.outputs.found }}/${{ steps.dispatch.outputs.expected }} زیردست گزارش دادند. خلاصه در \`Reports/agy/team_reports/acc${ACCOUNT}.md\` ثبت شد."
 
       - name: If I am the last account to finish, trigger the final ACC6 summary (race-safe via git push)
@@ -332,6 +388,7 @@ jobs:
           AUTH_HEADER: ${{ steps.checkout_target.outputs.auth_header }}
           BRANCH: ${{ steps.checkout_target.outputs.branch }}
           ALL_ACCOUNTS: ${{ inputs.all_accounts }}
+          GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
           set +e
           cd /tmp/agent-repo
@@ -367,7 +424,7 @@ jobs:
           if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
             echo "Won the race -- dispatching agy-final-report.yml"
             gh workflow run agy-final-report.yml \
-              --repo "${{ github.repository }}" \
+              --repo "$CONTROL_REPO" \
               --field "target_repo=$TARGET_REPO" \
               --field "issue_number=${ISSUE_NUMBER}" \
               --field "all_accounts=$ALL_ACCOUNTS"

@@ -37,6 +37,16 @@ on:
         required: false
         default: ''
         type: string
+      agy_token_b64:
+        description: 'CROSS-ACCOUNT MODE: base64 Antigravity OAuth token for acc_index''s identity, supplied by a caller running in a DIFFERENT repo than this identity''s own secrets live in (e.g. a lead cross-dispatched to run inside its own account''s copy of this repo). Empty = look the token up locally by acc_index, the original same-repo behavior.'
+        required: false
+        default: ''
+        type: string
+      target_repo_pat:
+        description: 'CROSS-ACCOUNT MODE: PAT to check out/push target_repo, supplied by the caller instead of looking one up locally. Empty = resolve locally the original way (ACC0_PAT for Mohammadlali/agw-workers, ACC6_PAT otherwise).'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -132,6 +142,7 @@ jobs:
         env:
           TARGET_REPO: ${{ inputs.target_repo }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
+          TARGET_REPO_PAT_INPUT: ${{ inputs.target_repo_pat }}
           ACC0_PAT: ${{ secrets.ACC0_PAT }}
           ACC6_PAT: ${{ secrets.ACC6_PAT }}
           ACC1_PAT: ${{ secrets.ACC1_PAT }}
@@ -141,10 +152,15 @@ jobs:
             echo "No target_repo given -- agent runs with no repo checked out and no git credential."
             exit 0
           fi
-          case "$TARGET_REPO" in
-            Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
-            *) TOKEN="$ACC6_PAT" ;;
-          esac
+          if [ -n "$TARGET_REPO_PAT_INPUT" ]; then
+            echo "::add-mask::$TARGET_REPO_PAT_INPUT"
+            TOKEN="$TARGET_REPO_PAT_INPUT"
+          else
+            case "$TARGET_REPO" in
+              Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
+              *) TOKEN="$ACC6_PAT" ;;
+            esac
+          fi
           if [ -z "$TOKEN" ]; then
             echo "No token wired for $TARGET_REPO -- skipping checkout." >&2
             exit 0
@@ -171,6 +187,7 @@ jobs:
         env:
           PROMPT_INPUT: ${{ inputs.prompt }}
           PRIMARY_IDX: ${{ steps.pick_token.outputs.acc_idx }}
+          AGY_TOKEN_INPUT: ${{ inputs.agy_token_b64 }}
         run: |
           set +e
 
@@ -178,21 +195,37 @@ jobs:
           # here at all, deliberately. If it's ever passed in anyway,
           # token_b64 stays empty and the run fails loudly on auth rather
           # than silently using a stale/wrong credential.
+          #
+          # CROSS-ACCOUNT MODE: when this job runs inside a DIFFERENT
+          # account's own copy of this repo (cross-dispatched so its
+          # Actions minutes/concurrency are that account's own, not
+          # ACC6's -- see agy-plan-dispatch.yml/agy-lead-plan.yml), the
+          # local secrets.AGW_TOKEN_ACC* below don't exist there at all.
+          # The caller supplies the PRIMARY identity's own token as an
+          # input instead; only the primary call uses it -- a quota-error
+          # RETRY still needs a genuinely different identity chosen at
+          # random, which this job cannot supply itself, so retries keep
+          # using the local (same-repo) lookup as before.
           restore_token() {
             local idx="$1"
+            local override_b64="${2:-}"
             mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
             local token_b64=""
-            case "$idx" in
-              0) token_b64="${{ secrets.AGW_TOKEN_ACC0 }}" ;;
-              1) token_b64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
-              2) token_b64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
-              3) token_b64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
-              4) token_b64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
-              5) token_b64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
-              6) token_b64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
-              7) token_b64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
-              8) token_b64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
-            esac
+            if [ -n "$override_b64" ]; then
+              token_b64="$override_b64"
+            else
+              case "$idx" in
+                0) token_b64="${{ secrets.AGW_TOKEN_ACC0 }}" ;;
+                1) token_b64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
+                2) token_b64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
+                3) token_b64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
+                4) token_b64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
+                5) token_b64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
+                6) token_b64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
+                7) token_b64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
+                8) token_b64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
+              esac
+            fi
             echo "$token_b64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
             chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
             cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
@@ -206,7 +239,7 @@ jobs:
 
           PROMPT="$PROMPT_INPUT"
           USED_IDX="$PRIMARY_IDX"
-          restore_token "$USED_IDX"
+          restore_token "$USED_IDX" "$AGY_TOKEN_INPUT"
 
           echo "Running agy prompt with acc${USED_IDX}..."
           cd /tmp/agent-repo 2>/dev/null || true
@@ -229,6 +262,12 @@ jobs:
 
           if is_quota_error /tmp/agy_output.txt; then
             echo "::warning::acc${USED_IDX} hit a quota/rate-limit error, retrying once with a random other identity"
+            # No override for the fallback -- a quota retry needs a genuinely
+            # different identity chosen at random, which only the local
+            # (same-repo) secrets lookup can supply. In cross-account mode
+            # (AGY_TOKEN_INPUT was used above) this local lookup has nothing
+            # to find and the retry will fail loudly on auth -- acceptable:
+            # rare, and silent wrong-identity reuse would be worse.
             FALLBACK_IDX="$USED_IDX"
             while [ "$FALLBACK_IDX" = "$USED_IDX" ]; do
               FALLBACK_IDX=$(( (RANDOM % 8) + 1 ))
@@ -316,14 +355,20 @@ jobs:
         env:
           TARGET_REPO: ${{ inputs.target_repo }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
+          TARGET_REPO_PAT_INPUT: ${{ inputs.target_repo_pat }}
           ACC0_PAT: ${{ secrets.ACC0_PAT }}
           ACC6_PAT: ${{ secrets.ACC6_PAT }}
           ACC1_PAT: ${{ secrets.ACC1_PAT }}
         run: |
-          case "$TARGET_REPO" in
-            Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
-            *) TOKEN="$ACC6_PAT" ;;
-          esac
+          if [ -n "$TARGET_REPO_PAT_INPUT" ]; then
+            echo "::add-mask::$TARGET_REPO_PAT_INPUT"
+            TOKEN="$TARGET_REPO_PAT_INPUT"
+          else
+            case "$TARGET_REPO" in
+              Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
+              *) TOKEN="$ACC6_PAT" ;;
+            esac
+          fi
           cd /tmp/agent-repo
           BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
