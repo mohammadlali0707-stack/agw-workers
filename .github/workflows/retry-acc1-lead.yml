@@ -1,0 +1,45 @@
+name: One-off -- retry account 1's lead after the debug-output fix
+
+# Account 1's first lead-plan attempt (run 34932866381, issue #14) failed
+# fast (~19s, 1 line of agy output) with NO_LEAD_PLAN_FOUND. Re-dispatches
+# the same package_goal/target_repo with a fresh callback_id so this
+# attempt's subordinate tags don't collide with anything from the first,
+# now that agy-lead-plan.yml also logs the raw agy output on failure
+# (9443737) and that fix has been redeployed to account 1's own repo.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      AGW_TOKEN_ACC1: ${{ secrets.AGW_TOKEN_ACC1 }}
+    steps:
+      - name: Dispatch account 1's lead again, in its own repo
+        env:
+          GH_TOKEN: ${{ env.ACC1_PAT }}
+        run: |
+          set -e
+          echo "::add-mask::$ACC1_PAT"
+          echo "::add-mask::$AGW_TOKEN_ACC1"
+          echo "::add-mask::$ACC6_PAT"
+          PACKAGE_GOAL="تکمیل، تست و تثبیت درگاه اعتبارسنجی و بیلد بدون‌سر موتور Ren'Py در قالب ابزار Tools/renpy_gateway.py به عنوان جایگزین دروازه قدیمی ue.py، شامل اجرای پیوسته مراحل renpy lint، کامپایل فایل‌های rpy به rpyc و اجرای آزمون رندر تحت xvfb-run با انتشار دایجست تک‌خطی ماشین‌خوان ##TBS## مطابق با check_digest_grep_contract.py، و اتصال این درگاه به مجموعه گیت‌های Tools/run_gates.py و گردش کار CI."
+          gh workflow run agy-lead-plan.yml \
+            --repo "momonakikugava-pixel/agw-workers" \
+            --field "account=1" \
+            --field "package_goal=$PACKAGE_GOAL" \
+            --field "target_repo=mohammadlali0707-stack/Claud-Cloud-Project" \
+            --field "agy_token_b64=$AGW_TOKEN_ACC1" \
+            --field "target_repo_pat=$ACC6_PAT" \
+            --field "control_repo_pat=$ACC6_PAT" \
+            --field "issue_number=14" \
+            --field "callback_id=plan-14-acc1-retry" \
+            --field "all_accounts=[1,2,3,4,5,8]"
+          echo "dispatched"
