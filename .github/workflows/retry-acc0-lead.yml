@@ -1,0 +1,38 @@
+name: One-off -- substitute account 0 for account 1's lead
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      AGW_TOKEN_ACC0: ${{ secrets.AGW_TOKEN_ACC0 }}
+    steps:
+      - name: Dispatch account 0's lead in its own repo
+        env:
+          GH_TOKEN: ${{ env.ACC0_PAT }}
+        run: |
+          set -e
+          echo "::add-mask::$ACC0_PAT"
+          echo "::add-mask::$AGW_TOKEN_ACC0"
+          echo "::add-mask::$ACC6_PAT"
+          PACKAGE_GOAL="تکمیل، تست و تثبیت درگاه اعتبارسنجی و بیلد بدون‌سر موتور Ren'Py در قالب ابزار Tools/renpy_gateway.py به عنوان جایگزین دروازه قدیمی ue.py، شامل اجرای پیوسته مراحل renpy lint، کامپایل فایل‌های rpy به rpyc و اجرای آزمون رندر تحت xvfb-run با انتشار دایجست تک‌خطی ماشین‌خوان ##TBS## مطابق با check_digest_grep_contract.py، و اتصال این درگاه به مجموعه گیت‌های Tools/run_gates.py و گردش کار CI."
+          gh workflow run agy-lead-plan.yml \
+            --repo "mohammadlali0707-stack/agw-workers" \
+            --field "account=0" \
+            --field "package_goal=$PACKAGE_GOAL" \
+            --field "target_repo=mohammadlali0707-stack/Claud-Cloud-Project" \
+            --field "agy_token_b64=$AGW_TOKEN_ACC0" \
+            --field "target_repo_pat=$ACC6_PAT" \
+            --field "control_repo_pat=$ACC6_PAT" \
+            --field "issue_number=14" \
+            --field "callback_id=plan-14-acc0-substitute" \
+            --field "all_accounts=[0,2,3,4,5,8]"
+          echo "dispatched to ACC0 successfully"
