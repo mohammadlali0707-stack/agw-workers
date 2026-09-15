@@ -40,7 +40,7 @@ jobs:
       - name: Check for a trailing @agy-plan marker and extract the project tag
         id: check
         env:
-          BODY: ${{ github.event.issue.body || github.event.comment.body || '' }}
+          BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
           TITLE: ${{ github.event.issue.title || '' }}
         run: |
           TRIMMED="$(printf '%s\n%s' "$TITLE" "$BODY" | sed -e 's/[[:space:]]*$//')"

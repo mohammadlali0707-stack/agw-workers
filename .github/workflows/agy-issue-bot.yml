@@ -47,7 +47,7 @@ jobs:
       - name: Check for a trailing @agy marker and extract project tag
         id: check
         env:
-          BODY: ${{ github.event.issue.body || github.event.comment.body || '' }}
+          BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
           TITLE: ${{ github.event.issue.title || '' }}
         run: |
           # Combine title and body, then check if it ends with @agy
