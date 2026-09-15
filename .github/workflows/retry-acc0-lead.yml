@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Dispatch account 0's lead in its own repo
         env:
-          GH_TOKEN: ${{ env.ACC0_PAT }}
+          GH_TOKEN: ${{ env.ACC6_PAT }}
         run: |
           set -e
           echo "::add-mask::$ACC0_PAT"
