@@ -1,0 +1,44 @@
+name: One-off -- verify agy-lead-plan.yml actually ran in each account's own repo
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Query each account's own Actions API for agy-lead-plan.yml runs
+        run: |
+          set -euo pipefail
+          declare -A OWNERS=(
+            [1]="momonakikugava-pixel"
+            [2]="lali94m-max"
+            [3]="ngocgminh5-debug"
+            [4]="hmmletssee7-design"
+            [5]="kidding602"
+            [8]="moradzahra85-png"
+          )
+          for IDX in 1 2 3 4 5 8; do
+            OWNER="${OWNERS[$IDX]}"
+            PAT_NAME="ACC${IDX}_PAT"
+            TOKEN="${!PAT_NAME}"
+            echo "=== account $IDX: $OWNER/agw-workers ==="
+            curl -sS -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${OWNER}/agw-workers/actions/workflows/agy-lead-plan.yml/runs?per_page=5" \
+              > /tmp/resp_$IDX.json
+            jq -e '.workflow_runs' /tmp/resp_$IDX.json > /dev/null 2>&1 \
+              && jq -r '"total_count: " + (.total_count|tostring), (.workflow_runs[] | " run " + (.id|tostring) + " " + .status + " " + (.conclusion // "null") + " " + .created_at + " " + .html_url)' /tmp/resp_$IDX.json \
+              || cat /tmp/resp_$IDX.json
+            echo
+          done
