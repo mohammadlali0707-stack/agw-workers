@@ -215,6 +215,9 @@ jobs:
           OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           echo "$OUTPUT" > /tmp/lead_plan_output.txt
           echo "Lead plan output lines: $(wc -l < /tmp/lead_plan_output.txt)"
+          echo "----- agy output (first 80 lines) -----"
+          head -n 80 /tmp/lead_plan_output.txt
+          echo "----- end -----"
 
       - name: Parse the lead's task list
         id: parse
