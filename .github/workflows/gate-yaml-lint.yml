@@ -1,0 +1,99 @@
+name: Gate 1 -- YAML Lint & Workflow Validator
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**.yml'
+      - '.github/workflows/**.yaml'
+  pull_request:
+    paths:
+      - '.github/workflows/**.yml'
+      - '.github/workflows/**.yaml'
+
+jobs:
+  yaml-lint:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for CRLF line endings in workflow files
+        run: |
+          echo "=== Checking for CRLF line endings ==="
+          CRLF_FILES=$(grep -rlU $'\r' .github/workflows/ 2>/dev/null || true)
+          if [ -n "$CRLF_FILES" ]; then
+            echo "âŒ CRLF line endings found in:"
+            echo "$CRLF_FILES"
+            echo ""
+            echo "Fix with: sed -i 's/\r//' <file>"
+            exit 1
+          fi
+          echo "âœ… No CRLF issues found"
+
+      - name: Install yamllint
+        run: pip3 install yamllint --quiet || true
+
+      - name: Lint all workflow YAML files
+        run: |
+          echo "=== Linting workflow YAML files ==="
+          FAILED=0
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -f "$f" ] || continue
+            echo -n "Checking $f ... "
+            # Check YAML syntax
+            python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" 2>&1
+            if [ $? -ne 0 ]; then
+              echo "âŒ YAML syntax error in $f"
+              FAILED=1
+            else
+              echo "âœ…"
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            exit 1
+          fi
+
+      - name: Validate workflow structure (no empty jobs)
+        run: |
+          echo "=== Validating workflow structure ==="
+          FAILED=0
+          for f in .github/workflows/*.yml; do
+            [ -f "$f" ] || continue
+            # Check that 'jobs:' section exists and has at least one job
+            JOB_COUNT=$(python3 -c "
+          import yaml, sys
+          data = yaml.safe_load(open('$f'))
+          jobs = data.get('jobs', {})
+          print(len(jobs))
+          " 2>/dev/null || echo "0")
+            if [ "$JOB_COUNT" -eq 0 ]; then
+              echo "âŒ $f has no jobs defined"
+              FAILED=1
+            else
+              echo "âœ… $f has $JOB_COUNT job(s)"
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            exit 1
+          fi
+
+      - name: Check cross-account dispatch has callback_repo
+        run: |
+          echo "=== Checking cross-account dispatch fields ==="
+          FAILED=0
+          for f in .github/workflows/*.yml; do
+            [ -f "$f" ] || continue
+            # If file dispatches agw-worker.yml with issue_number, it must also pass callback_repo
+            if grep -q 'gh workflow run agw-worker.yml' "$f"; then
+              HAS_ISSUE=$(grep -c 'issue_number' "$f" || echo 0)
+              HAS_CALLBACK=$(grep -c 'callback_repo' "$f" || echo 0)
+              if [ "$HAS_ISSUE" -gt 0 ] && [ "$HAS_CALLBACK" -eq 0 ]; then
+                echo "âŒ $f dispatches agw-worker with issue_number but missing callback_repo field!"
+                FAILED=1
+              else
+                echo "âœ… $f cross-account dispatch fields OK"
+              fi
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            exit 1
+          fi
