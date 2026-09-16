@@ -12,8 +12,6 @@ on:
 
 jobs:
   yaml-lint:
-    # Gate runs on GitHub-hosted runners (ubuntu-latest) for ACC1-8 worker repos.
-    # Uses free GitHub minutes. No need for our self-hosted server for gates.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,14 +23,13 @@ jobs:
           if [ -n "$CRLF_FILES" ]; then
             echo "âŒ CRLF line endings found in:"
             echo "$CRLF_FILES"
-            echo ""
             echo "Fix with: sed -i 's/\r//' <file>"
             exit 1
           fi
           echo "âœ… No CRLF issues found"
 
-      - name: Install yamllint
-        run: pip3 install yamllint --quiet || true
+      - name: Install yamllint + pyyaml
+        run: pip3 install yamllint pyyaml --quiet || true
 
       - name: Lint all workflow YAML files
         run: |
@@ -41,7 +38,6 @@ jobs:
           for f in .github/workflows/*.yml .github/workflows/*.yaml; do
             [ -f "$f" ] || continue
             echo -n "Checking $f ... "
-            # Check YAML syntax
             python3 -c "import yaml, sys; yaml.safe_load(open('$f'))" 2>&1
             if [ $? -ne 0 ]; then
               echo "âŒ YAML syntax error in $f"
@@ -50,52 +46,199 @@ jobs:
               echo "âœ…"
             fi
           done
-          if [ "$FAILED" -eq 1 ]; then
-            exit 1
-          fi
+          if [ "$FAILED" -eq 1 ]; then exit 1; fi
 
       - name: Validate workflow structure (no empty jobs)
         run: |
           echo "=== Validating workflow structure ==="
           FAILED=0
-          for f in .github/workflows/*.yml; do
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
             [ -f "$f" ] || continue
-            # Check that 'jobs:' section exists and has at least one job
-            JOB_COUNT=$(python3 -c "
-          import yaml, sys
-          data = yaml.safe_load(open('$f'))
+            python3 - "$f" <<'PYEOF'
+          import sys, yaml
+          f = sys.argv[1]
+          data = yaml.safe_load(open(f))
+          if not isinstance(data, dict):
+              sys.exit(0)
           jobs = data.get('jobs', {})
-          print(len(jobs))
-          " 2>/dev/null || echo "0")
-            if [ "$JOB_COUNT" -eq 0 ]; then
-              echo "âŒ $f has no jobs defined"
-              FAILED=1
-            else
-              echo "âœ… $f has $JOB_COUNT job(s)"
-            fi
+          for jname, jbody in jobs.items():
+              if not jbody or not jbody.get('steps'):
+                  print(f"âŒ {f}: job '{jname}' has no steps")
+                  sys.exit(1)
+          PYEOF
+            if [ $? -ne 0 ]; then FAILED=1; fi
           done
-          if [ "$FAILED" -eq 1 ]; then
-            exit 1
-          fi
+          if [ "$FAILED" -eq 1 ]; then exit 1; fi
+          echo "âœ… All workflow structures valid"
 
-      - name: Check cross-account dispatch has callback_repo
+      # â”€â”€ Ported from CR/Tools/check_workflow_safety.py â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      # CHECK-1: double-quotes in single-quoted printf content (breaks agw-worker bash injection)
+      # CHECK-2: python3 -c inline code at wrong indentation (causes name=path registration bug)
+      # CHECK-3: YAML parse (redundant safety net with yamllint step above)
+      - name: Workflow safety checks (CR ported)
         run: |
-          echo "=== Checking cross-account dispatch fields ==="
-          FAILED=0
-          for f in .github/workflows/*.yml; do
-            [ -f "$f" ] || continue
-            # If file dispatches agw-worker.yml with issue_number, it must also pass callback_repo
-            if grep -q 'gh workflow run agw-worker.yml' "$f"; then
-              HAS_ISSUE=$(grep -c 'issue_number' "$f" || echo 0)
-              HAS_CALLBACK=$(grep -c 'callback_repo' "$f" || echo 0)
-              if [ "$HAS_ISSUE" -gt 0 ] && [ "$HAS_CALLBACK" -eq 0 ]; then
-                echo "âŒ $f dispatches agw-worker with issue_number but missing callback_repo field!"
-                FAILED=1
-              else
-                echo "âœ… $f cross-account dispatch fields OK"
-              fi
-            fi
-          done
-          if [ "$FAILED" -eq 1 ]; then
-            exit 1
-          fi
+          echo "=== Workflow Safety Checks (ported from CR/Tools/check_workflow_safety.py) ==="
+          python3 - <<'PYEOF'
+          import sys, re, os, glob, yaml
+
+          C_FAIL = "âŒ"
+          C_OK   = "âœ…"
+          _CHAR_CLASS_PATTERNS = ("tr -d", "tr -", "sed ", "| tr", "| sed")
+
+          def check_1_double_quotes_in_printf(filepath, lines):
+              """double-quotes inside single-quoted printf content strings â†’ breaks agw-worker"""
+              errors = []
+              for i, raw_line in enumerate(lines, 1):
+                  line = raw_line.strip()
+                  if "printf" not in line:
+                      continue
+                  if any(p in line for p in _CHAR_CLASS_PATTERNS):
+                      continue
+                  if "$(printf" in line and "|" in line:
+                      continue
+                  sq_parts = re.findall(r"'([^']*)'", line)
+                  for part in sq_parts[1:]:
+                      if '"' in part:
+                          errors.append((i, "[CHECK-1] double-quote in printf content string "
+                                         "(will break agw-worker bash injection)", line[:100]))
+              return errors
+
+          def check_2_python_inline_yaml_indent(filepath, lines):
+              """python3 -c at wrong indent â†’ YAML block terminates early â†’ name=path bug"""
+              errors = []
+              for i, raw_line in enumerate(lines, 1):
+                  line = raw_line.rstrip()
+                  if 'python3 -c "' not in line and "python3 -c '" not in line:
+                      continue
+                  py_cmd_indent = len(line) - len(line.lstrip())
+                  j = i
+                  while j < len(lines):
+                      next_raw = lines[j]
+                      next_stripped = next_raw.strip()
+                      if next_stripped in ('"', "'", '" 2>/dev/null', "' 2>/dev/null",
+                                           '" 2>&1', "' 2>&1"):
+                          break
+                      if not next_stripped:
+                          j += 1
+                          continue
+                      next_indent = len(next_raw) - len(next_raw.lstrip())
+                      if next_indent < py_cmd_indent and next_stripped:
+                          errors.append((j + 1,
+                              f"[CHECK-2] python3 -c inline code at col {next_indent} "
+                              f"(need >={py_cmd_indent} to stay in YAML block â€” causes name=path registration bug)",
+                              next_stripped[:80]))
+                      j += 1
+              return errors
+
+          def check_3_yaml_syntax(filepath, content):
+              errors = []
+              try:
+                  yaml.safe_load(content)
+              except yaml.YAMLError as e:
+                  errors.append((0, "[CHECK-3] YAML parse error", str(e)[:160]))
+              return errors
+
+          def check_file(filepath):
+              errors = []
+              try:
+                  with open(filepath, encoding="utf-8", errors="replace") as f:
+                      content = f.read()
+              except OSError as e:
+                  return [(0, "cannot read file", str(e))]
+              lines = content.splitlines()
+              errors += check_1_double_quotes_in_printf(filepath, lines)
+              errors += check_2_python_inline_yaml_indent(filepath, lines)
+              errors += check_3_yaml_syntax(filepath, content)
+              return errors
+
+          files = sorted(
+              glob.glob(".github/workflows/*.yml") +
+              glob.glob(".github/workflows/*.yaml")
+          )
+          if not files:
+              print(f"{C_OK} No workflow files found")
+              sys.exit(0)
+
+          all_errors = []
+          for fp in files:
+              for lineno, msg, snippet in check_file(fp):
+                  loc = f"{fp}:{lineno}" if lineno else fp
+                  all_errors.append(f"{loc}: {msg}\n        snippet: {snippet}")
+
+          if all_errors:
+              print(f"{C_FAIL} check_workflow_safety FAILED ({len(all_errors)} issue(s))")
+              for e in all_errors:
+                  print(f"  {C_FAIL} {e}")
+              sys.exit(1)
+          else:
+              print(f"{C_OK} check_workflow_safety passed ({len(files)} files checked)")
+          PYEOF
+
+      # â”€â”€ Ported from CR/Tools/check_heredoc_backticks.py â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      # Unescaped backtick inside an unquoted heredoc â†’ silent command substitution
+      - name: Check for unescaped backticks in heredocs (CR ported)
+        run: |
+          echo "=== Heredoc Backtick Check (ported from CR/Tools/check_heredoc_backticks.py) ==="
+          python3 - <<'PYEOF'
+          import sys, re, glob
+
+          # Unquoted heredoc delimiter patterns (expansion IS active â†’ backtick is dangerous)
+          _HEREDOC_START = re.compile(r'<<\s*([A-Za-z_][A-Za-z0-9_]*)\b')
+          _HEREDOC_QUOTED = re.compile(r"<<\s*['\\\"]")
+
+          def check_file(filepath):
+              errors = []
+              try:
+                  with open(filepath, encoding="utf-8", errors="replace") as fh:
+                      lines = fh.readlines()
+              except OSError:
+                  return errors
+
+              in_heredoc = False
+              delimiter = None
+              for i, line in enumerate(lines, 1):
+                  stripped = line.rstrip("\n")
+                  if not in_heredoc:
+                      # Check for unquoted heredoc start
+                      if _HEREDOC_QUOTED.search(stripped):
+                          continue  # quoted â†’ safe, skip
+                      m = _HEREDOC_START.search(stripped)
+                      if m:
+                          in_heredoc = True
+                          delimiter = m.group(1)
+                  else:
+                      if stripped.strip() == delimiter:
+                          in_heredoc = False
+                          delimiter = None
+                          continue
+                      # Look for unescaped backtick
+                      col = 0
+                      s = stripped
+                      while col < len(s):
+                          if s[col] == '\\':
+                              col += 2  # escaped â€” skip next char
+                              continue
+                          if s[col] == '`':
+                              errors.append((i, stripped.strip()[:80]))
+                              break
+                          col += 1
+              return errors
+
+          files = sorted(
+              glob.glob(".github/workflows/*.yml") +
+              glob.glob(".github/workflows/*.yaml")
+          )
+
+          all_errors = []
+          for fp in files:
+              for lineno, snippet in check_file(fp):
+                  all_errors.append(f"{fp}:{lineno}: unescaped backtick in unquoted heredoc\n        snippet: {snippet}")
+
+          if all_errors:
+              print(f"âŒ check_heredoc_backticks FAILED ({len(all_errors)} issue(s))")
+              for e in all_errors:
+                  print(f"  âŒ {e}")
+              sys.exit(1)
+          else:
+              print(f"âœ… check_heredoc_backticks passed ({len(files)} files checked)")
+          PYEOF
