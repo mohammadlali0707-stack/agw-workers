@@ -1,0 +1,11 @@
+name: Test Issue Comment Trigger
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Triggered by issue_comment!"
