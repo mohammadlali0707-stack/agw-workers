@@ -1,0 +1,63 @@
+name: Sync agw-worker.yml to all worker repos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: self-hosted
+    env:
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync to all worker repos
+        run: |
+          set -e
+          CONTENT=$(base64 -w0 .github/workflows/agw-worker.yml)
+          COMMIT_MSG="fix: add callback_repo input so comment posts to correct control repo"
+
+          sync_to_repo() {
+            local REPO="$1"
+            local TOKEN="$2"
+            if [ -z "$TOKEN" ]; then
+              echo "âš ï¸  No PAT for $REPO, skipping"
+              return
+            fi
+            echo "Syncing to $REPO..."
+            SHA=$(curl -s -H "Authorization: Bearer $TOKEN" \
+              "https://api.github.com/repos/$REPO/contents/.github/workflows/agw-worker.yml" \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null)
+            if [ -z "$SHA" ]; then
+              echo "  âŒ Could not get SHA for $REPO"
+              return
+            fi
+            RESULT=$(curl -s -X PUT \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.github.com/repos/$REPO/contents/.github/workflows/agw-worker.yml" \
+              -d "{\"message\": \"$COMMIT_MSG\", \"content\": \"$CONTENT\", \"sha\": \"$SHA\"}")
+            if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if 'commit' in d else 1)" 2>/dev/null; then
+              echo "  âœ… Done: $REPO"
+            else
+              echo "  âŒ Failed: $REPO"
+              echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message','unknown error'))" 2>/dev/null || true
+            fi
+          }
+
+          sync_to_repo "momonakikugava-pixel/agw-workers" "$ACC1_PAT"
+          sync_to_repo "lali94m-max/agw-workers"          "$ACC2_PAT"
+          sync_to_repo "ngocgminh5-debug/agw-workers"     "$ACC3_PAT"
+          sync_to_repo "hmmletssee7-design/agw-workers"   "$ACC4_PAT"
+          sync_to_repo "kidding602/agw-workers"           "$ACC5_PAT"
+          sync_to_repo "mohammad97okk/agw-workers"        "$ACC7_PAT"
+          sync_to_repo "moradzahra85-png/agw-workers"     "$ACC8_PAT"
+
+          echo "Sync complete!"
