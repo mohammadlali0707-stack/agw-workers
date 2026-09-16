@@ -1,0 +1,141 @@
+name: Gate 3 -- Runner Dependency & Dispatch Schema Validator
+
+on:
+  # Runs as the first job before any agy-dispatch
+  workflow_call:
+    inputs:
+      check_type:
+        description: 'Type of check: deps | dispatch_schema'
+        required: true
+        type: string
+      dispatch_fields:
+        description: 'JSON of dispatch fields to validate (for dispatch_schema check)'
+        required: false
+        default: '{}'
+        type: string
+  workflow_dispatch:
+    inputs:
+      check_type:
+        description: 'Type of check'
+        required: true
+        default: 'deps'
+        type: choice
+        options:
+          - deps
+          - dispatch_schema
+
+jobs:
+  gate-runner-deps:
+    runs-on: self-hosted
+    if: ${{ inputs.check_type == 'deps' || inputs.check_type == '' }}
+    steps:
+      - name: Check required CLI tools are installed on runner
+        run: |
+          echo "=== Runner Dependency Gate ==="
+          FAILED=0
+
+          check_dep() {
+            local tool="$1"
+            local min_version="$2"
+            if command -v "$tool" >/dev/null 2>&1; then
+              VERSION=$("$tool" --version 2>&1 | head -1)
+              echo "  âœ… $tool: $VERSION"
+            else
+              echo "  âŒ $tool: NOT FOUND"
+              FAILED=1
+            fi
+          }
+
+          echo "Required tools:"
+          check_dep "gh"         ""
+          check_dep "git"        ""
+          check_dep "python3"    ""
+          check_dep "curl"       ""
+          check_dep "base64"     ""
+
+          echo ""
+          echo "Optional tools:"
+          check_dep "jq"         "" || true
+          check_dep "yamllint"   "" || true
+
+          # Check gh is authenticated
+          echo ""
+          echo "gh auth status:"
+          if gh auth status 2>&1 | grep -q "Logged in"; then
+            echo "  âœ… gh is authenticated"
+          else
+            echo "  âŒ gh is NOT authenticated (required for issue comments)"
+            FAILED=1
+          fi
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "âŒ Runner is missing required dependencies"
+            echo "Fix: Install missing tools on the runner host (185.204.171.61)"
+            echo "  sudo apt-get install gh git python3 curl"
+            exit 1
+          fi
+
+          echo ""
+          echo "âœ… All runner dependencies satisfied"
+
+  gate-dispatch-schema:
+    runs-on: self-hosted
+    if: ${{ inputs.check_type == 'dispatch_schema' }}
+    env:
+      DISPATCH_FIELDS: ${{ inputs.dispatch_fields }}
+    steps:
+      - name: Validate agw-worker dispatch fields schema
+        run: |
+          echo "=== Dispatch Schema Gate ==="
+          python3 << 'EOF'
+          import json, os, sys
+
+          fields_json = os.environ.get('DISPATCH_FIELDS', '{}')
+          try:
+              fields = json.loads(fields_json)
+          except json.JSONDecodeError as e:
+              print(f"âŒ Invalid JSON in dispatch_fields: {e}")
+              sys.exit(1)
+
+          failed = False
+
+          # Rule 1: If issue_number is present, callback_repo must also be present
+          if fields.get('issue_number') and not fields.get('callback_repo'):
+              print("âŒ SCHEMA VIOLATION: 'issue_number' is set but 'callback_repo' is missing!")
+              print("   Without callback_repo, the worker will post the comment to the wrong repo.")
+              print("   Add: --field \"callback_repo=${{ github.repository }}\"")
+              failed = True
+          elif fields.get('issue_number') and fields.get('callback_repo'):
+              print(f"âœ… callback_repo present: {fields['callback_repo']}")
+
+          # Rule 2: callback_repo must not be the worker's own repo
+          callback_repo = fields.get('callback_repo', '')
+          worker_repo = fields.get('worker_repo', '')
+          if callback_repo and worker_repo and callback_repo == worker_repo:
+              print(f"âŒ SCHEMA VIOLATION: callback_repo == worker_repo ({callback_repo})")
+              print("   This means the comment will post to the worker's own repo, not the control repo.")
+              failed = True
+
+          # Rule 3: acc_index must be 0-8, never 6 (that's ACC6 which hosts the control repo), never 9
+          acc_index = fields.get('acc_index')
+          if acc_index is not None:
+              try:
+                  idx = int(acc_index)
+                  if idx == 6:
+                      print(f"âš ï¸  WARNING: acc_index=6 dispatches to ACC6 (control repo account)")
+                  if idx == 9:
+                      print(f"âŒ SCHEMA VIOLATION: acc_index=9 (ACC9 is retired, never use it)")
+                      failed = True
+                  if idx < 0 or idx > 9:
+                      print(f"âŒ SCHEMA VIOLATION: acc_index={idx} out of range 0-9")
+                      failed = True
+              except ValueError:
+                  print(f"âŒ SCHEMA VIOLATION: acc_index='{acc_index}' is not a number")
+                  failed = True
+
+          if not failed:
+              print("âœ… Dispatch schema is valid")
+          else:
+              sys.exit(1)
+          EOF
