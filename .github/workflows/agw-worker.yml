@@ -54,7 +54,7 @@ permissions:
 
 jobs:
   run-agy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # 30 was enough for one attempt; a same-run retry needs headroom too. A
     # quota/rate-limit rejection surfaces near-instantly, so this only bites
     # in the rare case where attempt 1 burns real time before failing.

@@ -34,7 +34,7 @@ permissions:
 
 jobs:
   write:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       ACC0_PAT: ${{ secrets.ACC0_PAT }}
       ACC1_PAT: ${{ secrets.ACC1_PAT }}

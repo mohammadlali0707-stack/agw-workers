@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 3
     env:
       ACC1_PAT: ${{ secrets.ACC1_PAT }}

@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   check-marker:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
     outputs:
       match: ${{ steps.check.outputs.match }}
@@ -47,7 +47,7 @@ jobs:
 
   parse-proposal:
     needs: [check-marker]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: >
       needs.check-marker.outputs.match == 'true' &&
       github.event.comment.user.type != 'Bot' &&
@@ -124,7 +124,7 @@ jobs:
       needs.parse-proposal.result == 'success' &&
       needs.parse-proposal.outputs.skip != 'true' &&
       needs.parse-proposal.outputs.accounts != '[]'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 30
     strategy:
       fail-fast: false

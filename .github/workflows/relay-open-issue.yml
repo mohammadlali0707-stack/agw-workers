@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   relay:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       ACC1_PAT: ${{ secrets.ACC1_PAT }}
       ACC2_PAT: ${{ secrets.ACC2_PAT }}

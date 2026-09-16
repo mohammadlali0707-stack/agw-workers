@@ -79,7 +79,7 @@ permissions:
 
 jobs:
   lead:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

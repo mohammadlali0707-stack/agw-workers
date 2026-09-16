@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   retry:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 2
     env:
       ACC0_PAT: ${{ secrets.ACC0_PAT }}

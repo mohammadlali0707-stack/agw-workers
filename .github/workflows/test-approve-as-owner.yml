@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   approve:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 2
     env:
       ACC6_PAT: ${{ secrets.ACC6_PAT }}

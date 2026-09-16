@@ -43,7 +43,7 @@ concurrency:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
       parallel: ${{ steps.build.outputs.parallel }}
@@ -70,7 +70,7 @@ jobs:
 
   work:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Everything this job needs -- python, git, the agy binary -- is already
     # in the image, so there is no install step and nothing to cache. Pin
     # vars.TBS_WORKER_IMAGE to an IMMUTABLE tag (the sha the image workflow

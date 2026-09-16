@@ -37,7 +37,7 @@ permissions:
 
 jobs:
   check-marker:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
     outputs:
       match: ${{ steps.check.outputs.match }}
@@ -83,7 +83,7 @@ jobs:
 
   agy-same-repo:
     needs: [check-marker]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: >
       (github.event_name == 'issues' &&
         needs.check-marker.outputs.match == 'true' &&
