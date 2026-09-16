@@ -12,7 +12,9 @@ on:
 
 jobs:
   yaml-lint:
-    runs-on: self-hosted
+    # Gate runs on GitHub-hosted runners (ubuntu-latest) for ACC1-8 worker repos.
+    # Uses free GitHub minutes. No need for our self-hosted server for gates.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
