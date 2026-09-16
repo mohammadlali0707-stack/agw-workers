@@ -1,0 +1,282 @@
+name: AGY Issue Bot (cross-account dispatch + checklist)
+
+# Fixed 2026-09-14, two independent bugs, both measured live before being
+# fixed (not guessed):
+#
+# 1. GitHub Actions expression strings have NO escape sequences --
+#    endsWith(body, '@agy\n') matches the literal characters backslash-n,
+#    never a real trailing newline, so a real issue/comment body (which
+#    always ends in an actual newline once GitHub normalizes it) could
+#    never match. Replaced with a real bash check in a separate
+#    check-marker job, same pattern already used to fix this identical bug
+#    in Claud-Cloud-Project's and Mohammadlali/agw-workers's own copies of
+#    this file earlier the same day.
+# 2. `author_association == 'OWNER'` can never be true for issues this
+#    repo's own dashboard chat creates: status-dashboard/api/agy_create.js
+#    posts using AGY_CHAT_ACC0_PAT (the Mohammadlali account), which has NO
+#    relationship at all to this repo (owned by mohammadlali0707-stack) --
+#    confirmed by reading a real such issue (#8) back: author_association
+#    was "NONE", not even "COLLABORATOR" (unlike Claud-Cloud-Project, where
+#    the same PAT/repo-ownership combination reads back as COLLABORATOR).
+#    Rather than adding Mohammadlali as a collaborator on this repo (a real
+#    permissions change outside this fix's scope), trust by login name
+#    instead for that one known account, same as the existing
+#    `user.login == 'claude[bot]'` carve-out just below already does for
+#    comments.
+#
+# Fixed 2026-09-16: Cross-account dispatch was broken -- agw-worker.yml was
+# dispatched to THIS repo (ACC6) even when acc_index pointed to ACC1-8.
+# Now the worker is dispatched to the CHOSEN account's own agw-workers repo
+# using that account's PAT. This distributes load across all accounts'
+# own 2000 free minutes instead of exhausting only ACC6's quota.
+# Checklist + clean-report features also restored (safe now that repo is private).
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to process'
+        required: false
+
+permissions:
+  issues: write
+  actions: write
+  contents: read
+
+jobs:
+  check-marker:
+    runs-on: self-hosted
+    if: always()
+    outputs:
+      match: ${{ steps.check.outputs.match }}
+      target_repo: ${{ steps.check.outputs.target_repo }}
+      acc_index: ${{ steps.check.outputs.acc_index }}
+    steps:
+      - name: Check for a trailing @agy marker and extract project tag
+        id: check
+        env:
+          BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
+          TITLE: ${{ github.event.issue.title || '' }}
+        run: |
+          TRIMMED="$(printf '%s\n%s' "$TITLE" "$BODY" | sed -e 's/[[:space:]]*$//')"
+          LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
+          case "$LOWER" in
+            *"@agy")
+              echo "match=true" >> "$GITHUB_OUTPUT"
+
+              # Extract the project tag (word right before @agy)
+              PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy$' | awk '{print $1}')
+              TARGET_REPO=""
+
+              case "$PROJECT" in
+                ccp)       TARGET_REPO="mohammadlali0707-stack/Claud-Cloud-Project" ;;
+                cr)        TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
+                coffeenet) TARGET_REPO="mohammadlali0707-stack/AirboxVIP_Coffeenet" ;;
+                status)    TARGET_REPO="Mohammadlali/status-dashboard" ;;
+                *)         TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
+              esac
+
+              # Pick a random worker from ACC1-ACC8 (never ACC6 which hosts this repo,
+              # never ACC9 which is retired, never ACC0 which is reserved for the owner)
+              ACC_IDX=$(( (RANDOM % 7) + 1 ))
+              # Map: 1->1, 2->2, 3->3, 4->4, 5->5, 6->7, 7->8
+              if [ "$ACC_IDX" -ge 6 ]; then
+                ACC_IDX=$(( ACC_IDX + 1 ))
+              fi
+
+              echo "target_repo=$TARGET_REPO" >> "$GITHUB_OUTPUT"
+              echo "acc_index=$ACC_IDX" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "match=false" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+  agy-dispatch:
+    needs: [check-marker]
+    runs-on: self-hosted
+    if: >
+      (github.event_name == 'issues' &&
+        needs.check-marker.outputs.match == 'true' &&
+        (github.event.issue.author_association == 'OWNER' ||
+          github.event.issue.author_association == 'COLLABORATOR' ||
+          github.event.issue.user.login == 'Mohammadlali')
+      ) ||
+      (github.event_name == 'issue_comment' &&
+        needs.check-marker.outputs.match == 'true' &&
+        (
+          (github.event.comment.user.type != 'Bot' &&
+            (github.event.comment.author_association == 'OWNER' ||
+              github.event.comment.author_association == 'COLLABORATOR' ||
+              github.event.comment.user.login == 'Mohammadlali')
+          ) ||
+          github.event.comment.user.login == 'claude[bot]'
+        )
+      )
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Ack on the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
+          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "ðŸ¤– **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
+          
+          â³ The worker will shortly post its plan as a checklist on this issue..."
+
+      - name: Resolve account owner and PAT
+        id: resolve
+        env:
+          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
+        run: |
+          set -e
+          case "$ACC_IDX" in
+            0) OWNER="Mohammadlali";           DISPATCH_PAT="$ACC0_PAT" ;;
+            1) OWNER="momonakikugava-pixel";   DISPATCH_PAT="$ACC1_PAT" ;;
+            2) OWNER="lali94m-max";            DISPATCH_PAT="$ACC2_PAT" ;;
+            3) OWNER="ngocgminh5-debug";       DISPATCH_PAT="$ACC3_PAT" ;;
+            4) OWNER="hmmletssee7-design";     DISPATCH_PAT="$ACC4_PAT" ;;
+            5) OWNER="kidding602";             DISPATCH_PAT="$ACC5_PAT" ;;
+            7) OWNER="mohammad97okk";          DISPATCH_PAT="$ACC7_PAT" ;;
+            8) OWNER="moradzahra85-png";       DISPATCH_PAT="$ACC8_PAT" ;;
+            *) echo "::error::Invalid acc_index: $ACC_IDX"; exit 1 ;;
+          esac
+
+          if [ -z "$DISPATCH_PAT" ]; then
+            echo "::error::No PAT for acc_index=$ACC_IDX ($OWNER) -- check secrets"
+            exit 1
+          fi
+
+          echo "::add-mask::$DISPATCH_PAT"
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+          echo "dispatch_pat=$DISPATCH_PAT" >> "$GITHUB_OUTPUT"
+
+      - name: Build prompt (with checklist + clean-report instructions)
+        id: prompt
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          CONTROL_REPO: ${{ github.repository }}
+          TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
+          SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
+          SAFE_BODY=$(printf '%s' "$ISSUE_BODY" | sanitize)
+          SAFE_COMMENT=$(printf '%s' "$COMMENT_BODY" | sanitize)
+          {
+            printf '%s\n' "You are AGY, an AI worker. Your task comes from issue #${ISSUE_NUM} in the control repo ${CONTROL_REPO}."
+            printf '%s\n' "The TARGET repo where your final clean output should go is: ${TARGET_REPO}"
+            printf '%s\n' ""
+            printf 'TASK - Issue #%s: %s\n' "$ISSUE_NUM" "$SAFE_TITLE"
+            printf '%s\n' "$SAFE_BODY"
+            printf '%s\n' ""
+            printf '%s\n' "=== MANDATORY WORKFLOW ==="
+            printf '%s\n' "STEP 1 - PLAN (do this FIRST, before any other work):"
+            printf '%s\n' "  Use the GitHub CLI (gh) to post a comment on issue #${ISSUE_NUM} in repo ${CONTROL_REPO}."
+            printf '%s\n' "  The comment must contain your plan as a checklist, for example:"
+            printf '%s\n' "  ## ðŸ—‚ï¸ My Plan"
+            printf '%s\n' "  - [ ] Step 1: ..."
+            printf '%s\n' "  - [ ] Step 2: ..."
+            printf '%s\n' "  - [ ] Step 3: ..."
+            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## ðŸ—‚ï¸ My Plan\n- [ ] ...'"
+            printf '%s\n' ""
+            printf '%s\n' "STEP 2 - EXECUTE: Do the actual work. As you finish each item, update the checklist"
+            printf '%s\n' "  by editing your previous comment (use gh issue comment <id> --edit) and change [ ] to [x]."
+            printf '%s\n' "  You can also add sub-comments for important progress updates."
+            printf '%s\n' ""
+            printf '%s\n' "STEP 3 - CLEAN REPORT: When ALL checklist items are done:"
+            printf '%s\n' "  a) Push the final, clean code/files to the TARGET repo: ${TARGET_REPO}"
+            printf '%s\n' "  b) Create a file called 'Reports/walkthrough-${ISSUE_NUM}.md' in ${TARGET_REPO}"
+            printf '%s\n' "     with a clean summary of what was done (no debug logs, just the important decisions and results)."
+            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a âœ… summary and"
+            printf '%s\n' "     a link to the walkthrough file you created."
+            printf '%s\n' ""
+            printf '%s\n' "=== END MANDATORY WORKFLOW ==="
+            printf '%s\n' ""
+            printf '%s\n' 'If this task needs an image or video asset, do not try to generate it yourself. Print a line starting exactly with ##MEDIA_REQUEST## followed by a one-line description of what is needed, then continue without waiting for it.'
+            if [ -n "$SAFE_COMMENT" ]; then
+              printf '%s\n' 'LATEST COMMENT:'
+              printf '%s\n' "$SAFE_COMMENT"
+            fi
+          } > /tmp/prompt.txt
+          echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Check billing and choose runner type
+        id: runner-check
+        env:
+          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
+          DISPATCH_PAT: ${{ steps.resolve.outputs.dispatch_pat }}
+          DISPATCH_OWNER: ${{ steps.resolve.outputs.owner }}
+        run: |
+          # ACC0 and ACC6 always use self-hosted (our server)
+          if [ "$ACC_IDX" = "0" ] || [ "$ACC_IDX" = "6" ]; then
+            echo "runner_type=self-hosted" >> "$GITHUB_OUTPUT"
+            echo "ACC${ACC_IDX} -> self-hosted (always)"
+            exit 0
+          fi
+
+          # For ACC1-5 and ACC7-8: check GitHub Actions billing minutes
+          BILLING=$(curl -s \
+            -H "Authorization: Bearer $DISPATCH_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${DISPATCH_OWNER}/settings/billing/actions" 2>/dev/null || echo '{}')
+
+          INCLUDED=$(echo "$BILLING" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('included_minutes',0))" 2>/dev/null || echo "0")
+          USED=$(echo "$BILLING" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('total_minutes_used',0))" 2>/dev/null || echo "0")
+          REMAINING=$((INCLUDED - USED))
+
+          echo "ACC${ACC_IDX} billing: included=${INCLUDED} used=${USED} remaining=${REMAINING}"
+
+          # Threshold: if <50 minutes left, use self-hosted as fallback
+          if [ "$REMAINING" -lt 50 ] 2>/dev/null; then
+            echo "runner_type=self-hosted" >> "$GITHUB_OUTPUT"
+            echo "ACC${ACC_IDX} -> self-hosted (low minutes: ${REMAINING} left)"
+          else
+            echo "runner_type=ubuntu-latest" >> "$GITHUB_OUTPUT"
+            echo "ACC${ACC_IDX} -> ubuntu-latest (${REMAINING} minutes remaining)"
+          fi
+
+      - name: Dispatch agw-worker.yml in the CHOSEN account's own repo
+        env:
+          GH_TOKEN: ${{ steps.resolve.outputs.dispatch_pat }}
+          DISPATCH_OWNER: ${{ steps.resolve.outputs.owner }}
+          TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
+          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          RUNNER_TYPE: ${{ steps.runner-check.outputs.runner_type }}
+        run: |
+          PROMPT=$(cat /tmp/prompt.txt)
+          WORKER_REPO="${DISPATCH_OWNER}/agw-workers"
+
+          echo "Dispatching to ${WORKER_REPO} (ACC${ACC_IDX}) runner=${RUNNER_TYPE} target=${TARGET_REPO}"
+
+          gh workflow run agw-worker.yml \
+            --repo "$WORKER_REPO" \
+            --field "prompt=$PROMPT" \
+            --field "target_repo=$TARGET_REPO" \
+            --field "target_branch=" \
+            --field "acc_index=$ACC_IDX" \
+            --field "issue_number=${{ github.event.issue.number }}" \
+            --field "target_repo_pat=$ACC6_PAT" \
+            --field "callback_repo=${{ github.repository }}" \
+            --field "runner_type=$RUNNER_TYPE" \
+            --field "callback_id=issue-${{ github.event.issue.number }}-acc${ACC_IDX}-${{ github.run_id }}"
