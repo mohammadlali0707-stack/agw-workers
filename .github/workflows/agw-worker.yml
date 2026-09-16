@@ -47,6 +47,11 @@ on:
         required: false
         default: ''
         type: string
+      callback_repo:
+        description: 'CROSS-ACCOUNT MODE: owner/repo of the control repo where the triggering issue lives (e.g. mohammadlali0707-stack/agw-workers). Empty = use GITHUB_REPOSITORY (same-repo mode).'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -332,6 +337,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
+          CALLBACK_REPO: ${{ inputs.callback_repo }}
         run: |
           set +e
           if [ -z "$ISSUE_NUMBER" ]; then
@@ -348,7 +354,9 @@ jobs:
           else
             cp /tmp/agy_output.txt /tmp/agy_comment.txt
           fi
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/agy_comment.txt
+          TARGET_REPO="${CALLBACK_REPO:-$GITHUB_REPOSITORY}"
+          echo "Posting comment to issue #$ISSUE_NUMBER in $TARGET_REPO"
+          gh issue comment "$ISSUE_NUMBER" --repo "$TARGET_REPO" --body-file /tmp/agy_comment.txt
 
       - name: Push changes made by the agent
         if: steps.checkout_target.outputs.has_repo == 'true'
@@ -474,4 +482,5 @@ jobs:
           if [ -n "${{ inputs.issue_number }}" ]; then
             echo "- **Issue comment:** posted to issue #${{ inputs.issue_number }} in this repo" >> $GITHUB_STEP_SUMMARY
           fi
+
 
