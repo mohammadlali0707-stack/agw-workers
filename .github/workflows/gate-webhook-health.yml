@@ -8,7 +8,7 @@ on:
 
 jobs:
   webhook-health:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       EXPECTED_URL: "https://n8n.airboxvip.top/webhook/github-runner-trigger"
