@@ -131,9 +131,9 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "🤖 **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
+            --body "ðŸ¤– **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
           
-          ⏳ The worker will shortly post its plan as a checklist on this issue..."
+          â³ The worker will shortly post its plan as a checklist on this issue..."
 
       - name: Resolve account owner and PAT
         id: resolve
@@ -188,11 +188,11 @@ jobs:
             printf '%s\n' "STEP 1 - PLAN (do this FIRST, before any other work):"
             printf '%s\n' "  Use the GitHub CLI (gh) to post a comment on issue #${ISSUE_NUM} in repo ${CONTROL_REPO}."
             printf '%s\n' "  The comment must contain your plan as a checklist, for example:"
-            printf '%s\n' "  ## 🗂️ My Plan"
+            printf '%s\n' "  ## ðŸ—‚ï¸ My Plan"
             printf '%s\n' "  - [ ] Step 1: ..."
             printf '%s\n' "  - [ ] Step 2: ..."
             printf '%s\n' "  - [ ] Step 3: ..."
-            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## 🗂️ My Plan\n- [ ] ...'"
+            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## ðŸ—‚ï¸ My Plan\n- [ ] ...'"
             printf '%s\n' ""
             printf '%s\n' "STEP 2 - EXECUTE: Do the actual work. As you finish each item, update the checklist"
             printf '%s\n' "  by editing your previous comment (use gh issue comment <id> --edit) and change [ ] to [x]."
@@ -202,7 +202,7 @@ jobs:
             printf '%s\n' "  a) Push the final, clean code/files to the TARGET repo: ${TARGET_REPO}"
             printf '%s\n' "  b) Create a file called 'Reports/walkthrough-${ISSUE_NUM}.md' in ${TARGET_REPO}"
             printf '%s\n' "     with a clean summary of what was done (no debug logs, just the important decisions and results)."
-            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a ✅ summary and"
+            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a âœ… summary and"
             printf '%s\n' "     a link to the walkthrough file you created."
             printf '%s\n' ""
             printf '%s\n' "=== END MANDATORY WORKFLOW ==="
@@ -215,6 +215,41 @@ jobs:
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
 
+      - name: Check billing and choose runner type
+        id: runner-check
+        env:
+          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
+          DISPATCH_PAT: ${{ steps.resolve.outputs.dispatch_pat }}
+          DISPATCH_OWNER: ${{ steps.resolve.outputs.owner }}
+        run: |
+          # ACC0 and ACC6 always use self-hosted (our server)
+          if [ "$ACC_IDX" = "0" ] || [ "$ACC_IDX" = "6" ]; then
+            echo "runner_type=self-hosted" >> "$GITHUB_OUTPUT"
+            echo "ACC${ACC_IDX} -> self-hosted (always)"
+            exit 0
+          fi
+
+          # For ACC1-5 and ACC7-8: check GitHub Actions billing minutes
+          BILLING=$(curl -s \
+            -H "Authorization: Bearer $DISPATCH_PAT" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/${DISPATCH_OWNER}/settings/billing/actions" 2>/dev/null || echo '{}')
+
+          INCLUDED=$(echo "$BILLING" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('included_minutes',0))" 2>/dev/null || echo "0")
+          USED=$(echo "$BILLING" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('total_minutes_used',0))" 2>/dev/null || echo "0")
+          REMAINING=$((INCLUDED - USED))
+
+          echo "ACC${ACC_IDX} billing: included=${INCLUDED} used=${USED} remaining=${REMAINING}"
+
+          # Threshold: if <50 minutes left, use self-hosted as fallback
+          if [ "$REMAINING" -lt 50 ] 2>/dev/null; then
+            echo "runner_type=self-hosted" >> "$GITHUB_OUTPUT"
+            echo "ACC${ACC_IDX} -> self-hosted (low minutes: ${REMAINING} left)"
+          else
+            echo "runner_type=ubuntu-latest" >> "$GITHUB_OUTPUT"
+            echo "ACC${ACC_IDX} -> ubuntu-latest (${REMAINING} minutes remaining)"
+          fi
+
       - name: Dispatch agw-worker.yml in the CHOSEN account's own repo
         env:
           GH_TOKEN: ${{ steps.resolve.outputs.dispatch_pat }}
@@ -222,11 +257,12 @@ jobs:
           TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
           ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
           ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          RUNNER_TYPE: ${{ steps.runner-check.outputs.runner_type }}
         run: |
           PROMPT=$(cat /tmp/prompt.txt)
           WORKER_REPO="${DISPATCH_OWNER}/agw-workers"
 
-          echo "Dispatching to ${WORKER_REPO} (ACC${ACC_IDX}) for target ${TARGET_REPO}"
+          echo "Dispatching to ${WORKER_REPO} (ACC${ACC_IDX}) runner=${RUNNER_TYPE} target=${TARGET_REPO}"
 
           gh workflow run agw-worker.yml \
             --repo "$WORKER_REPO" \
@@ -237,4 +273,5 @@ jobs:
             --field "issue_number=${{ github.event.issue.number }}" \
             --field "target_repo_pat=$ACC6_PAT" \
             --field "callback_repo=${{ github.repository }}" \
+            --field "runner_type=$RUNNER_TYPE" \
             --field "callback_id=issue-${{ github.event.issue.number }}-acc${ACC_IDX}-${{ github.run_id }}"
