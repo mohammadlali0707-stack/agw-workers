@@ -52,6 +52,11 @@ on:
         required: false
         default: ''
         type: string
+      runner_type:
+        description: 'Runner to use: ubuntu-latest (GitHub-hosted, free minutes) or self-hosted (our server). Set automatically by agy-issue-bot based on billing check. Empty = auto (self-hosted for ACC0/ACC6, ubuntu-latest for others).'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -59,7 +64,11 @@ permissions:
 
 jobs:
   run-agy:
-    runs-on: self-hosted
+    # runner_type input: set by agy-issue-bot after billing check.
+    # ACC0 (Mohammadlali) and ACC6 (mohammadlali0707-stack) always self-hosted.
+    # ACC1-5, ACC7-8 default to ubuntu-latest (GitHub free minutes) unless
+    # agy-issue-bot detected low quota and passed runner_type=self-hosted.
+    runs-on: ${{ inputs.runner_type != '' && inputs.runner_type || (github.repository_owner == 'mohammadlali0707-stack' && 'self-hosted') || (github.repository_owner == 'Mohammadlali' && 'self-hosted') || 'ubuntu-latest' }}
     # 30 was enough for one attempt; a same-run retry needs headroom too. A
     # quota/rate-limit rejection surfaces near-instantly, so this only bites
     # in the rare case where attempt 1 burns real time before failing.
