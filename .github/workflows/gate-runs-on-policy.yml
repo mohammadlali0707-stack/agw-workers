@@ -1,0 +1,76 @@
+name: Gate 4 -- runs-on Policy Enforcer
+
+# Rule: self-hosted runners are ONLY allowed in:
+#   - agw-worker.yml        (actual AGY binary execution)
+#   - gate-runner-deps.yml  (specifically checks runner-installed tools)
+# All other workflows MUST use ubuntu-latest (or another GitHub-hosted runner).
+#
+# Root cause this prevents:
+#   Using self-hosted in dispatch/bot/gate workflows causes zombie runner
+#   accumulation, 409 conflicts, and silent trigger failures.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**.yml'
+      - '.github/workflows/**.yaml'
+  pull_request:
+    paths:
+      - '.github/workflows/**.yml'
+      - '.github/workflows/**.yaml'
+  workflow_dispatch:
+
+jobs:
+  runs-on-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enforce runs-on policy
+        run: |
+          echo "=== runs-on Policy Gate ==="
+          echo "Rule: self-hosted only allowed in: agw-worker.yml, gate-runner-deps.yml"
+          echo ""
+
+          FAILED=0
+          ALLOWED_SELFHOSTED="agw-worker.yml gate-runner-deps.yml"
+
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -f "$f" ] || continue
+            BASENAME=$(basename "$f")
+
+            # Check if this file contains self-hosted
+            if grep -q "runs-on:.*self-hosted\|runs-on:.*\[.*self-hosted" "$f"; then
+              # Is it in the allowed list?
+              ALLOWED=false
+              for allowed in $ALLOWED_SELFHOSTED; do
+                if [ "$BASENAME" = "$allowed" ]; then
+                  ALLOWED=true
+                  break
+                fi
+              done
+
+              if [ "$ALLOWED" = "true" ]; then
+                echo "  âœ… $BASENAME â€” self-hosted ALLOWED (in whitelist)"
+              else
+                echo "  âŒ $BASENAME â€” self-hosted NOT ALLOWED"
+                echo "     This workflow does not need a self-hosted runner."
+                echo "     Change 'runs-on: self-hosted' to 'runs-on: ubuntu-latest'"
+                echo "     Reason: Only agw-worker.yml and gate-runner-deps.yml may"
+                echo "             use self-hosted. All other workflows must use"
+                echo "             GitHub-hosted runners to avoid zombie runner issues."
+                FAILED=1
+              fi
+            else
+              echo "  âœ… $BASENAME â€” uses GitHub-hosted runner"
+            fi
+          done
+
+          echo ""
+          if [ "$FAILED" -eq 1 ]; then
+            echo "âŒ Policy violation: one or more workflows use self-hosted illegally."
+            echo "   Fix: change runs-on to ubuntu-latest in the files above."
+            exit 1
+          else
+            echo "âœ… All workflows comply with runs-on policy."
+          fi
