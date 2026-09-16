@@ -131,9 +131,9 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "🤖 **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
+            --body "ðŸ¤– **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
           
-          ⏳ The worker will shortly post its plan as a checklist on this issue..."
+          â³ The worker will shortly post its plan as a checklist on this issue..."
 
       - name: Resolve account owner and PAT
         id: resolve
@@ -188,11 +188,11 @@ jobs:
             printf '%s\n' "STEP 1 - PLAN (do this FIRST, before any other work):"
             printf '%s\n' "  Use the GitHub CLI (gh) to post a comment on issue #${ISSUE_NUM} in repo ${CONTROL_REPO}."
             printf '%s\n' "  The comment must contain your plan as a checklist, for example:"
-            printf '%s\n' "  ## 🗂️ My Plan"
+            printf '%s\n' "  ## ðŸ—‚ï¸ My Plan"
             printf '%s\n' "  - [ ] Step 1: ..."
             printf '%s\n' "  - [ ] Step 2: ..."
             printf '%s\n' "  - [ ] Step 3: ..."
-            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## 🗂️ My Plan\n- [ ] ...'"
+            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## ðŸ—‚ï¸ My Plan\n- [ ] ...'"
             printf '%s\n' ""
             printf '%s\n' "STEP 2 - EXECUTE: Do the actual work. As you finish each item, update the checklist"
             printf '%s\n' "  by editing your previous comment (use gh issue comment <id> --edit) and change [ ] to [x]."
@@ -202,7 +202,7 @@ jobs:
             printf '%s\n' "  a) Push the final, clean code/files to the TARGET repo: ${TARGET_REPO}"
             printf '%s\n' "  b) Create a file called 'Reports/walkthrough-${ISSUE_NUM}.md' in ${TARGET_REPO}"
             printf '%s\n' "     with a clean summary of what was done (no debug logs, just the important decisions and results)."
-            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a ✅ summary and"
+            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a âœ… summary and"
             printf '%s\n' "     a link to the walkthrough file you created."
             printf '%s\n' ""
             printf '%s\n' "=== END MANDATORY WORKFLOW ==="
@@ -236,4 +236,6 @@ jobs:
             --field "acc_index=$ACC_IDX" \
             --field "issue_number=${{ github.event.issue.number }}" \
             --field "target_repo_pat=$ACC6_PAT" \
+            --field "callback_repo=${{ github.repository }}" \
             --field "callback_id=issue-${{ github.event.issue.number }}-acc${ACC_IDX}-${{ github.run_id }}"
+
