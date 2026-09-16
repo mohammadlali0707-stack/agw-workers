@@ -1,0 +1,132 @@
+name: Dispatch New Gate (agw-workers)
+
+# Adapted from CCP/dispatch-new-gate.yml for agw-workers GitHub Actions gate convention.
+# Gates here are GitHub Actions WORKFLOW files (gate-*.yml), NOT Python Tools/ scripts.
+# Creates a well-specified @agy issue to build and deploy a new workflow gate.
+#
+# Gate format here: .github/workflows/gate-*.yml (runs on ubuntu-latest, push trigger)
+# Reference gates: gate-yaml-lint.yml, gate-runs-on-policy.yml, gate-webhook-health.yml
+
+on:
+  workflow_dispatch:
+    inputs:
+      gate_name:
+        description: 'Gate workflow filename, e.g. gate-something.yml (gate- prefix is standard)'
+        required: true
+        type: string
+      problem_description:
+        description: 'Real incident, run ID, or concrete gap motivating this gate (never invented)'
+        required: true
+        type: string
+      what_to_check:
+        description: 'Plain description of the condition/contract the gate should enforce'
+        required: true
+        type: string
+      deploy_to_all_repos:
+        description: 'Deploy to all 9 agw-workers repos? (yes/no)'
+        required: false
+        default: 'yes'
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  dispatch-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Build issue prompt and open @agy issue
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          REPO: ${{ github.repository }}
+          INPUT_GATE_NAME: ${{ inputs.gate_name }}
+          INPUT_PROBLEM_DESC: ${{ inputs.problem_description }}
+          INPUT_WHAT_TO_CHECK: ${{ inputs.what_to_check }}
+          INPUT_DEPLOY_ALL: ${{ inputs.deploy_to_all_repos }}
+        run: |
+          set -euo pipefail
+
+          # Normalize gate name
+          GATE_NAME="$INPUT_GATE_NAME"
+          GATE_NAME="${GATE_NAME#.github/workflows/}"
+          if [[ "$GATE_NAME" != *.yml ]]; then GATE_NAME="${GATE_NAME}.yml"; fi
+          if [[ "$GATE_NAME" != gate-* ]]; then GATE_NAME="gate-${GATE_NAME}"; fi
+
+          PROBLEM_DESC="$(printf '%s' "$INPUT_PROBLEM_DESC" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "$PROBLEM_DESC" ]; then
+            PROBLEM_DESC="WARNING: No motivating incident provided. Every gate requires a real incident or concrete gap. Identify the real incident before building."
+          fi
+
+          BODY_FILE="/tmp/issue_body.txt"
+          : > "$BODY_FILE"
+
+          {
+            printf '%s\n' "@agy Build a new GitHub Actions gate \`.github/workflows/${GATE_NAME}\` for this agw-workers repository."
+            printf '%s\n' ''
+            printf '%s\n' '## Task Overview'
+            printf '%s\n' ''
+            printf '%s\n' "Build and deploy a new workflow gate \`.github/workflows/${GATE_NAME}\` following the agw-workers gate convention."
+            printf '%s\n' ''
+            printf '%s\n' '## Motivating Incident / Problem Description'
+            printf '%s\n' ''
+            printf '%s\n' "$PROBLEM_DESC"
+            printf '%s\n' ''
+            printf '%s\n' '## What to Check'
+            printf '%s\n' ''
+            printf '%s\n' "$INPUT_WHAT_TO_CHECK"
+            printf '%s\n' ''
+            printf '%s\n' '## agw-workers Gate Convention'
+            printf '%s\n' ''
+            printf '%s\n' 'Read these existing gates as reference:'
+            printf '%s\n' '1. `.github/workflows/gate-yaml-lint.yml` â€” multi-step YAML + safety checks'
+            printf '%s\n' '2. `.github/workflows/gate-runs-on-policy.yml` â€” single bash check with clear pass/fail'
+            printf '%s\n' '3. `.github/workflows/gate-webhook-health.yml` â€” scheduled + manual trigger pattern'
+            printf '%s\n' ''
+            printf '%s\n' '## What the Gate Workflow Must Contain'
+            printf '%s\n' ''
+            printf '%s\n' "1. **File**: \`.github/workflows/${GATE_NAME}\`"
+            printf '%s\n' '   - `name:` must start with "Gate N --" (pick the next available number)'
+            printf '%s\n' '   - `runs-on: ubuntu-latest` â€” NEVER self-hosted (see gate-runs-on-policy.yml)'
+            printf '%s\n' '   - Trigger: `push` with `paths:` filter AND/OR `schedule:` as appropriate'
+            printf '%s\n' '   - Clear âœ… / âŒ output with `exit 1` on failure'
+            printf '%s\n' '   - `timeout-minutes: 10` on every job'
+            printf '%s\n' ''
+            printf '%s\n' '2. **Self-hosted rule**: The new gate MUST use `ubuntu-latest`.'
+            printf '%s\n' '   Only `agw-worker.yml` and `gate-runner-deps.yml` may use `self-hosted`.'
+            printf '%s\n' '   Verify gate-runs-on-policy.yml does not need whitelist update.'
+            printf '%s\n' ''
+            if [ "$INPUT_DEPLOY_ALL" = "yes" ]; then
+              printf '%s\n' '3. **Deploy to all repos**: After building the gate, deploy it to all 9 agw-workers repos:'
+              printf '%s\n' '   ACC0: Mohammadlali/agw-workers'
+              printf '%s\n' '   ACC1: momonakikugava-pixel/agw-workers'
+              printf '%s\n' '   ACC2: lali94m-max/agw-workers'
+              printf '%s\n' '   ACC3: ngocgminh5-debug/agw-workers'
+              printf '%s\n' '   ACC4: hmmletssee7-design/agw-workers'
+              printf '%s\n' '   ACC5: kidding602/agw-workers'
+              printf '%s\n' '   ACC6: mohammadlali0707-stack/agw-workers (this repo)'
+              printf '%s\n' '   ACC7: mohammad97okk/agw-workers'
+              printf '%s\n' '   ACC8: moradzahra85-png/agw-workers'
+              printf '%s\n' '   Use the GitHub Contents API with each account PAT (from secrets ACC0_PAT..ACC8_PAT).'
+              printf '%s\n' ''
+            fi
+            printf '%s\n' '## Execution Instructions'
+            printf '%s\n' ''
+            printf '%s\n' '- STEP 0: Read the 3 reference gates listed above. Post planning checklist as comment.'
+            printf '%s\n' '- STEP 1: Build the gate workflow file.'
+            printf '%s\n' '- STEP 2: Test by running workflow_dispatch manually and confirming âœ… pass.'
+            printf '%s\n' '- STEP 3: Deploy to target repos (all 9 if requested).'
+            printf '%s\n' '- STEP 4: Post final report with confirmation of all repos updated.'
+          } > "$BODY_FILE"
+
+          TITLE="Build workflow gate: ${GATE_NAME}"
+          echo "Creating @agy issue in ${REPO}..."
+          ISSUE_URL=$(gh issue create \
+            --repo "$REPO" \
+            --title "$TITLE" \
+            --body-file "$BODY_FILE")
+          echo "Created: $ISSUE_URL"
