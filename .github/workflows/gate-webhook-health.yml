@@ -1,0 +1,114 @@
+name: Gate 2 -- Webhook Health Checker
+
+on:
+  schedule:
+    # Every hour
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  webhook-health:
+    runs-on: self-hosted
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      EXPECTED_URL: "https://n8n.airboxvip.top/webhook/github-runner-trigger"
+      REQUIRED_EVENTS: "issues issue_comment workflow_job"
+    steps:
+      - name: Check GitHub webhooks are correctly configured
+        run: |
+          set -e
+          echo "=== Webhook Health Gate ==="
+          REPO="${GITHUB_REPOSITORY}"
+          FAILED=0
+
+          HOOKS=$(gh api "repos/$REPO/hooks")
+          HOOK_COUNT=$(echo "$HOOKS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
+          echo "Found $HOOK_COUNT webhook(s)"
+
+          echo "$HOOKS" | python3 - <<'EOF'
+          import sys, json, os
+
+          hooks = json.load(sys.stdin)
+          expected_url = os.environ['EXPECTED_URL']
+          required_events = os.environ['REQUIRED_EVENTS'].split()
+          failed = False
+
+          for hook in hooks:
+              url = hook['config'].get('url', '')
+              events = hook.get('events', [])
+              active = hook.get('active', False)
+              hook_id = hook['id']
+
+              print(f"\nHook #{hook_id}: {url}")
+
+              # Check 1: No test URLs in production
+              if '/webhook-test/' in url:
+                  print(f"  âŒ FAIL: Uses webhook-test URL (not production!)")
+                  failed = True
+              else:
+                  print(f"  âœ… URL is production")
+
+              # Check 2: Must point to correct n8n URL
+              if url != expected_url and 'n8n' in url:
+                  print(f"  âŒ FAIL: URL mismatch. Expected: {expected_url}")
+                  failed = True
+
+              # Check 3: Required events must be present
+              missing = [e for e in required_events if e not in events]
+              if missing:
+                  print(f"  âŒ FAIL: Missing events: {missing}")
+                  failed = True
+              else:
+                  print(f"  âœ… All required events present: {events}")
+
+              # Check 4: Must be active
+              if not active:
+                  print(f"  âŒ FAIL: Webhook is inactive!")
+                  failed = True
+
+          if failed:
+              print("\nâŒ WEBHOOK HEALTH CHECK FAILED")
+              sys.exit(1)
+          else:
+              print("\nâœ… All webhooks are healthy")
+          EOF
+
+      - name: Verify webhook endpoint is reachable
+        run: |
+          echo "=== Checking n8n endpoint reachability ==="
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "$EXPECTED_URL" \
+            -H "Content-Type: application/json" \
+            -d '{"action":"health_check","test":true}' \
+            --max-time 10 2>/dev/null || echo "000")
+          
+          # n8n returns 200 (processed) or 400 (bad payload but reachable) = OK
+          # 000 = unreachable, 404 = wrong path, 503 = down
+          if [ "$STATUS" = "000" ] || [ "$STATUS" = "404" ] || [ "$STATUS" = "503" ]; then
+            echo "âŒ n8n endpoint unreachable or wrong (HTTP $STATUS)"
+            exit 1
+          else
+            echo "âœ… n8n endpoint reachable (HTTP $STATUS)"
+          fi
+
+      - name: Post alert if webhook health fails
+        if: failure()
+        run: |
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ðŸš¨ Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
+            --body "## Webhook Health Check Failed
+
+          The automated webhook health gate detected a problem.
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          **Common causes:**
+          - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
+          - Missing required events (issues, issue_comment, workflow_job)
+          - n8n server is down
+          - Webhook was accidentally deleted or deactivated
+
+          **Fix:** Review and update the webhook at:
+          https://github.com/${{ github.repository }}/settings/hooks" \
+            --label "alert"
