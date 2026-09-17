@@ -105,12 +105,28 @@ jobs:
 
           def check_2_python_inline_yaml_indent(filepath, lines):
               """python3 -c at wrong indent → YAML block terminates early → name=path bug"""
+              # The marker is ASSEMBLED, never written out, so this gate cannot
+              # match its own source. It did: the guard below and the fix above
+              # both contained the literal, and scanning this file reported 70
+              # phantom findings against its own code.
+              PY_C = "python3 " + "-c "
               errors = []
               for i, raw_line in enumerate(lines, 1):
                   line = raw_line.rstrip()
-                  if 'python3 -c "' not in line and "python3 -c '" not in line:
+                  if PY_C + '"' not in line and PY_C + "'" not in line:
                       continue
                   py_cmd_indent = len(line) - len(line.lstrip())
+                  # Only an UNCLOSED quote opens a continuation block. A command that
+                  # closes its own quote on the same line opens nothing, and neither
+                  # does a line where `python3 -c ` is just text (this gate mentions
+                  # it in its own message string). Without this the scan never finds
+                  # a closing quote, runs to EOF, and reports every later line that
+                  # is less indented: 12 findings against `fi`/`done`/`sleep 15` in
+                  # test-agy-chat-live.yml, and 70 more against this very file.
+                  after = line.split(PY_C, 1)[-1]
+                  quote = after[:1]
+                  if quote not in ('"', "'") or quote in after[1:]:
+                      continue
                   j = i
                   while j < len(lines):
                       next_raw = lines[j]
