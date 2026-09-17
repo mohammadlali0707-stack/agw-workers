@@ -43,31 +43,31 @@ jobs:
 
               # Check 1: No test URLs in production
               if '/webhook-test/' in url:
-                  print(f"  âŒ FAIL: Uses webhook-test URL (not production!)")
+                  print(f"  âŒ FAIL: Uses webhook-test URL (not production!)")
                   failed = True
               else:
                   print(f"  âœ… URL is production")
 
               # Check 2: Must point to correct n8n URL
               if url != expected_url and 'n8n' in url:
-                  print(f"  âŒ FAIL: URL mismatch. Expected: {expected_url}")
+                  print(f"  âŒ FAIL: URL mismatch. Expected: {expected_url}")
                   failed = True
 
               # Check 3: Required events must be present
               missing = [e for e in required_events if e not in events]
               if missing:
-                  print(f"  âŒ FAIL: Missing events: {missing}")
+                  print(f"  âŒ FAIL: Missing events: {missing}")
                   failed = True
               else:
                   print(f"  âœ… All required events present: {events}")
 
               # Check 4: Must be active
               if not active:
-                  print(f"  âŒ FAIL: Webhook is inactive!")
+                  print(f"  âŒ FAIL: Webhook is inactive!")
                   failed = True
 
           if failed:
-              print("\nâŒ WEBHOOK HEALTH CHECK FAILED")
+              print("\nâŒ WEBHOOK HEALTH CHECK FAILED")
               sys.exit(1)
           else:
               print("\nâœ… All webhooks are healthy")
@@ -85,7 +85,7 @@ jobs:
           # n8n returns 200 (processed) or 400 (bad payload but reachable) = OK
           # 000 = unreachable, 404 = wrong path, 503 = down
           if [ "$STATUS" = "000" ] || [ "$STATUS" = "404" ] || [ "$STATUS" = "503" ]; then
-            echo "âŒ n8n endpoint unreachable or wrong (HTTP $STATUS)"
+            echo "âŒ n8n endpoint unreachable or wrong (HTTP $STATUS)"
             exit 1
           else
             echo "âœ… n8n endpoint reachable (HTTP $STATUS)"

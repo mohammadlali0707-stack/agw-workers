@@ -136,9 +136,9 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "ðŸ¤– **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
+            --body "ðŸ¤� **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
           
-          â³ The worker will shortly post its plan as a checklist on this issue..."
+          â³ The worker will shortly post its plan as a checklist on this issue..."
 
       - name: Resolve account owner and PAT
         id: resolve
@@ -193,11 +193,11 @@ jobs:
             printf '%s\n' "STEP 1 - PLAN (do this FIRST, before any other work):"
             printf '%s\n' "  Use the GitHub CLI (gh) to post a comment on issue #${ISSUE_NUM} in repo ${CONTROL_REPO}."
             printf '%s\n' "  The comment must contain your plan as a checklist, for example:"
-            printf '%s\n' "  ## ðŸ—‚ï¸ My Plan"
+            printf '%s\n' "  ## ðŸ��ï¸ My Plan"
             printf '%s\n' "  - [ ] Step 1: ..."
             printf '%s\n' "  - [ ] Step 2: ..."
             printf '%s\n' "  - [ ] Step 3: ..."
-            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## ðŸ—‚ï¸ My Plan\n- [ ] ...'"
+            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## ðŸ��ï¸ My Plan\n- [ ] ...'"
             printf '%s\n' ""
             printf '%s\n' "STEP 2 - EXECUTE: Do the actual work. As you finish each item, update the checklist"
             printf '%s\n' "  by editing your previous comment (use gh issue comment <id> --edit) and change [ ] to [x]."

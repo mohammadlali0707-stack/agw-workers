@@ -41,7 +41,7 @@ jobs:
               VERSION=$("$tool" --version 2>&1 | head -1)
               echo "  âœ… $tool: $VERSION"
             else
-              echo "  âŒ $tool: NOT FOUND"
+              echo "  âŒ $tool: NOT FOUND"
               FAILED=1
             fi
           }
@@ -64,13 +64,13 @@ jobs:
           if gh auth status 2>&1 | grep -q "Logged in"; then
             echo "  âœ… gh is authenticated"
           else
-            echo "  âŒ gh is NOT authenticated (required for issue comments)"
+            echo "  âŒ gh is NOT authenticated (required for issue comments)"
             FAILED=1
           fi
 
           if [ "$FAILED" -eq 1 ]; then
             echo ""
-            echo "âŒ Runner is missing required dependencies"
+            echo "âŒ Runner is missing required dependencies"
             echo "Fix: Install missing tools on the runner host (185.204.171.61)"
             echo "  sudo apt-get install gh git python3 curl"
             exit 1
@@ -95,14 +95,14 @@ jobs:
           try:
               fields = json.loads(fields_json)
           except json.JSONDecodeError as e:
-              print(f"âŒ Invalid JSON in dispatch_fields: {e}")
+              print(f"âŒ Invalid JSON in dispatch_fields: {e}")
               sys.exit(1)
 
           failed = False
 
           # Rule 1: If issue_number is present, callback_repo must also be present
           if fields.get('issue_number') and not fields.get('callback_repo'):
-              print("âŒ SCHEMA VIOLATION: 'issue_number' is set but 'callback_repo' is missing!")
+              print("âŒ SCHEMA VIOLATION: 'issue_number' is set but 'callback_repo' is missing!")
               print("   Without callback_repo, the worker will post the comment to the wrong repo.")
               print("   Add: --field \"callback_repo=${{ github.repository }}\"")
               failed = True
@@ -113,7 +113,7 @@ jobs:
           callback_repo = fields.get('callback_repo', '')
           worker_repo = fields.get('worker_repo', '')
           if callback_repo and worker_repo and callback_repo == worker_repo:
-              print(f"âŒ SCHEMA VIOLATION: callback_repo == worker_repo ({callback_repo})")
+              print(f"âŒ SCHEMA VIOLATION: callback_repo == worker_repo ({callback_repo})")
               print("   This means the comment will post to the worker's own repo, not the control repo.")
               failed = True
 
@@ -123,15 +123,15 @@ jobs:
               try:
                   idx = int(acc_index)
                   if idx == 6:
-                      print(f"âš ï¸  WARNING: acc_index=6 dispatches to ACC6 (control repo account)")
+                      print(f"âš ï¸  WARNING: acc_index=6 dispatches to ACC6 (control repo account)")
                   if idx == 9:
-                      print(f"âŒ SCHEMA VIOLATION: acc_index=9 (ACC9 is retired, never use it)")
+                      print(f"âŒ SCHEMA VIOLATION: acc_index=9 (ACC9 is retired, never use it)")
                       failed = True
                   if idx < 0 or idx > 9:
-                      print(f"âŒ SCHEMA VIOLATION: acc_index={idx} out of range 0-9")
+                      print(f"âŒ SCHEMA VIOLATION: acc_index={idx} out of range 0-9")
                       failed = True
               except ValueError:
-                  print(f"âŒ SCHEMA VIOLATION: acc_index='{acc_index}' is not a number")
+                  print(f"âŒ SCHEMA VIOLATION: acc_index='{acc_index}' is not a number")
                   failed = True
 
           if not failed:

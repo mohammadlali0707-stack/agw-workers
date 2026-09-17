@@ -18,7 +18,7 @@ jobs:
           CODE=$(curl -sS -o /tmp/resp.json -w '%{http_code}' -X POST \
             -H "Authorization: token $ACC6_PAT" -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/mohammadlali0707-stack/agw-workers/issues/14/comments" \
-            -d '{"body":"تایید شد -- پروپوزال ۶ بسته‌ای برای پیش‌بردن CCP روی Ren'"'"'Py قابل قبول است (اجرای تمیز پس از فیکس دیسپچ cross-account). @agy-plan-approved"}')
+            -d '{"body":"تایید شد -- پروپوزال ۶ بسته�ای برای پیش�بردن CCP روی Ren'"'"'Py قابل قبول است (اجرای تمیز پس از فیکس دیسپچ cross-account). @agy-plan-approved"}')
           echo "HTTP $CODE"
           cat /tmp/resp.json
           if [ "$CODE" != "201" ]; then

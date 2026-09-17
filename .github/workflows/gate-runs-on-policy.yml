@@ -51,9 +51,9 @@ jobs:
               done
 
               if [ "$ALLOWED" = "true" ]; then
-                echo "  âœ… $BASENAME â€” self-hosted ALLOWED (in whitelist)"
+                echo "  âœ… $BASENAME â€� self-hosted ALLOWED (in whitelist)"
               else
-                echo "  âŒ $BASENAME â€” self-hosted NOT ALLOWED"
+                echo "  âŒ $BASENAME â€� self-hosted NOT ALLOWED"
                 echo "     This workflow does not need a self-hosted runner."
                 echo "     Change 'runs-on: self-hosted' to 'runs-on: ubuntu-latest'"
                 echo "     Reason: Only agw-worker.yml and gate-runner-deps.yml may"
@@ -62,13 +62,13 @@ jobs:
                 FAILED=1
               fi
             else
-              echo "  âœ… $BASENAME â€” uses GitHub-hosted runner"
+              echo "  âœ… $BASENAME â€� uses GitHub-hosted runner"
             fi
           done
 
           echo ""
           if [ "$FAILED" -eq 1 ]; then
-            echo "âŒ Policy violation: one or more workflows use self-hosted illegally."
+            echo "âŒ Policy violation: one or more workflows use self-hosted illegally."
             echo "   Fix: change runs-on to ubuntu-latest in the files above."
             exit 1
           else

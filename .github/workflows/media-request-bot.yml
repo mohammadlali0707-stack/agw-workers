@@ -24,7 +24,7 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "درخواست رسانه ثبت شد. هروقت لینک خروجی (تصویر/ویدیو) آماده شد، همینجا کامنت بذارید — یک لینک http(s) کافیه، این ایشو خودکار بسته می‌شه."
+            --body "درخواست رسانه ثبت شد. هروقت لینک خروجی (تصویر/ویدیو) آماده شد، همینجا کامنت بذارید � یک لینک http(s) کافیه، این ایشو خودکار بسته می�شه."
 
   deliver:
     if: >
@@ -91,4 +91,4 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "لینکی توی این کامنت پیدا نشد — یک URL که با http یا https شروع بشه بفرستید."
+            --body "لینکی توی این کامنت پیدا نشد � یک URL که با http یا https شروع بشه بفرستید."
