@@ -93,6 +93,10 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      # Needed for Tools/agy_checklist.py. This job did not check out its own
+      # repo before, because everything it used lived in the workflow file.
+      - uses: actions/checkout@v4
+
       - name: Set unique AGENT_REPO path
         run: |
           echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-run-agy" >> "$GITHUB_ENV"
@@ -381,6 +385,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
           CALLBACK_REPO: ${{ inputs.callback_repo }}
+          CALLBACK_ID: ${{ inputs.callback_id }}
+          AGY_STEP_OUTCOME: ${{ steps.run_agy.outcome }}
         run: |
           set +e
           if [ -z "$ISSUE_NUMBER" ]; then
@@ -398,8 +404,38 @@ jobs:
             cp /tmp/agy_output.txt /tmp/agy_comment.txt
           fi
           TARGET_REPO="${CALLBACK_REPO:-$GITHUB_REPOSITORY}"
+          # Machine-readable footer. The live checklist on the issue is
+          # RE-DERIVED from these markers rather than edited in place, so ten
+          # subordinates finishing at once converge on the same body instead
+          # of overwriting each other's ticks. Tools/agy_checklist.py reads it.
+          if [ -n "$CALLBACK_ID" ]; then
+            STATE=done
+            [ "${AGY_STEP_OUTCOME}" = "failure" ] && STATE=failed
+            printf '\n\n<!-- agy-task: %s state=%s -->\n' "$CALLBACK_ID" "$STATE" \
+              >> /tmp/agy_comment.txt
+          fi
           echo "Posting comment to issue #$ISSUE_NUMBER in $TARGET_REPO"
           gh issue comment "$ISSUE_NUMBER" --repo "$TARGET_REPO" --body-file /tmp/agy_comment.txt
+
+      - name: Tick this task off the issue checklist
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          CALLBACK_REPO: ${{ inputs.callback_repo }}
+          CALLBACK_ID: ${{ inputs.callback_id }}
+        run: |
+          set +e
+          if [ -z "$ISSUE_NUMBER" ] || [ -z "$CALLBACK_ID" ]; then
+            echo "no issue_number/callback_id, no checklist to update"
+            exit 0
+          fi
+          TARGET_REPO="${CALLBACK_REPO:-$GITHUB_REPOSITORY}"
+          # The checklist marker is the base tag: everything before "-wNN".
+          BASE_TAG="${CALLBACK_ID%-w*}"
+          python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" refresh \
+            --repo "$TARGET_REPO" --issue "$ISSUE_NUMBER" \
+            --marker "<!-- agy-checklist:${BASE_TAG} -->"
 
       - name: Push changes made by the agent
         if: steps.checkout_target.outputs.has_repo == 'true'

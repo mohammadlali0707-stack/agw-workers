@@ -41,6 +41,9 @@ FILES = [
     ".github/workflows/agy-lead-plan.yml",
     ".github/workflows/agy-plan-bot.yml",
     ".github/workflows/agy-final-report.yml",
+    # Not a workflow, but agy-lead-plan and agw-worker now call it, and a fork
+    # that has the workflow without the tool fails at the step that runs it.
+    "Tools/agy_checklist.py",
 ]
 
 # index -> owner login. Account 6 is the control repo itself (the source of
@@ -108,14 +111,17 @@ def sync_one(repo, token, path, local_bytes, results):
         results[key] = "READBACK_DIFFERS"
         return False
 
-    tmp = f"/tmp/readback_{abs(hash(key))}.yml"
-    with open(tmp, "wb") as fh:
-        fh.write(got)
-    bad = scan_file(tmp)
-    os.unlink(tmp)
-    if bad:
-        results[key] = f"STILL_BROKEN:{bad[0][2]}_in_{bad[0][1]}"
-        return False
+    # The context/null-env rule is a WORKFLOW rule; running it on a .py file
+    # would just report a YAML parse error and call the sync broken.
+    if path.endswith((".yml", ".yaml")):
+        tmp = f"/tmp/readback_{abs(hash(key))}.yml"
+        with open(tmp, "wb") as fh:
+            fh.write(got)
+        bad = scan_file(tmp)
+        os.unlink(tmp)
+        if bad:
+            results[key] = f"STILL_BROKEN:{bad[0][2]}_in_{bad[0][1]}"
+            return False
     results[key] = "OK"
     return True
 
@@ -126,7 +132,7 @@ def main():
     for path in FILES:
         with open(path, "rb") as fh:
             local[path] = fh.read()
-        if scan_file(path):
+        if path.endswith((".yml", ".yaml")) and scan_file(path):
             print(f"::error::{path} is broken HERE; refusing to push it to 8 forks",
                   file=sys.stderr)
             return 1

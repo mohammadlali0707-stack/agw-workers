@@ -1,11 +1,11 @@
-name: AGY Account Lead (plan + dispatch 10 subordinates, collect, aggregate)
+name: AGY Account Lead (plan + dispatch up to 10 subordinates, collect, aggregate)
 
 # Dispatched once per account by agy-plan-dispatch.yml (never triggered by
 # an issue event directly). This is the "account lead" tier the owner
 # asked for: bot #1 (w01) of the given account.
 #
 # 1. Runs agy AS this account's own identity to break package_goal into up
-#    to 10 tasks, one per its subordinate members (w02-w11 per Team/
+#    to 10 tasks -- a CEILING, not a quota -- one per subordinate member (w02-w11 per Team/
 #    org.json -- w01 itself is the lead and does not get a worker task).
 # 2. Dispatches agw-worker.yml once per task, same account identity,
 #    5 SECONDS APART (the owner's own anti-rate-limit design -- these
@@ -29,7 +29,7 @@ on:
         required: true
         type: string
       package_goal:
-        description: 'The scope of work this account''s lead should break down among its 10 subordinates'
+        description: 'The scope of work this account''s lead should break down among its subordinates (up to 10; fewer is correct when the work is smaller)'
         required: true
         type: string
       target_repo:
@@ -104,6 +104,10 @@ jobs:
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       BASE_TAG: ${{ inputs.callback_id }}
     steps:
+      # Needed for Tools/agy_checklist.py. This job did not check out its own
+      # repo before, because everything it used lived in the workflow file.
+      - uses: actions/checkout@v4
+
       - name: Ack on the issue
         if: env.ISSUE_NUMBER != ''
         env:
@@ -226,7 +230,7 @@ jobs:
             printf '\nDo this, in order:\n'
             printf '%s\n' '1. Read Team/org.json in this checked-out repo. Find the "members" entries whose "account" is your own account number and whose "role" is NOT "lead" -- those are your 10 subordinates (w02..w11). Note each one'"'"'s id, title, and guild.'
             printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block for what is already done or in progress, so you do not propose duplicate work.'
-            printf '%s\n' '3. Break YOUR PACKAGE into concrete tasks, one per subordinate whose title/guild is a real fit. You do not have to use all 10 -- skip a subordinate only if your package genuinely has no relevant work for their guild, but prefer using all 10 when the work naturally divides that way. Never invent a member_id, never assign two tasks to the same member_id.'
+            printf '%s\n' '3. Break YOUR PACKAGE into as many concrete tasks as the work genuinely contains -- one per subordinate whose title/guild is a real fit. TEN IS A CEILING, NOT A TARGET: if the package is honestly three tasks, produce three. Do not pad, do not split one piece of work in half to reach a number, and do not invent busywork for a subordinate whose guild has nothing to do here. A short, real list beats a full, padded one. Never invent a member_id, never assign two tasks to the same member_id.'
             printf '\n%s\n' '4. Output your ENTIRE response as exactly two parts, nothing else:'
             printf '%s\n' '   a) A short Persian paragraph (2-4 sentences) summarizing your plan.'
             printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape:'
@@ -358,7 +362,38 @@ jobs:
             "Account ${ACCOUNT} lead: متوقف شد." "${REASON}" "لاگ: ${RUN_URL}")
           gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" --body "$BODY" || true
 
-      - name: Dispatch the 10 subordinates, 5 seconds apart
+      # Owner's request 2026-09-17: post the plan BEFORE doing the work, as
+      # a list that fills in as each part lands -- rather than going silent
+      # for ten minutes and then emitting one wall of output. The tags are
+      # computed with the same formula the dispatch loop below uses; they are
+      # what each subordinate stamps its result with, and what the checklist
+      # is re-derived from. Kept deliberately in step with that loop.
+      - name: Post the plan as a live checklist before any work starts
+        if: always() && steps.parse.outputs.count != ''
+        env:
+          GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
+        run: |
+          set +e
+          if [ -z "$ISSUE_NUMBER" ]; then
+            echo "no issue to post a checklist on"
+            exit 0
+          fi
+          COUNT=$(cat /tmp/subtask_count.txt)
+          : > /tmp/checklist.tsv
+          for i in $(seq 0 $((COUNT - 1))); do
+            META=$(cat "/tmp/subtasks/${i}.meta")
+            TITLE="${META%%$'\t'*}"
+            MEMBER="${META##*$'\t'}"
+            TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
+            printf '%s\t%s\t%s\n' "$TAG" "$TITLE" "$MEMBER" >> /tmp/checklist.tsv
+          done
+          python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" post \
+            --repo "$CONTROL_REPO" --issue "$ISSUE_NUMBER" \
+            --marker "<!-- agy-checklist:${BASE_TAG} -->" \
+            --title "نقشه‌ی کار اکانت ${ACCOUNT}" \
+            --tasks /tmp/checklist.tsv
+
+      - name: Dispatch the planned subordinates, 5 seconds apart
         id: dispatch
         env:
           AGY_TOKEN_INPUT: ${{ inputs.agy_token_b64 }}
