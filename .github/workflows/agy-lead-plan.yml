@@ -100,7 +100,7 @@ jobs:
           GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
           gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
-            --body "Account ${ACCOUNT} lead: در حال تدوین تسک�های ۱۰ زیردست..."
+            --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌های ۱۰ زیردست..."
 
       - name: Install AGY CLI from HF Dataset
         run: |

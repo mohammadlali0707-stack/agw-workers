@@ -71,7 +71,7 @@ jobs:
           if [ "$FAILED" -eq 1 ]; then exit 1; fi
           echo "âœ… All workflow structures valid"
 
-      # â�€â�€ Ported from CR/Tools/check_workflow_safety.py â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
+      # â”€â”€ Ported from CR/Tools/check_workflow_safety.py â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       # CHECK-1: double-quotes in single-quoted printf content (breaks agw-worker bash injection)
       # CHECK-2: python3 -c inline code at wrong indentation (causes name=path registration bug)
       # CHECK-3: YAML parse (redundant safety net with yamllint step above)
@@ -86,7 +86,7 @@ jobs:
           _CHAR_CLASS_PATTERNS = ("tr -d", "tr -", "sed ", "| tr", "| sed")
 
           def check_1_double_quotes_in_printf(filepath, lines):
-              """double-quotes inside single-quoted printf content strings â†� breaks agw-worker"""
+              """double-quotes inside single-quoted printf content strings â†’ breaks agw-worker"""
               errors = []
               for i, raw_line in enumerate(lines, 1):
                   line = raw_line.strip()
@@ -104,7 +104,7 @@ jobs:
               return errors
 
           def check_2_python_inline_yaml_indent(filepath, lines):
-              """python3 -c at wrong indent â†� YAML block terminates early â†� name=path bug"""
+              """python3 -c at wrong indent â†’ YAML block terminates early â†’ name=path bug"""
               errors = []
               for i, raw_line in enumerate(lines, 1):
                   line = raw_line.rstrip()
@@ -125,7 +125,7 @@ jobs:
                       if next_indent < py_cmd_indent and next_stripped:
                           errors.append((j + 1,
                               f"[CHECK-2] python3 -c inline code at col {next_indent} "
-                              f"(need >={py_cmd_indent} to stay in YAML block â€� causes name=path registration bug)",
+                              f"(need >={py_cmd_indent} to stay in YAML block â€” causes name=path registration bug)",
                               next_stripped[:80]))
                       j += 1
               return errors
@@ -174,15 +174,15 @@ jobs:
               print(f"{C_OK} check_workflow_safety passed ({len(files)} files checked)")
           PYEOF
 
-      # â�€â�€ Ported from CR/Tools/check_heredoc_backticks.py â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€â�€
-      # Unescaped backtick inside an unquoted heredoc â†� silent command substitution
+      # â”€â”€ Ported from CR/Tools/check_heredoc_backticks.py â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      # Unescaped backtick inside an unquoted heredoc â†’ silent command substitution
       - name: Check for unescaped backticks in heredocs (CR ported)
         run: |
           echo "=== Heredoc Backtick Check (ported from CR/Tools/check_heredoc_backticks.py) ==="
           python3 - <<'PYEOF'
           import sys, re, glob
 
-          # Unquoted heredoc delimiter patterns (expansion IS active â†� backtick is dangerous)
+          # Unquoted heredoc delimiter patterns (expansion IS active â†’ backtick is dangerous)
           _HEREDOC_START = re.compile(r'<<\s*([A-Za-z_][A-Za-z0-9_]*)\b')
           _HEREDOC_QUOTED = re.compile(r"<<\s*['\\\"]")
 
@@ -201,7 +201,7 @@ jobs:
                   if not in_heredoc:
                       # Check for unquoted heredoc start
                       if _HEREDOC_QUOTED.search(stripped):
-                          continue  # quoted â†� safe, skip
+                          continue  # quoted â†’ safe, skip
                       m = _HEREDOC_START.search(stripped)
                       if m:
                           in_heredoc = True
@@ -216,7 +216,7 @@ jobs:
                       s = stripped
                       while col < len(s):
                           if s[col] == '\\':
-                              col += 2  # escaped â€� skip next char
+                              col += 2  # escaped â€” skip next char
                               continue
                           if s[col] == '`':
                               errors.append((i, stripped.strip()[:80]))

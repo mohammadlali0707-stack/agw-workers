@@ -69,7 +69,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --json comments --jq '.comments[].body' > /tmp/all_comments.txt
 
-          if grep -q '^Project Manager: ðŸ Lead dispatch started' /tmp/all_comments.txt; then
+          if grep -q '^Project Manager: ðŸš€ Lead dispatch started' /tmp/all_comments.txt; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Already dispatched once on this issue -- refusing to dispatch again."
             exit 0
@@ -116,7 +116,7 @@ jobs:
           COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/proposal.json'))['packages']))")
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "Project Manager: ðŸ Lead dispatch started -- ${COUNT} account package(s): ${{ steps.parse.outputs.accounts }}. Each lead will plan and dispatch its own 10 subordinates; a final ACC6 summary posts once all report back."
+            --body "Project Manager: ðŸš€ Lead dispatch started -- ${COUNT} account package(s): ${{ steps.parse.outputs.accounts }}. Each lead will plan and dispatch its own 10 subordinates; a final ACC6 summary posts once all report back."
 
   dispatch:
     needs: [parse-proposal]

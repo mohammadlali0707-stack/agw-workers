@@ -139,4 +139,4 @@ jobs:
         if: env.ISSUE_NUMBER != ''
         run: |
           gh issue comment "$ISSUE_NUMBER" --repo "${{ github.repository }}" \
-            --body "Project Manager: OK: همه�ی اکانت�ها گزارش دادند. گزارش جامع: ${{ steps.post.outputs.report_url }}"
+            --body "Project Manager: ✅ همه‌ی اکانت‌ها گزارش دادند. گزارش جامع: ${{ steps.post.outputs.report_url }}"

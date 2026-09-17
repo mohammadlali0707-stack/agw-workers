@@ -94,7 +94,7 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "Project Manager: در حال آماده�سازی پروپوزال برای **${{ steps.resolve.outputs.target_repo }}**..."
+            --body "Project Manager: در حال آماده‌سازی پروپوزال برای **${{ steps.resolve.outputs.target_repo }}**..."
 
       - name: Checkout target repo
         env:

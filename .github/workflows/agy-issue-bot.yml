@@ -131,7 +131,7 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "ü§ **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
+            --body "ü§ñ **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
           
           ‚è≥ The worker will shortly post its plan as a checklist on this issue..."
 
@@ -188,11 +188,11 @@ jobs:
             printf '%s\n' "STEP 1 - PLAN (do this FIRST, before any other work):"
             printf '%s\n' "  Use the GitHub CLI (gh) to post a comment on issue #${ISSUE_NUM} in repo ${CONTROL_REPO}."
             printf '%s\n' "  The comment must contain your plan as a checklist, for example:"
-            printf '%s\n' "  ## üÔ∏ My Plan"
+            printf '%s\n' "  ## üóÇÔ∏è My Plan"
             printf '%s\n' "  - [ ] Step 1: ..."
             printf '%s\n' "  - [ ] Step 2: ..."
             printf '%s\n' "  - [ ] Step 3: ..."
-            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## üÔ∏ My Plan\n- [ ] ...'"
+            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## üóÇÔ∏è My Plan\n- [ ] ...'"
             printf '%s\n' ""
             printf '%s\n' "STEP 2 - EXECUTE: Do the actual work. As you finish each item, update the checklist"
             printf '%s\n' "  by editing your previous comment (use gh issue comment <id> --edit) and change [ ] to [x]."
@@ -202,7 +202,7 @@ jobs:
             printf '%s\n' "  a) Push the final, clean code/files to the TARGET repo: ${TARGET_REPO}"
             printf '%s\n' "  b) Create a file called 'Reports/walkthrough-${ISSUE_NUM}.md' in ${TARGET_REPO}"
             printf '%s\n' "     with a clean summary of what was done (no debug logs, just the important decisions and results)."
-            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a OK: summary and"
+            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a ‚úÖ summary and"
             printf '%s\n' "     a link to the walkthrough file you created."
             printf '%s\n' ""
             printf '%s\n' "=== END MANDATORY WORKFLOW ==="

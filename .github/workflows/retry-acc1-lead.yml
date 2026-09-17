@@ -30,7 +30,7 @@ jobs:
           echo "::add-mask::$ACC1_PAT"
           echo "::add-mask::$AGW_TOKEN_ACC1"
           echo "::add-mask::$ACC6_PAT"
-          PACKAGE_GOAL="تکمیل، تست و تثبیت درگاه اعتبارسنجی و بیلد بدون�سر موتور Ren'Py در قالب ابزار Tools/renpy_gateway.py به عنوان جایگزین دروازه قدیمی ue.py، شامل اجرای پیوسته مراحل renpy lint، کامپایل فایل�های rpy به rpyc و اجرای آزمون رندر تحت xvfb-run با انتشار دایجست تک�خطی ماشین�خوان ##TBS## مطابق با check_digest_grep_contract.py، و اتصال این درگاه به مجموعه گیت�های Tools/run_gates.py و گردش کار CI."
+          PACKAGE_GOAL="تکمیل، تست و تثبیت درگاه اعتبارسنجی و بیلد بدون‌سر موتور Ren'Py در قالب ابزار Tools/renpy_gateway.py به عنوان جایگزین دروازه قدیمی ue.py، شامل اجرای پیوسته مراحل renpy lint، کامپایل فایل‌های rpy به rpyc و اجرای آزمون رندر تحت xvfb-run با انتشار دایجست تک‌خطی ماشین‌خوان ##TBS## مطابق با check_digest_grep_contract.py، و اتصال این درگاه به مجموعه گیت‌های Tools/run_gates.py و گردش کار CI."
           gh workflow run agy-lead-plan.yml \
             --repo "momonakikugava-pixel/agw-workers" \
             --field "account=1" \
