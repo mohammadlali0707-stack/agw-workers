@@ -157,6 +157,7 @@ jobs:
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
           echo "::add-mask::$AUTH_HEADER"
           echo "auth_header=$AUTH_HEADER" >> "$GITHUB_OUTPUT"
+          rm -rf /tmp/agent-repo
           mkdir -p /tmp/agent-repo
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
             "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
