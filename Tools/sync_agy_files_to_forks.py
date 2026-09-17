@@ -44,6 +44,21 @@ FILES = [
     # Not a workflow, but agy-lead-plan and agw-worker now call it, and a fork
     # that has the workflow without the tool fails at the step that runs it.
     "Tools/agy_checklist.py",
+    # The four gates, added 2026-09-17 on the owner's instruction. Forks were
+    # running the OLD allow-list Gate 4, which is why Gate 4 showed red on
+    # ngocgminh5-debug while the control repo was green on the same commits.
+    # All four go together: Gate 4 fails an account outright if a workflow
+    # listed in MUST_BE_HOSTED is absent, so syncing it without its companions
+    # would trade one red gate for another.
+    ".github/workflows/gate-yaml-lint.yml",
+    ".github/workflows/gate-runs-on-policy.yml",
+    ".github/workflows/gate-webhook-health.yml",
+    ".github/workflows/gate-runner-deps.yml",
+    # Called by gate-yaml-lint.yml; a fork with the gate but not these fails
+    # at the step that runs them.
+    "Tools/check_job_env_contexts.py",
+    "Tools/check_run_injection.py",
+    "Tools/injection_baseline.json",
 ]
 
 # index -> owner login. Account 6 is the control repo itself (the source of

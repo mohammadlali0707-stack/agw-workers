@@ -72,7 +72,7 @@ jobs:
           echo "✅ All workflow structures valid"
 
       # ── Ported from CR/Tools/check_workflow_safety.py ──────────────────────
-      # CHECK-1: double-quotes in single-quoted printf content (breaks agw-worker bash injection)
+      # CHECK-1: RETIRED -- replaced by Tools/check_run_injection.py (see below)
       # CHECK-2: python3 -c inline code at wrong indentation (causes name=path registration bug)
       # CHECK-3: YAML parse (redundant safety net with yamllint step above)
       - name: Workflow safety checks (CR ported)
@@ -162,7 +162,14 @@ jobs:
               except OSError as e:
                   return [(0, "cannot read file", str(e))]
               lines = content.splitlines()
-              errors += check_1_double_quotes_in_printf(filepath, lines)
+              # CHECK-1 retired 2026-09-17. It forbade double quotes in printf
+              # content as a PROXY for an untrusted expression being pasted
+              # straight into a script body, which is what used to set PROMPT.
+              # agw-worker.yml passes that through env: now, so the proxy only
+              # fired on legitimate JSON templates. The real rule lives in
+              # Tools/check_run_injection.py -- which, correctly, rejected an
+              # earlier version of THIS comment for spelling the expression out
+              # inside a run: body, where GitHub would have expanded it.
               errors += check_2_python_inline_yaml_indent(filepath, lines)
               errors += check_3_yaml_syntax(filepath, content)
               return errors
@@ -265,3 +272,12 @@ jobs:
       # and survived three separate reviews. See Tools/check_job_env_contexts.py.
       - name: Job-level context availability
         run: python3 Tools/check_job_env_contexts.py .github/workflows
+
+      # Replaces the retired CHECK-1. Flags an untrusted ${{ }} interpolated
+      # into a run: body -- the injection vector itself rather than a proxy for
+      # it. Ratcheted against Tools/injection_baseline.json: the 30 existing
+      # locations are reported, only something NEW fails. A gate that goes red
+      # on a backlog gets ignored, which is how CHECK-2 stopped protecting
+      # anything.
+      - name: No new untrusted expression in a run body
+        run: python3 Tools/check_run_injection.py .github/workflows

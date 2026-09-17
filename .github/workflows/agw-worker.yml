@@ -502,6 +502,27 @@ jobs:
           else
             OUT_PATH="Reports/agy/${RUN_TAG}.txt"
           fi
+          # A missing or empty agy output used to vanish silently here. This
+          # step has no `set -e`, so `cp` failed, `git add` failed,
+          # `git diff --cached --quiet` was then TRUE because nothing was
+          # staged, and the whole commit-and-push block was skipped: no report,
+          # no error, job green. The lead then polled for a report that would
+          # never arrive until its 40-minute deadline.
+          #
+          # Measured: plan-34-acc3-w08 on issue #34. All ten workers green,
+          # nine reports on disk, the lead stuck at 9/10 for over half an hour.
+          # A failure to produce output is a result and gets recorded as one.
+          if [ ! -s /tmp/agy_output.txt ]; then
+            echo "::warning::no agy output for ${RUN_TAG} -- recording a placeholder so the lead does not wait for a report that will never come"
+            {
+              echo "agy produced no output for ${RUN_TAG}."
+              echo ""
+              echo "This file exists so the run is visible and the lead's poll"
+              echo "completes. It is a FAILURE record, not a result."
+              echo ""
+              echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            } > /tmp/agy_output.txt
+          fi
           mkdir -p "$(dirname "$OUT_PATH")"
           cp /tmp/agy_output.txt "$OUT_PATH"
           git add "$OUT_PATH"
