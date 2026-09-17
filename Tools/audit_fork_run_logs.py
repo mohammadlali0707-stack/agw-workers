@@ -43,6 +43,10 @@ ACCOUNTS = {
 # What to pull out of a log. Ordered, and each is a fact the log states
 # outright rather than something inferred from its absence.
 SIGNALS = [
+    # Which task this run actually was. Without it, "no log mentions w08" is
+    # ambiguous between "w08 never ran" and "w08 ran under another tag".
+    ("run_tag", re.compile(r'RUN_TAG="(plan-[^"]+)"')),
+    ("callback", re.compile(r"callback_id=(\S+)")),
     ("own_identity", re.compile(r"Repo owner: (\S+) -> account index: (\d+)")),
     ("token_account", re.compile(r"Primary account for this run: (acc\d+)")),
     ("quota", re.compile(r"(AGY_QUOTA|quota reached|Individual quota)", re.I)),

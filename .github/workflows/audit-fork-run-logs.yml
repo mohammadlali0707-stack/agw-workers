@@ -63,7 +63,9 @@ jobs:
 
       - name: Read that account's own run logs
         run: |
-          set -eu
+          # pipefail: without it `| tee` returns tee's status and a failing
+          # audit reports success. This job did exactly that on its first run.
+          set -euo pipefail
           python3 Tools/audit_fork_run_logs.py \
             --account "$IN_ACCOUNT" \
             --workflow "$IN_WORKFLOW" \
