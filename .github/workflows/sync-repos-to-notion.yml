@@ -1,0 +1,100 @@
+name: Mirror all five repos into Notion
+
+# Makes the fleet's own code and docs searchable from Notion, and readable by
+# Notion AI, as one row per file in the "Repo Mirror" database. Owner's
+# request, 2026-09-17: everything, code included -- measured at ~2000 text
+# files and 8 binaries across the five repos.
+#
+# WHY A SCHEDULE AND NOT ONLY push
+# --------------------------------
+# A push to Control-Room cannot trigger a workflow that lives in agw-workers,
+# and putting a dispatcher in each of the other four repos would need a PAT
+# secret in each. The schedule covers all five uniformly instead. It is cheap
+# when nothing changed: Tools/sync_repos_to_notion.py pages the database once
+# (~20 API calls) and then skips every file whose git blob SHA still matches,
+# without rewriting its page. Only genuinely changed files cost writes.
+#
+# The push trigger stays because agw-workers's own edits should land in Notion
+# immediately rather than up to half an hour later.
+#
+# NOT YET CONFIGURED IS NOT A FAILURE
+# -----------------------------------
+# NOTION_TOKEN is an Internal Integration Token only the owner can create, and
+# it must be granted access to the Repo Mirror database by hand. Until both
+# exist this job exits 0 with an explicit message. A scheduled workflow that
+# went red 48 times a day over a missing secret would train everyone to ignore
+# it, which is worse than saying plainly that it has nothing to do yet.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'full = walk every file; changed = only this push'
+        required: false
+        default: 'full'
+        type: choice
+        options: [full, changed]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two syncs writing the same rows would race on clear-then-append and could
+  # leave a page holding half of one version and half of another.
+  group: notion-repo-mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      REPOS_ROOT: ${{ runner.temp }}/fleet
+    steps:
+      - name: Checkout agw-workers (for Tools/)
+        uses: actions/checkout@v4
+
+      - name: Report and stop if the Notion integration is not set up yet
+        id: preflight
+        run: |
+          set -u
+          if [ -z "${NOTION_TOKEN}" ] || [ -z "${NOTION_DB_ID}" ]; then
+            echo '::warning::NOTION_TOKEN and/or NOTION_DB_ID are not set -- nothing to do.'
+            echo 'Create an Internal Integration at https://www.notion.so/my-integrations,'
+            echo 'grant it access to the Repo Mirror database, and add both as repo secrets.'
+            echo '##TBS##{"data": {"reason": "secrets_absent"}, "probe": "sync_repos_to_notion", "status": "skip", "v": 1}'
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Clone all five repos
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -eu
+          if [ -z "${ACC6_PAT}" ]; then
+            echo '::error::ACC6_PAT is not set -- cannot read the other four repos.'
+            exit 1
+          fi
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          mkdir -p "$REPOS_ROOT"
+          for REPO in agw-workers Control-Room Claud-Cloud-Project AirboxVIP_Coffeenet status-dashboard; do
+            echo "cloning $REPO"
+            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone -q --depth 1 \
+              "https://github.com/mohammadlali0707-stack/${REPO}.git" "$REPOS_ROOT/$REPO"
+          done
+          find "$REPOS_ROOT" -type f -not -path '*/.git/*' | wc -l
+
+      - name: Mirror into Notion
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -eu
+          python3 Tools/sync_repos_to_notion.py --full | tee "$RUNNER_TEMP/sync.log"
+          grep -o '##TBS##.*' "$RUNNER_TEMP/sync.log" | tail -1 >> "$GITHUB_STEP_SUMMARY"
