@@ -1,0 +1,72 @@
+name: Audit a fork's run logs (read-only, with that account's PAT)
+
+# Reads a fork's own job logs from the control repo, so a question about what
+# happened inside another account can be answered by measurement instead of
+# inference. Built for two live questions on 2026-09-17:
+#
+#   - why plan-34-acc3-w08 produced no report while its job went green
+#   - whether ACC3's workers actually ran under ACC3's identity
+#
+# agw-worker.yml prints both halves of the identity decision ("Repo owner: X ->
+# account index: N" and "Primary account for this run: accN"), so the log
+# states it outright rather than leaving it to be inferred.
+#
+# Read-only: lists runs, downloads logs. No dispatch, no push, no re-run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Account index 0-8 whose fork to read'
+        required: true
+        default: '3'
+        type: string
+      workflow:
+        description: 'Workflow file to inspect in that fork'
+        required: false
+        default: 'agw-worker.yml'
+        type: string
+      match:
+        description: 'Only report runs whose log contains this (e.g. plan-34-acc3-w08)'
+        required: false
+        default: ''
+        type: string
+      limit:
+        description: 'How many recent runs to examine'
+        required: false
+        default: '12'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+      IN_ACCOUNT: ${{ inputs.account }}
+      IN_WORKFLOW: ${{ inputs.workflow }}
+      IN_MATCH: ${{ inputs.match }}
+      IN_LIMIT: ${{ inputs.limit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read that account's own run logs
+        run: |
+          set -eu
+          python3 Tools/audit_fork_run_logs.py \
+            --account "$IN_ACCOUNT" \
+            --workflow "$IN_WORKFLOW" \
+            --match "$IN_MATCH" \
+            --limit "$IN_LIMIT" | tee "$RUNNER_TEMP/logs.txt"
+          grep -o '##TBS##.*' "$RUNNER_TEMP/logs.txt" | tail -1 >> "$GITHUB_STEP_SUMMARY"
