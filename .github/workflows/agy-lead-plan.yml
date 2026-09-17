@@ -113,7 +113,19 @@ jobs:
           if [ -z "$CLI_BIN" ]; then
             CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
           fi
-          sudo install -m 0755 "$CLI_BIN" /usr/local/bin/agy
+          # Install without sudo. Ephemeral runners are fresh containers and do
+          # not inherit /etc/sudoers.d/runner from the Arvan host, so
+          # `sudo install` dies with "sudo: a password is required" -- measured
+          # 2026-09-17T09:58:21Z in job 105158016308, after the sudoers fix was
+          # believed to be in place. A user-writable dir added to $GITHUB_PATH
+          # needs no privilege and behaves identically on self-hosted and on
+          # ubuntu-latest, so this no longer depends on the runner image.
+          AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
+          mkdir -p "$AGY_BIN_DIR"
+          install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
+          # $GITHUB_PATH only affects LATER steps, so export for this one too.
+          echo "$AGY_BIN_DIR" >> "$GITHUB_PATH"
+          export PATH="$AGY_BIN_DIR:$PATH"
           agy --version 2>/dev/null || echo "agy ready"
 
       # Same case statement as agw-worker.yml's own "Checkout target repo"
