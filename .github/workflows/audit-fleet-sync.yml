@@ -1,0 +1,141 @@
+name: Audit fleet sync (read-only, all accounts, all four AGY files)
+
+# Answers a question this repo cannot otherwise answer from the ACC6 side:
+# does account N's OWN copy of the AGY workflow files actually carry today's
+# fixes, or is it still running the old code? "It was synced" has been
+# reported twice today (TBS_BRANCH, and this fork-sync) and was wrong or
+# unverifiable both times -- this reads the real files instead of trusting a
+# report.
+#
+# sync-agw-worker.yml, the existing push tool, cannot answer this either: it
+# only pushes agw-worker.yml, and only to accounts 1-8 -- never account 0,
+# and never the other three files today's fixes touched
+# (agy-lead-plan.yml, agy-plan-bot.yml, agy-final-report.yml). Account 0's
+# agy-lead-plan run failing with the OLD undifferentiated message is fully
+# consistent with that tool never having reached it in the first place.
+#
+# Read-only. Clones each account's own repo (--depth 1, no push, no PR) and
+# greps for the literal markers each fix introduced -- not a diff, not a
+# hash comparison, just "is the line that matters present or not":
+#   AGY_BIN_DIR=              -- 926552a, sudo-free CLI install
+#   AGENT_REPO:                -- 74f136f, unique per-job checkout path
+#   AGY_QUOTA                  -- 62ff4a7, classified agy-lead-plan failure
+#     (agy-lead-plan.yml only; the other three files never had this fix)
+#
+# Emits one ##TBS## digest line per this project's own convention
+# (CLAUDE.md: "every finding a tool makes should leave one machine-readable
+# ##TBS## line").
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Clone each account's own agw-workers and check for today's fixes
+        run: |
+          set -uo pipefail
+          FAIL=0
+          declare -A RESULTS
+
+          # Same account -> owner-login mapping as agy-plan-dispatch.yml's
+          # "Resolve this account's owner login and credentials" step and
+          # relay-read-file.yml -- copied verbatim, not re-derived, so a
+          # typo here can't silently point this probe at the wrong repo.
+          check_account() {
+            local IDX="$1" OWNER="$2"
+            local PAT_NAME="ACC${IDX}_PAT"
+            # ${!PAT_NAME:-} rather than ${!PAT_NAME}: under `set -u`, indirect
+            # expansion of a truly UNSET (not merely empty) variable name
+            # aborts the whole job instead of reporting NO_PAT for just this
+            # account. The workflow's own env: block always defines these as
+            # at least an empty string, but this stays safe if a secret is
+            # ever renamed or removed without updating that block too.
+            local TOKEN="${!PAT_NAME:-}"
+            echo ""
+            echo "=== account $IDX ($OWNER/agw-workers) ==="
+            if [ -z "$TOKEN" ]; then
+              echo "  NO_PAT -- cannot check this account"
+              RESULTS["$IDX"]="NO_PAT"
+              return
+            fi
+            local AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+            local WORKDIR
+            WORKDIR=$(mktemp -d)
+            if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone -q --depth 1 \
+                "https://github.com/${OWNER}/agw-workers.git" "$WORKDIR" 2>/tmp/clone_err_$IDX.txt; then
+              echo "  CLONE_FAILED: $(cat /tmp/clone_err_$IDX.txt | tail -1)"
+              RESULTS["$IDX"]="CLONE_FAILED"
+              return
+            fi
+            local SHA
+            SHA=$(git -C "$WORKDIR" log -1 --format='%h %cI')
+            echo "  HEAD: $SHA"
+
+            local ok=1
+            for f in agw-worker.yml agy-lead-plan.yml agy-plan-bot.yml agy-final-report.yml; do
+              local path="$WORKDIR/.github/workflows/$f"
+              if [ ! -f "$path" ]; then
+                echo "  $f: MISSING"
+                ok=0
+                continue
+              fi
+              local has_sudofree has_uniqpath has_quota=n/a
+              grep -q 'AGY_BIN_DIR=' "$path" && has_sudofree=yes || has_sudofree=NO
+              grep -q 'AGENT_REPO:' "$path" && has_uniqpath=yes || has_uniqpath=NO
+              if [ "$f" = "agy-lead-plan.yml" ]; then
+                grep -q 'AGY_QUOTA' "$path" && has_quota=yes || has_quota=NO
+              fi
+              echo "  $f: sudo-free-install=$has_sudofree  unique-path=$has_uniqpath  quota-classified=$has_quota"
+              [ "$has_sudofree" = "yes" ] && [ "$has_uniqpath" = "yes" ] || ok=0
+              [ "$f" = "agy-lead-plan.yml" ] && [ "$has_quota" != "yes" ] && ok=0
+            done
+            RESULTS["$IDX"]=$([ "$ok" = 1 ] && echo "SYNCED" || echo "STALE")
+            rm -rf "$WORKDIR"
+          }
+
+          check_account 0 "Mohammadlali"
+          check_account 1 "momonakikugava-pixel"
+          check_account 2 "lali94m-max"
+          check_account 3 "ngocgminh5-debug"
+          check_account 4 "hmmletssee7-design"
+          check_account 5 "kidding602"
+          check_account 7 "mohammad97okk"
+          check_account 8 "moradzahra85-png"
+
+          echo ""
+          echo "=== summary ==="
+          STALE_LIST=""
+          for idx in 0 1 2 3 4 5 7 8; do
+            r="${RESULTS[$idx]:-UNKNOWN}"
+            echo "  account $idx: $r"
+            if [ "$r" != "SYNCED" ]; then
+              FAIL=1
+              STALE_LIST="${STALE_LIST}${STALE_LIST:+,}$idx"
+            fi
+          done
+
+          echo ""
+          if [ "$FAIL" = 1 ]; then
+            echo "##TBS##{\"data\": {\"stale_or_unreachable\": \"${STALE_LIST}\"}, \"probe\": \"audit_fleet_sync\", \"status\": \"fail\", \"v\": 1}"
+          else
+            echo "##TBS##{\"data\": {}, \"probe\": \"audit_fleet_sync\", \"status\": \"pass\", \"v\": 1}"
+          fi
+          # Informational by design: this audits, it does not gate a merge or
+          # a push, so it never fails the job. A red ##TBS## line in the log
+          # is the signal; exiting 1 here would only make the run harder to
+          # re-trigger from a green-looking Actions tab.
+          exit 0
