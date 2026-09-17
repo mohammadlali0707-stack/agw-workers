@@ -1,13 +1,29 @@
 name: Gate 4 -- runs-on Policy Enforcer
 
-# Rule: self-hosted runners are ONLY allowed in:
-#   - agw-worker.yml        (actual AGY binary execution)
-#   - gate-runner-deps.yml  (specifically checks runner-installed tools)
-# All other workflows MUST use ubuntu-latest (or another GitHub-hosted runner).
+# Rule (inverted 2026-09-17): self-hosted is the fleet DEFAULT and is allowed
+# anywhere, EXCEPT the monitoring workflows listed in MUST_BE_HOSTED below,
+# which must stay on a GitHub-hosted runner.
 #
-# Root cause this prevents:
-#   Using self-hosted in dispatch/bot/gate workflows causes zombie runner
-#   accumulation, 409 conflicts, and silent trigger failures.
+# Why this was inverted:
+#   The original rule was an allow-list naming agw-worker.yml and
+#   gate-runner-deps.yml as the only workflows permitted to use self-hosted.
+#   That predates the deliberate fleet-wide migration to the Arvan ephemeral
+#   runners, which happened because GitHub's ubuntu-latest minutes hit their
+#   billing limit and took the whole fleet down with them. After the
+#   migration 31 jobs across 29 files were self-hosted, so the allow-list
+#   failed Gate 4 red on every single push -- the gate was reporting the
+#   fleet's intended architecture as a violation.
+#
+# What the deny-list protects (this is the part worth keeping):
+#   A monitor must never run on the infrastructure it monitors. If
+#   gate-webhook-health.yml ran on a self-hosted runner and the n8n/runner-api
+#   host went down, the gate could not start, so it would report nothing at
+#   all rather than reporting the outage -- the failure mode it exists to
+#   catch is exactly the one that would silence it. The same argument covers
+#   the two gates that police workflow files themselves.
+#
+# Adding a workflow here is a deliberate act: it means "this workflow's job is
+# to tell us the self-hosted fleet is broken", not merely "this is important".
 
 on:
   push:
@@ -27,50 +43,72 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Enforce runs-on policy
+        env:
+          # Workflows that monitor the self-hosted fleet, and so must not run on it.
+          MUST_BE_HOSTED: >-
+            gate-webhook-health.yml
+            gate-runs-on-policy.yml
+            gate-yaml-lint.yml
         run: |
-          echo "=== runs-on Policy Gate ==="
-          echo "Rule: self-hosted only allowed in: agw-worker.yml, gate-runner-deps.yml"
-          echo ""
+          python3 - <<'EOF'
+          import glob, os, sys, yaml
 
-          FAILED=0
-          ALLOWED_SELFHOSTED="agw-worker.yml gate-runner-deps.yml"
+          must_be_hosted = set(os.environ['MUST_BE_HOSTED'].split())
+          hosted_prefixes = ('ubuntu-', 'windows-', 'macos-')
 
-          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
-            [ -f "$f" ] || continue
-            BASENAME=$(basename "$f")
+          print("=== runs-on Policy Gate ===")
+          print("Rule: self-hosted allowed everywhere EXCEPT these monitors:")
+          for name in sorted(must_be_hosted):
+              print(f"        {name}")
+          print()
 
-            # Check if this file contains self-hosted
-            if grep -q "runs-on:.*self-hosted\|runs-on:.*\[.*self-hosted" "$f"; then
-              # Is it in the allowed list?
-              ALLOWED=false
-              for allowed in $ALLOWED_SELFHOSTED; do
-                if [ "$BASENAME" = "$allowed" ]; then
-                  ALLOWED=true
-                  break
-                fi
-              done
+          failed = []
+          seen = set()
+          files = sorted(glob.glob('.github/workflows/*.yml') +
+                         glob.glob('.github/workflows/*.yaml'))
 
-              if [ "$ALLOWED" = "true" ]; then
-                echo "  âœ… $BASENAME â€” self-hosted ALLOWED (in whitelist)"
-              else
-                echo "  âŒ $BASENAME â€” self-hosted NOT ALLOWED"
-                echo "     This workflow does not need a self-hosted runner."
-                echo "     Change 'runs-on: self-hosted' to 'runs-on: ubuntu-latest'"
-                echo "     Reason: Only agw-worker.yml and gate-runner-deps.yml may"
-                echo "             use self-hosted. All other workflows must use"
-                echo "             GitHub-hosted runners to avoid zombie runner issues."
-                FAILED=1
-              fi
-            else
-              echo "  âœ… $BASENAME â€” uses GitHub-hosted runner"
-            fi
-          done
+          for path in files:
+              name = os.path.basename(path)
+              with open(path, encoding='utf-8') as fh:
+                  doc = yaml.safe_load(fh)
+              if not isinstance(doc, dict):
+                  continue
+              for job_name, job in (doc.get('jobs') or {}).items():
+                  if not isinstance(job, dict):
+                      continue
+                  runs_on = str(job.get('runs-on', ''))
+                  if name not in must_be_hosted:
+                      continue
+                  seen.add(name)
+                  if 'self-hosted' in runs_on:
+                      print(f"  ❌ {name} [{job_name}] — runs-on: {runs_on}")
+                      print(f"     This workflow monitors the self-hosted fleet, so it")
+                      print(f"     cannot run on it: if that fleet is down, this gate")
+                      print(f"     would not start, and would report nothing instead of")
+                      print(f"     reporting the outage. Use ubuntu-latest.")
+                      failed.append(name)
+                  elif not runs_on.startswith(hosted_prefixes):
+                      print(f"  ❌ {name} [{job_name}] — runs-on: {runs_on!r}")
+                      print(f"     Expected a GitHub-hosted label (ubuntu-*/windows-*/macos-*).")
+                      failed.append(name)
+                  else:
+                      print(f"  ✅ {name} [{job_name}] — GitHub-hosted ({runs_on})")
 
-          echo ""
-          if [ "$FAILED" -eq 1 ]; then
-            echo "âŒ Policy violation: one or more workflows use self-hosted illegally."
-            echo "   Fix: change runs-on to ubuntu-latest in the files above."
-            exit 1
-          else
-            echo "âœ… All workflows comply with runs-on policy."
-          fi
+          # A monitor that was renamed or deleted silently stops being enforced,
+          # which would make this gate pass by having nothing left to check.
+          missing = must_be_hosted - seen
+          if missing:
+              print()
+              for name in sorted(missing):
+                  print(f"  ❌ {name} — listed in MUST_BE_HOSTED but not found")
+              print("     Either restore the file or remove it from MUST_BE_HOSTED.")
+              failed.extend(sorted(missing))
+
+          print()
+          print(f"Checked {len(files)} workflow file(s); "
+                f"{len(seen)}/{len(must_be_hosted)} protected monitor(s) present.")
+          if failed:
+              print(f"❌ Policy violation in: {', '.join(sorted(set(failed)))}")
+              sys.exit(1)
+          print("✅ All protected monitors run on GitHub-hosted runners.")
+          EOF
