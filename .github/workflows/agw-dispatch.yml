@@ -76,7 +76,7 @@ jobs:
                 ccp)       TARGET_REPO="mohammadlali0707-stack/Claud-Cloud-Project" ;;
                 cr)        TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
                 coffeenet) TARGET_REPO="mohammadlali0707-stack/AirboxVIP_Coffeenet" ;;
-                status)    TARGET_REPO="Mohammadlali/status-dashboard" ;;
+                status)    TARGET_REPO="mohammadlali0707-stack/status-dashboard" ;;
                 *)         TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
               esac
 
