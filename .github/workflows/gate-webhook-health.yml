@@ -43,34 +43,34 @@ jobs:
 
               # Check 1: No test URLs in production
               if '/webhook-test/' in url:
-                  print(f"  âŒ FAIL: Uses webhook-test URL (not production!)")
+                  print(f"  ❌ FAIL: Uses webhook-test URL (not production!)")
                   failed = True
               else:
-                  print(f"  âœ… URL is production")
+                  print(f"  ✅ URL is production")
 
               # Check 2: Must point to correct n8n URL
               if url != expected_url and 'n8n' in url:
-                  print(f"  âŒ FAIL: URL mismatch. Expected: {expected_url}")
+                  print(f"  ❌ FAIL: URL mismatch. Expected: {expected_url}")
                   failed = True
 
               # Check 3: Required events must be present
               missing = [e for e in required_events if e not in events]
               if missing:
-                  print(f"  âŒ FAIL: Missing events: {missing}")
+                  print(f"  ❌ FAIL: Missing events: {missing}")
                   failed = True
               else:
-                  print(f"  âœ… All required events present: {events}")
+                  print(f"  ✅ All required events present: {events}")
 
               # Check 4: Must be active
               if not active:
-                  print(f"  âŒ FAIL: Webhook is inactive!")
+                  print(f"  ❌ FAIL: Webhook is inactive!")
                   failed = True
 
           if failed:
-              print("\nâŒ WEBHOOK HEALTH CHECK FAILED")
+              print("\n❌ WEBHOOK HEALTH CHECK FAILED")
               sys.exit(1)
           else:
-              print("\nâœ… All webhooks are healthy")
+              print("\n✅ All webhooks are healthy")
           EOF
 
       - name: Verify webhook endpoint is reachable
@@ -85,10 +85,10 @@ jobs:
           # n8n returns 200 (processed) or 400 (bad payload but reachable) = OK
           # 000 = unreachable, 404 = wrong path, 503 = down
           if [ "$STATUS" = "000" ] || [ "$STATUS" = "404" ] || [ "$STATUS" = "503" ]; then
-            echo "âŒ n8n endpoint unreachable or wrong (HTTP $STATUS)"
+            echo "❌ n8n endpoint unreachable or wrong (HTTP $STATUS)"
             exit 1
           else
-            echo "âœ… n8n endpoint reachable (HTTP $STATUS)"
+            echo "✅ n8n endpoint reachable (HTTP $STATUS)"
           fi
 
       - name: Post alert if webhook health fails
@@ -96,7 +96,7 @@ jobs:
         run: |
           gh issue create \
             --repo "$GITHUB_REPOSITORY" \
-            --title "ðŸš¨ Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
+            --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
             --body "## Webhook Health Check Failed
 
           The automated webhook health gate detected a problem.

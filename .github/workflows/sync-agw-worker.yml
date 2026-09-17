@@ -28,7 +28,7 @@ jobs:
             local REPO="$1"
             local TOKEN="$2"
             if [ -z "$TOKEN" ]; then
-              echo "âš ï¸  No PAT for $REPO, skipping"
+              echo "⚠️  No PAT for $REPO, skipping"
               return
             fi
             echo "Syncing to $REPO..."
@@ -36,7 +36,7 @@ jobs:
               "https://api.github.com/repos/$REPO/contents/.github/workflows/agw-worker.yml" \
               | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null)
             if [ -z "$SHA" ]; then
-              echo "  âŒ Could not get SHA for $REPO"
+              echo "  ❌ Could not get SHA for $REPO"
               return
             fi
             RESULT=$(curl -s -X PUT \
@@ -45,9 +45,9 @@ jobs:
               "https://api.github.com/repos/$REPO/contents/.github/workflows/agw-worker.yml" \
               -d "{\"message\": \"$COMMIT_MSG\", \"content\": \"$CONTENT\", \"sha\": \"$SHA\"}")
             if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if 'commit' in d else 1)" 2>/dev/null; then
-              echo "  âœ… Done: $REPO"
+              echo "  ✅ Done: $REPO"
             else
-              echo "  âŒ Failed: $REPO"
+              echo "  ❌ Failed: $REPO"
               echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message','unknown error'))" 2>/dev/null || true
             fi
           }
