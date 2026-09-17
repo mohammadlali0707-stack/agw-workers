@@ -213,8 +213,15 @@ jobs:
           cd /tmp/agent-repo
           PROMPT=$(cat /tmp/plan_prompt.txt)
           OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          AGY_RC=$?
           echo "$OUTPUT" > /tmp/lead_plan_output.txt
-          echo "Lead plan output lines: $(wc -l < /tmp/lead_plan_output.txt)"
+          # Record agy's exit code. Without it every agy-level failure (quota,
+          # auth, timeout, network) reaches the parser as "no JSON here" and
+          # gets reported as a malformed proposal. Run 34934947183 was exactly
+          # that: agy printed one line, "Individual quota reached", and the
+          # issue comment blamed the JSON contract. 124 is timeout(1)'s code.
+          echo "$AGY_RC" > /tmp/agy_rc.txt
+          echo "Lead plan output lines: $(wc -l < /tmp/lead_plan_output.txt)  (agy exit=$AGY_RC)"
           echo "----- agy output (first 80 lines) -----"
           head -n 80 /tmp/lead_plan_output.txt
           echo "----- end -----"
@@ -227,6 +234,44 @@ jobs:
           import json, os, re, sys
           account = os.environ['ACCOUNT']
           text = open('/tmp/lead_plan_output.txt', encoding='utf-8').read()
+
+          # Classify an agy-level failure BEFORE blaming the JSON contract.
+          # "agy could not run" and "agy ran but wrote bad JSON" need different
+          # answers: the first is a quota/credential/timeout problem nobody can
+          # fix by editing the prompt. Reporting both as "the proposal did not
+          # parse" is what made run 34934947183 look like a schema bug when the
+          # real output was one line: "Individual quota reached."
+          try:
+              rc = int(open('/tmp/agy_rc.txt').read().strip())
+          except Exception:
+              rc = 0
+          low = text.lower()
+          reason = None
+          if 'quota reached' in low or 'upgrade your subscription' in low:
+              reason = ('AGY_QUOTA',
+                        'سهمیه‌ی این اکانت تمام شده است. تا ریست شدن سهمیه، '
+                        'برنامه‌ریزی این اکانت اجرا نمی‌شود.')
+          elif rc == 124:
+              reason = ('AGY_TIMEOUT',
+                        'اجرای agy به سقف زمانی رسید و قطع شد.')
+          elif ('authentication' in low or 'unauthorized' in low
+                or 'invalid api key' in low or 'not logged in' in low):
+              reason = ('AGY_AUTH',
+                        'احراز هویت agy برای این اکانت شکست خورد (توکن نامعتبر یا منقضی).')
+          elif not text.strip():
+              reason = ('AGY_EMPTY', 'agy هیچ خروجی‌ای تولید نکرد.')
+          elif rc != 0:
+              reason = ('AGY_FAILED',
+                        'agy با کد خطای {0} خارج شد.'.format(rc))
+
+          if reason is not None:
+              code, persian = reason
+              print(code, file=sys.stderr)
+              print(text.strip()[:400], file=sys.stderr)
+              with open('/tmp/lead_fail_reason.txt', 'w', encoding='utf-8') as f:
+                  f.write(persian)
+              sys.exit(1)
+
           blocks = re.findall(r'```json\s*(.*?)```', text, re.DOTALL)
           plan = None
           for b in blocks:
@@ -237,7 +282,14 @@ jobs:
               if obj.get('kind') == 'tbs_lead_task_list':
                   plan = obj
           if plan is None:
+              # agy ran fine and exited 0, so this really is a contract failure.
               print('NO_LEAD_PLAN_FOUND', file=sys.stderr)
+              print('agy exited 0 with {0} json block(s), none of kind '
+                    'tbs_lead_task_list'.format(len(blocks)), file=sys.stderr)
+              with open('/tmp/lead_fail_reason.txt', 'w', encoding='utf-8') as f:
+                  f.write('agy اجرا شد ولی خروجی‌اش بلوک JSON معتبر با '
+                          'kind=tbs_lead_task_list نداشت ({0} بلوک JSON دیده شد).'
+                          .format(len(blocks)))
               sys.exit(1)
           tasks = plan.get('tasks', [])
           os.makedirs('/tmp/subtasks', exist_ok=True)
@@ -256,13 +308,28 @@ jobs:
           PYEOF
           echo "count=$(cat /tmp/subtask_count.txt)" >> "$GITHUB_OUTPUT"
 
-      - name: If parsing failed, report and stop here (do not leave the issue silent)
+      - name: If planning failed, report the real reason and stop here (do not leave the issue silent)
         if: failure()
         env:
           GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
-            --body "Account ${ACCOUNT} lead: پروپوزال زیرمجموعه پارس نشد. متوقف شد." || true
+          # Report what actually went wrong. The old text said "پروپوزال پارس نشد"
+          # for every failure including a quota wall, which sent one
+          # investigation at the prompt and the JSON schema when neither was
+          # involved. Fall back to the generic wording only if the parse step
+          # died before it could classify.
+          if [ -s /tmp/lead_fail_reason.txt ]; then
+            REASON=$(cat /tmp/lead_fail_reason.txt)
+          else
+            REASON="برنامه‌ریزی lead پیش از طبقه‌بندی خطا متوقف شد؛ لاگ ران را ببینید."
+          fi
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          # Build the body with printf rather than a literal multi-line string:
+          # continuation lines would sit at column 0 and terminate this YAML
+          # block scalar, which is a parse error, not a bash one.
+          BODY=$(printf '%s\n\n%s\n\n%s' \
+            "Account ${ACCOUNT} lead: متوقف شد." "${REASON}" "لاگ: ${RUN_URL}")
+          gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" --body "$BODY" || true
 
       - name: Dispatch the 10 subordinates, 5 seconds apart
         id: dispatch
