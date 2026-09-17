@@ -34,6 +34,15 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 30
     env:
+      # Unique per job execution. /tmp/agent-repo was a single shared path:
+      # it survived between jobs (which is why a `rm -rf` was added on
+      # 2026-09-17), and `rm -rf` on a SHARED path is only safe when jobs run
+      # one at a time. They do not -- agy-lead-plan dispatches 10 agw-worker
+      # runs 5s apart, so two on one host would delete each other's checkout
+      # mid-clone. That failure is silent, unlike the dir-exists error it
+      # replaced. runner.temp is per-runner and the run/attempt/job triple
+      # makes it unique even if the temp dir is ever shared.
+      AGENT_REPO: ${{ runner.temp }}/agent-repo-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TARGET_REPO: ${{ inputs.target_repo }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
@@ -82,10 +91,10 @@ jobs:
           fi
           echo "::add-mask::$TOKEN"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          rm -rf /tmp/agent-repo
-          mkdir -p /tmp/agent-repo
+          rm -rf "${AGENT_REPO}"
+          mkdir -p "${AGENT_REPO}"
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-            "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+            "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
 
       - name: Restore ACC6's own AGY identity
         run: |
@@ -97,7 +106,7 @@ jobs:
 
       - name: Build the final-summary prompt from every account's team report
         run: |
-          cd /tmp/agent-repo
+          cd "${AGENT_REPO}"
           python3 - <<'PYEOF'
           import json, os
           accounts = json.loads(os.environ['ALL_ACCOUNTS'])
@@ -129,7 +138,7 @@ jobs:
       - name: Run AGY to write the final summary
         run: |
           set +e
-          cd /tmp/agent-repo
+          cd "${AGENT_REPO}"
           PROMPT=$(cat /tmp/final_prompt.txt)
           OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           echo "$OUTPUT" > /tmp/final_report.txt

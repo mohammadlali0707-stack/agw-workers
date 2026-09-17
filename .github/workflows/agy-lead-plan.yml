@@ -82,6 +82,15 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 60
     env:
+      # Unique per job execution. /tmp/agent-repo was a single shared path:
+      # it survived between jobs (which is why a `rm -rf` was added on
+      # 2026-09-17), and `rm -rf` on a SHARED path is only safe when jobs run
+      # one at a time. They do not -- agy-lead-plan dispatches 10 agw-worker
+      # runs 5s apart, so two on one host would delete each other's checkout
+      # mid-clone. That failure is silent, unlike the dir-exists error it
+      # replaced. runner.temp is per-runner and the run/attempt/job triple
+      # makes it unique even if the temp dir is ever shared.
+      AGENT_REPO: ${{ runner.temp }}/agent-repo-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CONTROL_REPO: ${{ inputs.control_repo }}
       # Used only by the steps that talk to control_repo (issue comments,
@@ -157,13 +166,13 @@ jobs:
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
           echo "::add-mask::$AUTH_HEADER"
           echo "auth_header=$AUTH_HEADER" >> "$GITHUB_OUTPUT"
-          rm -rf /tmp/agent-repo
-          mkdir -p /tmp/agent-repo
+          rm -rf "${AGENT_REPO}"
+          mkdir -p "${AGENT_REPO}"
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-            "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
-          git -C /tmp/agent-repo config user.email "agy-bot@claud-cloud.local"
-          git -C /tmp/agent-repo config user.name "AGY Bot"
-          echo "branch=$(git -C /tmp/agent-repo symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
+            "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
+          git -C "${AGENT_REPO}" config user.email "agy-bot@claud-cloud.local"
+          git -C "${AGENT_REPO}" config user.name "AGY Bot"
+          echo "branch=$(git -C "${AGENT_REPO}" symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Restore this account's own AGY identity
         env:
@@ -223,7 +232,7 @@ jobs:
       - name: Run AGY in lead-planning mode
         run: |
           set +e
-          cd /tmp/agent-repo
+          cd "${AGENT_REPO}"
           PROMPT=$(cat /tmp/plan_prompt.txt)
           OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           AGY_RC=$?
@@ -400,7 +409,7 @@ jobs:
           DEADLINE=$(( $(date +%s) + 40*60 ))
           FOUND=0
           while [ "$(date +%s)" -lt "$DEADLINE" ]; do
-            cd /tmp/agent-repo
+            cd "${AGENT_REPO}"
             git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
             FOUND=0
             : > /tmp/found_reports.txt
@@ -422,7 +431,7 @@ jobs:
       - name: Build and run the account-summary prompt
         run: |
           set +e
-          cd /tmp/agent-repo
+          cd "${AGENT_REPO}"
           {
             printf '%s\n' "You are agw-ACC${ACCOUNT}-w01, the lead of account ${ACCOUNT}. Your ${{ steps.poll.outputs.found }} subordinate(s) (of ${{ steps.dispatch.outputs.expected }} dispatched) reported back. Below are their raw reports."
             printf '\n'
@@ -448,7 +457,7 @@ jobs:
           BRANCH: ${{ steps.checkout_target.outputs.branch }}
         run: |
           set -e
-          cd /tmp/agent-repo
+          cd "${AGENT_REPO}"
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
           mkdir -p Reports/agy/team_reports
           cp /tmp/account_summary.txt "Reports/agy/team_reports/acc${ACCOUNT}.md"
@@ -474,7 +483,7 @@ jobs:
           GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
           set +e
-          cd /tmp/agent-repo
+          cd "${AGENT_REPO}"
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
           ALL_DONE=$(python3 - <<'PYEOF'
           import json, os

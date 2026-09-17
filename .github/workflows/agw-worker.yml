@@ -64,6 +64,16 @@ permissions:
 
 jobs:
   run-agy:
+    env:
+      # Unique per job execution. /tmp/agent-repo was a single shared path:
+      # it survived between jobs (which is why a `rm -rf` was added on
+      # 2026-09-17), and `rm -rf` on a SHARED path is only safe when jobs run
+      # one at a time. They do not -- agy-lead-plan dispatches 10 agw-worker
+      # runs 5s apart, so two on one host would delete each other's checkout
+      # mid-clone. That failure is silent, unlike the dir-exists error it
+      # replaced. runner.temp is per-runner and the run/attempt/job triple
+      # makes it unique even if the temp dir is ever shared.
+      AGENT_REPO: ${{ runner.temp }}/agent-repo-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
     # runner_type input: set by agy-issue-bot after billing check.
     # ACC0 (Mohammadlali) and ACC6 (mohammadlali0707-stack) always self-hosted.
     # ACC1-5, ACC7-8 default to ubuntu-latest (GitHub free minutes) unless
@@ -192,17 +202,17 @@ jobs:
             exit 0
           fi
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          mkdir -p /tmp/agent-repo
+          mkdir -p "${AGENT_REPO}"
           if [ -n "$TARGET_BRANCH" ]; then
             git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --branch "$TARGET_BRANCH" \
-              "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+              "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
           else
             git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-              "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+              "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
           fi
-          git -C /tmp/agent-repo config user.email "agy-bot@claud-cloud.local"
-          git -C /tmp/agent-repo config user.name "AGY Bot"
-          echo "Checked out $TARGET_REPO into /tmp/agent-repo. The credential was passed only as a one-shot -c http.extraheader flag on this single git command -- it is NOT written to /tmp/agent-repo/.git/config, so the agent process below cannot read it back out of the working tree."
+          git -C "${AGENT_REPO}" config user.email "agy-bot@claud-cloud.local"
+          git -C "${AGENT_REPO}" config user.name "AGY Bot"
+          echo "Checked out $TARGET_REPO into ${AGENT_REPO}. The credential was passed only as a one-shot -c http.extraheader flag on this single git command -- it is NOT written to ${AGENT_REPO}/.git/config, so the agent process below cannot read it back out of the working tree."
           echo "has_repo=true" >> "$GITHUB_OUTPUT"
 
       # Restore+run are one step because a quota/rate-limit error needs to
@@ -268,7 +278,7 @@ jobs:
           restore_token "$USED_IDX" "$AGY_TOKEN_INPUT"
 
           echo "Running agy prompt with acc${USED_IDX}..."
-          cd /tmp/agent-repo 2>/dev/null || true
+          cd "${AGENT_REPO}" 2>/dev/null || true
 
           # --print-timeout is agy's OWN internal wait-for-a-response ceiling,
           # separate from the outer shell `timeout` below. The old local-docker
@@ -301,7 +311,7 @@ jobs:
             USED_IDX="$FALLBACK_IDX"
             restore_token "$USED_IDX"
             echo "Retrying with acc${USED_IDX}..."
-            cd /tmp/agent-repo 2>/dev/null || true
+            cd "${AGENT_REPO}" 2>/dev/null || true
             OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
             echo "$OUTPUT" > /tmp/agy_output.txt
           fi
@@ -398,7 +408,7 @@ jobs:
               *) TOKEN="$ACC6_PAT" ;;
             esac
           fi
-          cd /tmp/agent-repo
+          cd "${AGENT_REPO}"
           BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
 

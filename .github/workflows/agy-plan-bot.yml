@@ -75,6 +75,15 @@ jobs:
           github.event.comment.user.login == 'Mohammadlali')
       )
     env:
+      # Unique per job execution. /tmp/agent-repo was a single shared path:
+      # it survived between jobs (which is why a `rm -rf` was added on
+      # 2026-09-17), and `rm -rf` on a SHARED path is only safe when jobs run
+      # one at a time. They do not -- agy-lead-plan dispatches 10 agw-worker
+      # runs 5s apart, so two on one host would delete each other's checkout
+      # mid-clone. That failure is silent, unlike the dir-exists error it
+      # replaced. runner.temp is per-runner and the run/attempt/job triple
+      # makes it unique even if the temp dir is ever shared.
+      AGENT_REPO: ${{ runner.temp }}/agent-repo-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ACC6_PAT: ${{ secrets.ACC6_PAT }}
       PROJECT_TAG: ${{ needs.check-marker.outputs.project_tag }}
@@ -106,10 +115,10 @@ jobs:
             exit 1
           fi
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
-          rm -rf /tmp/agent-repo
-          mkdir -p /tmp/agent-repo
+          rm -rf "${AGENT_REPO}"
+          mkdir -p "${AGENT_REPO}"
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-            "https://github.com/${TARGET_REPO}.git" /tmp/agent-repo
+            "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
 
       - name: Install AGY CLI from HF Dataset
         run: |
@@ -197,7 +206,7 @@ jobs:
         id: run_agy
         run: |
           set +e
-          cd /tmp/agent-repo 2>/dev/null || true
+          cd "${AGENT_REPO}" 2>/dev/null || true
           PROMPT=$(cat /tmp/prompt.txt)
           OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           echo "$OUTPUT" > /tmp/agy_output.txt
