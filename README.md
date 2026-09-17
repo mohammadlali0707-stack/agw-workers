@@ -117,6 +117,7 @@ file):
 
 | index | owner |
 |---|---|
+| 0 | Mohammadlali -- not one of the eight; see the note under this table |
 | 1 | momonakikugava-pixel |
 | 2 | lali94m-max |
 | 3 | ngocgminh5-debug |
@@ -125,6 +126,23 @@ file):
 | 6 | mohammadlali0707-stack -- relay host, run `relay-*.yml` from here |
 | 7 | mohammad97okk |
 | 8 | moradzahra85-png |
+
+`ACC0` (`Mohammadlali`) is listed above for one reason only: `ACC0_PAT` and
+the `Mohammadlali/agw-workers) TOKEN="$ACC0_PAT"` case in `agw-worker.yml`
+and `agy-lead-plan.yml` are real and load-bearing, so a reader hitting them
+needs the index resolved. It is **not** one of the eight `@agy` worker
+accounts -- it is outside the relay table, the identity pool and the quota
+fallback, exactly like `ACC9`. What it still owns is the fleet's status
+**Gist**, which is why `deploy-status-feed-remote.yml`, `create-status-gist.yml`
+and `test-status-api-live.yml` keep using `ACC0_PAT`: a Gist does not move
+with a repo transfer.
+
+The project repos themselves (`Claud-Cloud-Project`, `Control-Room`,
+`AirboxVIP_Coffeenet`, `status-dashboard`) are **all** owned by
+`mohammadlali0707-stack`/ACC6 as of 2026-09-17 -- `status-dashboard` was the
+last one still under `Mohammadlali` and moved that day. Per-account
+`agw-workers` repos are untouched by that: each of the nine accounts keeps
+its own, including `Mohammadlali/agw-workers`.
 
 `ACC9` (`stranger77777777`) is not in this table -- retired for good
 (Actions disabled there, never recovered), out of every cycle: relay,

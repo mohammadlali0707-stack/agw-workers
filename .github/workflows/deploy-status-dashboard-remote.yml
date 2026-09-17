@@ -1,0 +1,115 @@
+name: Deploy status-dashboard code (remote, to the new Vercel project)
+
+# status-dashboard's own deploy-status-feed.yml used to run `vercel build`/
+# `vercel deploy` directly against secrets.VERCEL_TOKEN -- the OLD Vercel
+# account, which hit its free-tier "api-deployments-free-per-day" cap on
+# 2026-09-12. The owner created a new Vercel account/project the same day
+# (domain status2.airboxvip.top for now; it becomes the permanent
+# status.airboxvip.top once the owner migrates DNS themselves) and its
+# credentials already live here as the _NEW-suffixed secrets
+# (VERCEL_TOKEN_NEW/VERCEL_ORG_ID_NEW/VERCEL_PROJECT_ID_NEW), proven working
+# by test-agy-chat-live.yml and test-status-api-live.yml.
+#
+# Rather than duplicate those secret VALUES onto status-dashboard's own repo
+# (a GitHub secret is write-only -- there is no way to copy one across repos
+# without the owner re-entering it by hand), this deploy step lives here
+# instead, same "jump server" reasoning as deploy-status-feed-remote.yml and
+# test-agy-chat-live.yml. status-dashboard's deploy-status-feed.yml
+# dispatches this workflow via the Actions API (using the PAT it already
+# has as a secret for the Gist publish) after a qualifying push, passing
+# the commit it wants deployed.
+#
+# status-dashboard moved from Mohammadlali (ACC0) to mohammadlali0707-stack
+# (ACC6) on 2026-09-17, so the clone below authenticates with ACC6_PAT, not
+# ACC0_PAT. The Gist this fleet publishes to is a separate matter: a Gist
+# does not move with a repo transfer, so anything touching it (here:
+# nothing; see deploy-status-feed-remote.yml and test-status-api-live.yml)
+# still needs ACC0_PAT.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "status-dashboard commit SHA (or ref/branch) to deploy"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    timeout-minutes: 10
+    env:
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_NEW }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID_NEW }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_NEW }}
+    steps:
+      - name: Guard
+        run: |
+          set -e
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::error::secrets.VERCEL_TOKEN_NEW is not set"; exit 1; fi
+          if [ -z "$VERCEL_ORG_ID" ]; then echo "::error::secrets.VERCEL_ORG_ID_NEW is not set"; exit 1; fi
+          if [ -z "$VERCEL_PROJECT_ID" ]; then echo "::error::secrets.VERCEL_PROJECT_ID_NEW is not set"; exit 1; fi
+          if [ -z "$ACC6_PAT" ]; then echo "::error::secrets.ACC6_PAT is not set -- status-dashboard now lives on mohammadlali0707-stack and ACC0_PAT can no longer read it"; exit 1; fi
+
+      - name: Clone status-dashboard at the requested commit
+        run: |
+          set -e
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" \
+            clone "https://github.com/mohammadlali0707-stack/status-dashboard.git" /tmp/status-dashboard-deploy
+          cd /tmp/status-dashboard-deploy
+          git checkout "${{ inputs.commit_sha || 'main' }}"
+
+      - name: Deploy to the new Vercel project
+        run: |
+          set -e
+          cd /tmp/status-dashboard-deploy
+          echo "Deploying to new Vercel project (VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID)..."
+          DEPLOY_OUTPUT=""
+          if npx --yes vercel build --prod --token="$VERCEL_TOKEN" --yes; then
+            DEPLOY_OUTPUT=$(npx --yes vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --yes)
+          else
+            DEPLOY_OUTPUT=$(timeout 180 npx --yes vercel deploy --prod --token="$VERCEL_TOKEN" --yes || echo "")
+          fi
+          echo "Deployment raw output: $DEPLOY_OUTPUT"
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -Eo 'https://[a-zA-Z0-9.-]+\.vercel\.app' | head -n 1)
+          if [ -z "$DEPLOY_URL" ]; then
+            if [ -n "$DEPLOY_OUTPUT" ]; then
+              DEPLOY_URL="$DEPLOY_OUTPUT"
+            else
+              echo "::error::No deployment URL retrieved."
+              exit 1
+            fi
+          fi
+
+          # Best-effort only: Vercel's own Production Domain setting already
+          # auto-points at the latest successful prod deploy -- confirmed
+          # live 2026-09-12 (a run's own `vercel deploy` output printed
+          # "Aliased https://status2.airboxvip.top" on its own, and the site
+          # was reachable/correct via curl even on runs where this explicit
+          # alias-set call kept failing with a domain-access error).
+          SUBDOMAIN="status2.airboxvip.top"
+          echo "Assigning domain alias $SUBDOMAIN to $DEPLOY_URL (best-effort)..."
+          ALIAS_OK=false
+          for attempt in 1 2 3; do
+            if npx --yes vercel alias set "$DEPLOY_URL" "$SUBDOMAIN" --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"; then
+              ALIAS_OK=true
+              break
+            fi
+            echo "Alias attempt $attempt failed; retrying in 10s..."
+            sleep 10
+          done
+          if [ "$ALIAS_OK" != "true" ]; then
+            echo "::warning::Could not assign domain alias explicitly -- continuing anyway, since $SUBDOMAIN's own Production Domain setting already points at the latest deploy."
+          fi
+          echo "Deployed https://$SUBDOMAIN"
+          {
+            echo "### status-dashboard deploy result"
+            echo "- commit/ref requested: ${{ inputs.commit_sha || 'main' }}"
+            echo "- domain: https://$SUBDOMAIN"
+            echo "- vercel deployment url: $DEPLOY_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

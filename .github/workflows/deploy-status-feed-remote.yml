@@ -1,0 +1,99 @@
+name: Refresh Status Dashboard Data (remote, runs here instead of on status-dashboard)
+
+# Moved here 2026-09-12 at the owner's request: status-dashboard being
+# public or private should not affect whether its auto-update keeps
+# working. This repo (agw-workers) is public with unlimited Actions
+# minutes on every account, so running the refresh HERE instead of on
+# status-dashboard itself decouples the update pipeline from that repo's
+# own Actions-minutes quota entirely.
+#
+# Simplified again 2026-09-12, same day: the original version of this
+# workflow still committed status.json back into status-dashboard and ran
+# a full `vercel deploy` every 5 minutes -- 288 real Vercel deployments a
+# day, which blew straight through Vercel's own free-tier cap of 100
+# deployments/day (`deploy-status-feed.yml`'s run history shows the exact
+# failure: "Error: Resource is limited ... api-deployments-free-per-day").
+# status.json no longer lives in git or Vercel deploys at all; this
+# workflow only regenerates the feed and publishes it. Actual site deploys
+# (code changes) go through status-dashboard's own deploy-status-feed.yml,
+# triggered by pushes to that repo, not by this workflow.
+#
+# Switched from Cloudflare R2 to a GitHub Gist the same day: R2 is
+# permanently unavailable on the owner's Cloudflare account (not fully
+# provisioned, so Cloudflare blocks all TLS to the R2 endpoint
+# account-wide -- confirmed identically across 4 separate client/runtime
+# combinations while debugging status-dashboard's api/status.js). The
+# script now PATCHes the fleet's status Gist using ACC0_PAT (already
+# present here, already has the 'gist' scope) instead -- no new secret
+# needed on this repo.
+#
+# status-dashboard moved from Mohammadlali (ACC0) to
+# mohammadlali0707-stack (ACC6) on 2026-09-17. The clone below switched to
+# ACC6_PAT accordingly; the Gist PATCH did NOT, because a Gist stays with
+# the account that created it through a repo transfer.
+#
+# `schedule: cron: '*/5 * * * *'` removed 2026-09-14 at the owner's
+# explicit request: a fixed timer republished the gist every 5 minutes
+# whether or not any gate result had actually changed, which is not what
+# the owner wants ("only update the site when something real changed, not
+# every few minutes"). Refresh is now event-driven: Claud-Cloud-Project's
+# own ccp-gates.yml dispatches this workflow (workflow_dispatch, same
+# mechanism status-dashboard's own force-refresh-status-feed.yml already
+# used for a manual refresh) at the end of every gate run on that repo --
+# the only place a real change to gate status can originate. Manual/
+# on-demand refresh via workflow_dispatch still works unchanged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      subdomain:
+        description: 'Target subdomain on airboxvip.top'
+        required: false
+        default: 'status.airboxvip.top'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  refresh-feed:
+    name: Regenerate status.json and publish it to the status gist (from agw-workers)
+    runs-on: self-hosted
+    timeout-minutes: 5
+    env:
+      # ACC0_PAT stays: collect_status_feed.py (run further down, inheriting
+      # this job env) PATCHes the status Gist with it, and a Gist does NOT
+      # move with a repo transfer -- it is still owned by Mohammadlali/ACC0.
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      # ACC6_PAT is what reads status-dashboard itself, which DID move.
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+    steps:
+      - name: Clone status-dashboard
+        run: |
+          set -e
+          if [ -z "$ACC6_PAT" ]; then echo "::error::secrets.ACC6_PAT is not set -- status-dashboard now lives on mohammadlali0707-stack and ACC0_PAT can no longer read it"; exit 1; fi
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" \
+            clone --branch main --single-branch --depth 1 \
+            "https://github.com/mohammadlali0707-stack/status-dashboard.git" /tmp/status-dashboard
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install pywebpush 2>/dev/null || true
+
+      - name: Regenerate status feed and publish to the status gist
+        env:
+          ACC1_PAT: ${{ secrets.ACC1_PAT }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+        run: |
+          SUBDOMAIN="${{ inputs.subdomain || 'status.airboxvip.top' }}"
+          cd /tmp/status-dashboard
+          python3 Tools/collect_status_feed.py --out /tmp/status.json --subdomain "$SUBDOMAIN"

@@ -1,0 +1,180 @@
+name: Test the live @agy chat widget (via Vercel Protection Bypass)
+
+# status-dashboard's /api/* routes sit behind Vercel Deployment Protection
+# (SSO) on purpose -- the owner does not want the site public. Nobody
+# outside this repo's own Actions runners can reach VERCEL_PROTECTION_BYPASS
+# (a GitHub Actions secret is write-only, never readable back out), so this
+# workflow is the "jump server" for it: it POSTs/GETs the real live
+# endpoints server-side with the bypass header and prints back only the
+# non-secret parts of the response (issue numbers, urls, reply bodies),
+# same pattern as every other cross-account credential in this fleet.
+#
+# 2026-09-12: the original Vercel project/account hit a limit, so the
+# owner created a NEW Vercel account/project (domain status2.airboxvip.top)
+# and put new credentials in this repo's own secrets, suffixed _NEW:
+# VERCEL_TOKEN_NEW / VERCEL_ORG_ID_NEW / VERCEL_PROJECT_ID_NEW (deploy)
+# and VERCEL_PROTECTION_BYPASS_NEW (test bypass, same role as the old
+# VERCEL_PROTECTION_BYPASS). This workflow now deploys status-dashboard's
+# current code to that NEW project first (a brand new project has nothing
+# running yet), then runs the same create+poll chat test against the new
+# domain. VERCEL_ORG_ID/VERCEL_PROJECT_ID are the Vercel CLI's own
+# documented non-interactive-link env vars -- setting them skips
+# `vercel link` entirely, no .vercel/project.json needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: Chat message to send (end with "@issue" to test task mode)
+        required: true
+        default: "این پیام یک تست خودکار از agw-workers است -- لطفا فقط تایید کن که این پیام را دریافت کردی."
+      project:
+        description: "Optional project hint (control_room / tbs / airboxvip / status_dashboard)"
+        required: false
+        default: ""
+      issue_number:
+        description: "Optional: continue an existing quick-chat thread instead of opening a new one"
+        required: false
+        default: ""
+
+jobs:
+  test-live-chat:
+    runs-on: self-hosted
+    timeout-minutes: 12
+    env:
+      BYPASS: ${{ secrets.VERCEL_PROTECTION_BYPASS_NEW }}
+      SITE: https://status2.airboxvip.top
+      # status-dashboard moved Mohammadlali (ACC0) -> mohammadlali0707-stack
+      # (ACC6) on 2026-09-17; ACC0_PAT can no longer read it.
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN_NEW }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID_NEW }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID_NEW }}
+    steps:
+      - name: Guard
+        run: |
+          set -e
+          if [ -z "$BYPASS" ]; then echo "::error::secrets.VERCEL_PROTECTION_BYPASS_NEW is not set"; exit 1; fi
+          if [ -z "$VERCEL_TOKEN" ]; then echo "::error::secrets.VERCEL_TOKEN_NEW is not set"; exit 1; fi
+          if [ -z "$VERCEL_ORG_ID" ]; then echo "::error::secrets.VERCEL_ORG_ID_NEW is not set"; exit 1; fi
+          if [ -z "$VERCEL_PROJECT_ID" ]; then echo "::error::secrets.VERCEL_PROJECT_ID_NEW is not set"; exit 1; fi
+          if [ -z "$ACC6_PAT" ]; then echo "::error::secrets.ACC6_PAT is not set -- status-dashboard now lives on mohammadlali0707-stack"; exit 1; fi
+
+      - name: Clone status-dashboard
+        run: |
+          set -e
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" \
+            clone --branch main --single-branch --depth 1 \
+            "https://github.com/mohammadlali0707-stack/status-dashboard.git" /tmp/status-dashboard-new
+
+      - name: Deploy to the new Vercel project
+        id: deploy
+        run: |
+          set -e
+          cd /tmp/status-dashboard-new
+          echo "Deploying to new Vercel project (VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID)..."
+          DEPLOY_OUTPUT=""
+          if npx --yes vercel build --prod --token="$VERCEL_TOKEN" --yes; then
+            DEPLOY_OUTPUT=$(npx --yes vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" --yes)
+          else
+            DEPLOY_OUTPUT=$(timeout 180 npx --yes vercel deploy --prod --token="$VERCEL_TOKEN" --yes || echo "")
+          fi
+          echo "Deployment raw output: $DEPLOY_OUTPUT"
+          DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -Eo 'https://[a-zA-Z0-9.-]+\.vercel\.app' | head -n 1)
+          if [ -z "$DEPLOY_URL" ]; then
+            if [ -n "$DEPLOY_OUTPUT" ]; then
+              DEPLOY_URL="$DEPLOY_OUTPUT"
+            else
+              echo "::error::No deployment URL retrieved."
+              exit 1
+            fi
+          fi
+
+          # Non-fatal: a Vercel project's configured Production Domain(s)
+          # auto-point to the latest successful production deployment on
+          # their own, confirmed live (curl to https://status2.airboxvip.top/
+          # returned 200 with fresh content within seconds of a deploy that
+          # had this exact alias-set command still failing). So a handful
+          # of quick attempts here is only to skip the propagation delay
+          # when possible -- if it never succeeds, warn and move on rather
+          # than failing the whole job and skipping the actual chat test.
+          SUBDOMAIN="status2.airboxvip.top"
+          echo "Assigning domain alias $SUBDOMAIN to $DEPLOY_URL (best-effort)..."
+          ALIAS_OK=false
+          for attempt in 1 2 3; do
+            if npx --yes vercel alias set "$DEPLOY_URL" "$SUBDOMAIN" --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID"; then
+              ALIAS_OK=true
+              break
+            fi
+            echo "Alias attempt $attempt failed; retrying in 10s..."
+            sleep 10
+          done
+          if [ "$ALIAS_OK" != "true" ]; then
+            echo "::warning::Could not assign domain alias explicitly -- continuing anyway, since $SUBDOMAIN's own Production Domain setting already points at the latest deploy."
+          fi
+          echo "Deploy step done for https://$SUBDOMAIN"
+
+      - name: POST /api/agy_create
+        id: create
+        env:
+          MESSAGE: ${{ inputs.message }}
+          PROJECT: ${{ inputs.project }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          set -e
+          PAYLOAD=$(python3 -c "import json,os; print(json.dumps({'message': os.environ['MESSAGE'], 'project': os.environ.get('PROJECT',''), 'issue_number': (int(os.environ['ISSUE_NUMBER']) if os.environ.get('ISSUE_NUMBER') else None)}))")
+          CODE=$(curl -sL --max-redirs 5 -b /tmp/agy_cookies.txt -c /tmp/agy_cookies.txt \
+            -o /tmp/create_resp.json -w "%{http_code}" \
+            -X POST "$SITE/api/agy_create" \
+            -H "Content-Type: application/json" \
+            -H "x-vercel-protection-bypass: $BYPASS" \
+            -H "x-vercel-set-bypass-cookie: true" \
+            -d "$PAYLOAD")
+          echo "HTTP $CODE"
+          cat /tmp/create_resp.json
+          echo "http_code=$CODE" >> "$GITHUB_OUTPUT"
+          if [ "$CODE" != "200" ]; then
+            echo "::error::agy_create did not return 200 -- see printed body above (no secret in it)."
+            exit 1
+          fi
+          ISSUE_NUM=$(python3 -c "import json; print(json.load(open('/tmp/create_resp.json')).get('issue_number',''))")
+          MODE=$(python3 -c "import json; print(json.load(open('/tmp/create_resp.json')).get('mode',''))")
+          echo "issue_number=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          {
+            echo "### agy_create result"
+            echo '```json'
+            cat /tmp/create_resp.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Poll /api/agy_status for a reply
+        env:
+          ISSUE_NUM: ${{ steps.create.outputs.issue_number }}
+        run: |
+          set -e
+          for i in $(seq 1 20); do
+            CODE=$(curl -sL --max-redirs 5 -b /tmp/agy_cookies.txt -c /tmp/agy_cookies.txt \
+              -o /tmp/status_resp.json -w "%{http_code}" \
+              "$SITE/api/agy_status?issue_number=$ISSUE_NUM" \
+              -H "x-vercel-protection-bypass: $BYPASS" \
+              -H "x-vercel-set-bypass-cookie: true")
+            echo "[$i/20] HTTP $CODE"
+            if [ "$CODE" = "200" ]; then
+              REPLY_COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/status_resp.json')).get('replies',[])))")
+              echo "replies so far: $REPLY_COUNT"
+              if [ "$REPLY_COUNT" -ge 2 ]; then
+                break
+              fi
+            fi
+            sleep 15
+          done
+          echo "--- final agy_status body ---"
+          python3 -m json.tool < /tmp/status_resp.json || cat /tmp/status_resp.json
+          {
+            echo "### agy_status final result (issue #$ISSUE_NUM)"
+            echo '```json'
+            cat /tmp/status_resp.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,4 +1,4 @@
-name: AGY Issue Bot (cross-account dispatch + checklist)
+name: AGW Worker AGY Issue Bot (same-repo, no relay)
 
 # Fixed 2026-09-14, two independent bugs, both measured live before being
 # fixed (not guessed):
@@ -23,13 +23,6 @@ name: AGY Issue Bot (cross-account dispatch + checklist)
 #    instead for that one known account, same as the existing
 #    `user.login == 'claude[bot]'` carve-out just below already does for
 #    comments.
-#
-# Fixed 2026-09-16: Cross-account dispatch was broken -- agw-worker.yml was
-# dispatched to THIS repo (ACC6) even when acc_index pointed to ACC1-8.
-# Now the worker is dispatched to the CHOSEN account's own agw-workers repo
-# using that account's PAT. This distributes load across all accounts'
-# own 2000 free minutes instead of exhausting only ACC6's quota.
-# Checklist + clean-report features also restored (safe now that repo is private).
 
 on:
   issues:
@@ -44,7 +37,7 @@ permissions:
 
 jobs:
   check-marker:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
     outputs:
       match: ${{ steps.check.outputs.match }}
@@ -57,43 +50,47 @@ jobs:
           BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
           TITLE: ${{ github.event.issue.title || '' }}
         run: |
+          # Combine title and body, then check if it ends with @agy
+          # We look for <project> @agy at the end.
           TRIMMED="$(printf '%s\n%s' "$TITLE" "$BODY" | sed -e 's/[[:space:]]*$//')"
           LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
           case "$LOWER" in
-            *"@agy")
-              echo "match=true" >> "$GITHUB_OUTPUT"
-
-              # Extract the project tag (word right before @agy)
+            *"@agy") 
+              echo "match=true" >> "$GITHUB_OUTPUT" 
+              
+              # Extract the project tag which is the word right before @agy
               PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy$' | awk '{print $1}')
               TARGET_REPO=""
-
+              
+              # Every project repo below is owned by mohammadlali0707-stack
+              # (ACC6) as of 2026-09-17: the owner moved the last one still
+              # under Mohammadlali (ACC0), status-dashboard, over to ACC6.
+              # Nothing here needs a token of its own -- agw-worker.yml
+              # resolves one from the owner (ACC6_PAT for anything that is
+              # not Mohammadlali/agw-workers), so an ACC6-owned target is
+              # already wired correctly by that default branch.
               case "$PROJECT" in
-                ccp)       TARGET_REPO="mohammadlali0707-stack/Claud-Cloud-Project" ;;
-                cr)        TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
+                ccp) TARGET_REPO="mohammadlali0707-stack/Claud-Cloud-Project" ;;
+                cr) TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
                 coffeenet) TARGET_REPO="mohammadlali0707-stack/AirboxVIP_Coffeenet" ;;
-                status)    TARGET_REPO="Mohammadlali/status-dashboard" ;;
-                *)         TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
+                status) TARGET_REPO="mohammadlali0707-stack/status-dashboard" ;;
+                *) TARGET_REPO="mohammadlali0707-stack/Control-Room" ;; # fallback
               esac
-
-              # Pick a random worker from ACC1-ACC8 (never ACC6 which hosts this repo,
-              # never ACC9 which is retired, never ACC0 which is reserved for the owner)
-              ACC_IDX=$(( (RANDOM % 7) + 1 ))
-              # Map: 1->1, 2->2, 3->3, 4->4, 5->5, 6->7, 7->8
-              if [ "$ACC_IDX" -ge 6 ]; then
-                ACC_IDX=$(( ACC_IDX + 1 ))
-              fi
-
+              
+              # Pick a random worker from 1 to 8
+              ACC_IDX=$(( (RANDOM % 8) + 1 ))
+              
               echo "target_repo=$TARGET_REPO" >> "$GITHUB_OUTPUT"
               echo "acc_index=$ACC_IDX" >> "$GITHUB_OUTPUT"
               ;;
-            *)
-              echo "match=false" >> "$GITHUB_OUTPUT"
+            *) 
+              echo "match=false" >> "$GITHUB_OUTPUT" 
               ;;
           esac
 
-  agy-dispatch:
+  agy-same-repo:
     needs: [check-marker]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: >
       (github.event_name == 'issues' &&
         needs.check-marker.outputs.match == 'true' &&
@@ -112,16 +109,6 @@ jobs:
           github.event.comment.user.login == 'claude[bot]'
         )
       )
-    env:
-      ACC0_PAT: ${{ secrets.ACC0_PAT }}
-      ACC1_PAT: ${{ secrets.ACC1_PAT }}
-      ACC2_PAT: ${{ secrets.ACC2_PAT }}
-      ACC3_PAT: ${{ secrets.ACC3_PAT }}
-      ACC4_PAT: ${{ secrets.ACC4_PAT }}
-      ACC5_PAT: ${{ secrets.ACC5_PAT }}
-      ACC6_PAT: ${{ secrets.ACC6_PAT }}
-      ACC7_PAT: ${{ secrets.ACC7_PAT }}
-      ACC8_PAT: ${{ secrets.ACC8_PAT }}
     steps:
       - name: Ack on the issue
         env:
@@ -131,83 +118,25 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "🤖 **Project Manager:** Task received! Routing to **\`$TARGET_REPO\`** via worker **ACC${ACC_IDX}**.
-          
-          ⏳ The worker will shortly post its plan as a checklist on this issue..."
+            --body "Project Manager: Routing to **$TARGET_REPO** via worker **ACC$ACC_IDX**."
 
-      - name: Resolve account owner and PAT
-        id: resolve
-        env:
-          ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
-        run: |
-          set -e
-          case "$ACC_IDX" in
-            0) OWNER="Mohammadlali";           DISPATCH_PAT="$ACC0_PAT" ;;
-            1) OWNER="momonakikugava-pixel";   DISPATCH_PAT="$ACC1_PAT" ;;
-            2) OWNER="lali94m-max";            DISPATCH_PAT="$ACC2_PAT" ;;
-            3) OWNER="ngocgminh5-debug";       DISPATCH_PAT="$ACC3_PAT" ;;
-            4) OWNER="hmmletssee7-design";     DISPATCH_PAT="$ACC4_PAT" ;;
-            5) OWNER="kidding602";             DISPATCH_PAT="$ACC5_PAT" ;;
-            7) OWNER="mohammad97okk";          DISPATCH_PAT="$ACC7_PAT" ;;
-            8) OWNER="moradzahra85-png";       DISPATCH_PAT="$ACC8_PAT" ;;
-            *) echo "::error::Invalid acc_index: $ACC_IDX"; exit 1 ;;
-          esac
-
-          if [ -z "$DISPATCH_PAT" ]; then
-            echo "::error::No PAT for acc_index=$ACC_IDX ($OWNER) -- check secrets"
-            exit 1
-          fi
-
-          echo "::add-mask::$DISPATCH_PAT"
-          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
-          echo "dispatch_pat=$DISPATCH_PAT" >> "$GITHUB_OUTPUT"
-
-      - name: Build prompt (with checklist + clean-report instructions)
+      - name: Build prompt
         id: prompt
         env:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           ISSUE_NUM: ${{ github.event.issue.number }}
           COMMENT_BODY: ${{ github.event.comment.body }}
-          CONTROL_REPO: ${{ github.repository }}
-          TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
-          ACC6_PAT: ${{ secrets.ACC6_PAT }}
         run: |
           sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
           SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
           SAFE_BODY=$(printf '%s' "$ISSUE_BODY" | sanitize)
           SAFE_COMMENT=$(printf '%s' "$COMMENT_BODY" | sanitize)
           {
-            printf '%s\n' "You are AGY, an AI worker. Your task comes from issue #${ISSUE_NUM} in the control repo ${CONTROL_REPO}."
-            printf '%s\n' "The TARGET repo where your final clean output should go is: ${TARGET_REPO}"
-            printf '%s\n' ""
+            printf '%s\n' 'You are AGY, an AI worker running inside this agw-workers repo itself.'
             printf 'TASK - Issue #%s: %s\n' "$ISSUE_NUM" "$SAFE_TITLE"
             printf '%s\n' "$SAFE_BODY"
-            printf '%s\n' ""
-            printf '%s\n' "=== MANDATORY WORKFLOW ==="
-            printf '%s\n' "STEP 1 - PLAN (do this FIRST, before any other work):"
-            printf '%s\n' "  Use the GitHub CLI (gh) to post a comment on issue #${ISSUE_NUM} in repo ${CONTROL_REPO}."
-            printf '%s\n' "  The comment must contain your plan as a checklist, for example:"
-            printf '%s\n' "  ## 🗂️ My Plan"
-            printf '%s\n' "  - [ ] Step 1: ..."
-            printf '%s\n' "  - [ ] Step 2: ..."
-            printf '%s\n' "  - [ ] Step 3: ..."
-            printf '%s\n' "  Command: gh issue comment ${ISSUE_NUM} --repo ${CONTROL_REPO} --body '## 🗂️ My Plan\n- [ ] ...'"
-            printf '%s\n' ""
-            printf '%s\n' "STEP 2 - EXECUTE: Do the actual work. As you finish each item, update the checklist"
-            printf '%s\n' "  by editing your previous comment (use gh issue comment <id> --edit) and change [ ] to [x]."
-            printf '%s\n' "  You can also add sub-comments for important progress updates."
-            printf '%s\n' ""
-            printf '%s\n' "STEP 3 - CLEAN REPORT: When ALL checklist items are done:"
-            printf '%s\n' "  a) Push the final, clean code/files to the TARGET repo: ${TARGET_REPO}"
-            printf '%s\n' "  b) Create a file called 'Reports/walkthrough-${ISSUE_NUM}.md' in ${TARGET_REPO}"
-            printf '%s\n' "     with a clean summary of what was done (no debug logs, just the important decisions and results)."
-            printf '%s\n' "  c) Post a final comment on issue #${ISSUE_NUM} in ${CONTROL_REPO} with a ✅ summary and"
-            printf '%s\n' "     a link to the walkthrough file you created."
-            printf '%s\n' ""
-            printf '%s\n' "=== END MANDATORY WORKFLOW ==="
-            printf '%s\n' ""
-            printf '%s\n' 'If this task needs an image or video asset, do not try to generate it yourself. Print a line starting exactly with ##MEDIA_REQUEST## followed by a one-line description of what is needed, then continue without waiting for it.'
+            printf '%s\n' 'If this task needs an image or video asset, do not try to generate it yourself and do not ask for GitHub access to do so. Print a line starting exactly with ##MEDIA_REQUEST## followed by a one-line description of what is needed, then continue the rest of your task without waiting for it. Something else will open the request for you.'
             if [ -n "$SAFE_COMMENT" ]; then
               printf '%s\n' 'LATEST COMMENT:'
               printf '%s\n' "$SAFE_COMMENT"
@@ -215,26 +144,18 @@ jobs:
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
 
-      - name: Dispatch agw-worker.yml in the CHOSEN account's own repo
+      - name: Dispatch agw-worker.yml in this same repo
         env:
-          GH_TOKEN: ${{ steps.resolve.outputs.dispatch_pat }}
-          DISPATCH_OWNER: ${{ steps.resolve.outputs.owner }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TARGET_REPO: ${{ needs.check-marker.outputs.target_repo }}
           ACC_IDX: ${{ needs.check-marker.outputs.acc_index }}
-          ACC6_PAT: ${{ secrets.ACC6_PAT }}
         run: |
           PROMPT=$(cat /tmp/prompt.txt)
-          WORKER_REPO="${DISPATCH_OWNER}/agw-workers"
-
-          echo "Dispatching to ${WORKER_REPO} (ACC${ACC_IDX}) for target ${TARGET_REPO}"
-
           gh workflow run agw-worker.yml \
-            --repo "$WORKER_REPO" \
+            --repo "${{ github.repository }}" \
             --field "prompt=$PROMPT" \
             --field "target_repo=$TARGET_REPO" \
             --field "target_branch=" \
             --field "acc_index=$ACC_IDX" \
             --field "issue_number=${{ github.event.issue.number }}" \
-            --field "target_repo_pat=$ACC6_PAT" \
-            --field "callback_repo=${{ github.repository }}" \
-            --field "callback_id=issue-${{ github.event.issue.number }}-acc${ACC_IDX}-${{ github.run_id }}"
+            --field "callback_id=same-repo-${{ github.event.issue.number }}-${{ github.run_id }}"

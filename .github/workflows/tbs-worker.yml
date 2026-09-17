@@ -13,6 +13,9 @@
 #                         vars.AGW_CLI_VERSION, which no longer do anything:
 #                         the CLI is baked into the image at a pinned version.
 #   secrets.TBS_HUB_TOKEN GitHub PAT that can read AND write the hub repo
+#                         (mohammadlali0707-stack/Claud-Cloud-Project since
+#                         the 2026-09-17 move to ACC6 -- a token issued for
+#                         the old Mohammadlali owner no longer qualifies)
 #   secrets.AGW_TOKEN_ACC<N>  base64 of the Antigravity oauth token file
 #
 # Two things in here are not style, and both were bought elsewhere in this
@@ -87,8 +90,13 @@ jobs:
       - name: Check out the hub repository
         uses: actions/checkout@v4
         with:
-          repository: Mohammadlali/Claud-Cloud-Project
-          token: ${{ secrets.TBS_HUB_TOKEN }}
+          # The hub moved Mohammadlali (ACC0) -> mohammadlali0707-stack
+          # (ACC6) on 2026-09-17. TBS_HUB_TOKEN stays primary, but it was
+          # issued against the OLD owner: until it is reissued for ACC6 it
+          # cannot read this path, so fall back to ACC6_PAT, which can. Same
+          # `||` idiom as vars.TBS_WORKER_IMAGE above.
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.TBS_HUB_TOKEN || secrets.ACC6_PAT }}
           ref: ${{ vars.TBS_BRANCH }}
           # NOT optional, and NOT a performance choice. actions/checkout
           # defaults to depth 1, which is a SHALLOW clone. Measured on this
@@ -193,7 +201,9 @@ jobs:
       - name: Run the worker
         if: steps.poll.outputs.assigned == 'yes'
         env:
-          TBS_HUB_TOKEN: ${{ secrets.TBS_HUB_TOKEN }}
+          # Same fallback as the checkout above: run_worker.py pushes back to
+          # the hub, which is ACC6-owned since 2026-09-17.
+          TBS_HUB_TOKEN: ${{ secrets.TBS_HUB_TOKEN || secrets.ACC6_PAT }}
         shell: bash
         run: |
           set -euo pipefail
