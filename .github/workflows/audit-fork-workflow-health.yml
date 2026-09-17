@@ -1,0 +1,45 @@
+name: Audit fork workflow health (does GitHub parse them?)
+
+# Asks GitHub itself, per account, whether it could parse each fork's AGY
+# workflows -- rather than grepping the file for defects we already know about.
+#
+# The signal is the workflow's registered name. GitHub falls back to the FILE
+# PATH when it never got far enough to read the `name:` inside, which is how
+# the owner spotted -- twice on 2026-09-17 -- that a file was still broken
+# after being declared fixed. The content audit and the sync's own readback
+# both passed while every fork was unstartable, because the file had a second
+# defect nobody had thought to grep for. This check does not need to be told
+# what the defects are.
+#
+# Read-only. No dispatch, no push.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '25 */6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ask every account whether GitHub parses its workflows
+        run: |
+          set -eu
+          python3 Tools/audit_fork_workflow_health.py | tee "$RUNNER_TEMP/health.log"
+          grep -o '##TBS##.*' "$RUNNER_TEMP/health.log" | tail -1 >> "$GITHUB_STEP_SUMMARY"
