@@ -1,0 +1,86 @@
+name: Notion task -> GitHub issue (poller)
+
+# The GitHub-side half of the owner's 2026-09-17 request: write a task in
+# Notion, get a GitHub issue that agy-plan-bot answers with a plan. The owner
+# chose to keep the n8n path running in parallel; both sides treat a non-empty
+# "Github Issue URL" on the row as "already handled", so whichever arrives
+# first wins and the other skips. Tools/notion_task_to_issue.py documents the
+# limits of that shared lock.
+#
+# WHY THIS EXISTS AT ALL
+# ----------------------
+# Measured 2026-09-17: four Notion tasks with Plan ticked produced zero issues,
+# and no issue in agw-workers's history carries a real Notion page UUID -- every
+# one holds a synthetic id from a hand-made test payload. Everything downstream
+# of the webhook was verified; the webhook leg itself has apparently never
+# delivered a real event. This path needs no webhook registration and logs
+# where it can be read.
+#
+# THE TOKEN MATTERS, NOT JUST ITS PERMISSIONS
+# -------------------------------------------
+# agy-plan-bot.yml runs its `propose` job only when the issue's
+# author_association is OWNER or COLLABORATOR (or the login is 'Mohammadlali').
+# GITHUB_TOKEN authors as github-actions[bot], which is none of those: the
+# issue would be created, labelled, and then silently ignored. Every issue that
+# actually drove this pipeline (agw-workers #25-#30) was authored by
+# mohammadlali0707-stack, so this passes a PAT and the script verifies the
+# login it authors as BEFORE creating anything.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'List what would be created without creating it'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two pollers reading the same empty "Github Issue URL" would both open an
+  # issue. This closes that window against ourselves; it cannot close it
+  # against n8n, which is a separate system.
+  group: notion-task-poller
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_TASKS_DB_ID: ${{ secrets.NOTION_TASKS_DB_ID }}
+      ISSUE_REPO: mohammadlali0707-stack/agw-workers
+      DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+      # AGY_ISSUE_PAT if the owner adds a dedicated one; ACC6_PAT otherwise.
+      # The script refuses to write if neither authors as the expected login,
+      # so a wrong guess here reports itself instead of creating dead issues.
+      GH_TOKEN: ${{ secrets.AGY_ISSUE_PAT || secrets.ACC6_PAT }}
+    steps:
+      - name: Checkout agw-workers (for Tools/)
+        uses: actions/checkout@v4
+
+      - name: Report and stop if the Notion integration is not set up yet
+        id: preflight
+        run: |
+          set -u
+          if [ -z "${NOTION_TOKEN}" ] || [ -z "${NOTION_TASKS_DB_ID}" ]; then
+            echo '::warning::NOTION_TOKEN and/or NOTION_TASKS_DB_ID are not set -- nothing to do.'
+            echo 'Create an Internal Integration at https://www.notion.so/my-integrations,'
+            echo 'grant it access to the Task Board database, and add both as repo secrets.'
+            echo '##TBS##{"data": {"reason": "secrets_absent"}, "probe": "notion_task_to_issue", "status": "skip", "v": 1}'
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Turn ticked tasks into issues
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -eu
+          python3 Tools/notion_task_to_issue.py | tee "$RUNNER_TEMP/poll.log"
+          grep -o '##TBS##.*' "$RUNNER_TEMP/poll.log" | tail -1 >> "$GITHUB_STEP_SUMMARY"
