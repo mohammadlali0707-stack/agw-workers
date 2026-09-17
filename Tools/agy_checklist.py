@@ -10,25 +10,31 @@ TWO MODES
   post    --repo R --issue N --marker M --tasks FILE
           Writes the checklist comment: one unchecked box per planned task,
           plus the roster it was built from, as an HTML comment.
-  refresh --repo R --issue N --marker M
-          RE-DERIVES every box from the issue and rewrites the comment.
+  refresh --repo R --issue N --marker M [--done-file F]
+          RE-DERIVES every box and rewrites the comment.
 
 The marker carries the run's base tag, so several leads can have checklists on
 one issue without colliding.
 
-WHY REFRESH AND NOT TICK
-------------------------
-The first version took a tag and ticked that one line in place. A probe with a
-concurrent writer showed the flaw: subordinates finish independently, so one
-worker reads the body, a rival PATCHes its own tick, and the first worker's
-PATCH then writes back its stale body -- silently erasing the rival's tick. Its
-own read-back check could not see that, because its OWN tick was present.
+WHERE "DONE" COMES FROM, AND WHY IT MOVED
+-----------------------------------------
+Originally each subordinate was to stamp its own result comment and ask for a
+refresh. Measured on issue #34: the board sat at 0/10 while all ten workers
+went green. The reason is in agy-lead-plan.yml's dispatch loop -- it passes
+prompt, target_repo, acc_index, report_dir, callback_id and credentials, but
+NOT issue_number, so every worker skipped straight past the step. And passing
+it would not have been enough either: a worker runs inside its own account's
+fork, and that fork's GITHUB_TOKEN cannot comment on the control repo's issue.
 
-So no box is ever "ticked". Each worker stamps its result comment with
-`<!-- agy-task: <tag> state=done|failed -->` and then asks for a refresh, which
-rebuilds the whole checklist from those stamps. The body becomes a pure
-function of what is on the issue, so concurrent writers converge instead of
-racing, and any update that does get lost is repaired by the next one.
+So the LEAD drives it. The lead already polls the target repo for
+`Reports/agy/accN/<tag>.txt` and knows exactly which subordinates have landed;
+`--done-file` takes that list. One writer, no cross-repo token, no race.
+
+The body is still rendered as a pure function of (roster, done-set) rather than
+edited in place -- that was the right call for a different reason, and it means
+a refresh is idempotent and any interrupted one is repaired by the next.
+Stamps are still honoured when present, so the two sources union cleanly if a
+subordinate ever does gain a route to the issue.
 
 A checklist is progress reporting. It never fails the run it reports on.
 """
@@ -148,6 +154,18 @@ def cmd_refresh(a, token):
         return 0
     rows = json.loads(m.group(1))
     state = read_state(comments)
+
+    # The lead's own poll results, when it has them. A tag listed here is done
+    # whatever the issue does or does not show, because the lead saw the report
+    # land in the repo -- which is the real evidence a subordinate finished.
+    done_file = getattr(a, "done_file", "") or ""
+    if done_file and os.path.exists(done_file):
+        with open(done_file, encoding="utf-8") as fh:
+            for line in fh:
+                tag = line.strip()
+                if tag:
+                    state[tag] = "done"
+
     title = a.title
     head = re.search(r"^### (.*?) —", target.get("body") or "", re.M)
     if head:
@@ -175,6 +193,9 @@ def main():
         if name == "post":
             s.add_argument("--tasks", required=True,
                            help="TSV: tag<TAB>title<TAB>member, one per line")
+        else:
+            s.add_argument("--done-file", default="", dest="done_file",
+                           help="one completed tag per line, from the lead's poll")
     a = ap.parse_args()
 
     token = os.environ.get("GH_TOKEN", "")

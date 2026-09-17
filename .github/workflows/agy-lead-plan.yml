@@ -448,19 +448,36 @@ jobs:
           fi
           DEADLINE=$(( $(date +%s) + 40*60 ))
           FOUND=0
+          LAST_REPORTED=-1
           while [ "$(date +%s)" -lt "$DEADLINE" ]; do
             cd "${AGENT_REPO}"
             git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
             FOUND=0
             : > /tmp/found_reports.txt
+            : > /tmp/found_tags.txt
             while read -r TAG; do
               F="Reports/agy/acc${ACCOUNT}/${TAG}.txt"
               if [ -f "$F" ]; then
                 FOUND=$((FOUND + 1))
                 echo "$F" >> /tmp/found_reports.txt
+                echo "$TAG" >> /tmp/found_tags.txt
               fi
             done < /tmp/expected_tags.txt
             echo "Poll: ${FOUND}/${EXPECTED} subordinate reports present."
+            # Update the live checklist whenever the count actually moves.
+            # THE LEAD drives this, not the subordinates: measured on issue #34,
+            # the board sat at 0/10 while all ten workers went green, because
+            # the dispatch loop above passes no issue_number -- and a fork's own
+            # GITHUB_TOKEN could not comment on this control repo's issue even
+            # if it did. The lead is the one that sees the report land.
+            if [ -n "$ISSUE_NUMBER" ] && [ "$FOUND" != "$LAST_REPORTED" ]; then
+              GH_TOKEN="$CONTROL_GH_TOKEN" python3 \
+                "$GITHUB_WORKSPACE/Tools/agy_checklist.py" refresh \
+                --repo "$CONTROL_REPO" --issue "$ISSUE_NUMBER" \
+                --marker "<!-- agy-checklist:${BASE_TAG} -->" \
+                --done-file /tmp/found_tags.txt || true
+              LAST_REPORTED="$FOUND"
+            fi
             if [ "$FOUND" -ge "$EXPECTED" ]; then
               break
             fi

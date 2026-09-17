@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Offline probe for Tools/agy_checklist.py against a fake GitHub issue.
 
-The property under test is CONVERGENCE: the checklist body must be a pure
-function of the roster plus the stamps on the issue, so that two refreshes
-racing cannot lose a result. The previous tick-in-place design failed exactly
-this and passed its own weaker check, which is why the check changed.
+Two properties are under test.
+
+CONVERGENCE: the body must be a pure function of (roster, done-set), so two
+refreshes racing cannot lose a result. The original tick-in-place design failed
+exactly this while passing its own weaker check, which is why the check changed.
+
+THE DONE-SET COMES FROM THE LEAD: --done-file is the path that actually runs in
+production. Measured on issue #34, the subordinate-driven path ticked nothing
+at all -- the lead passes no issue_number, and a fork's GITHUB_TOKEN cannot
+comment on the control repo's issue anyway -- so the lead's own poll results
+drive the board and the stamps are only a second, optional source.
 """
 import importlib.util
-import os
 import json
 import os
 import sys
@@ -60,6 +66,7 @@ MARKER = "<!-- agy-checklist:plan-33-acc3 -->"
 
 
 class A:
+    done_file = ""
     repo, issue, marker, title = "o/r", "33", MARKER, "نقشه‌ی کار"
 
 
@@ -134,6 +141,29 @@ before = board(fake)
 cl.cmd_refresh(a, "tok")
 cl.cmd_refresh(a, "tok")
 check("body is stable", board(fake) == before)
+
+print("\n-- --done-file: the path the lead actually uses --")
+fake, a = fresh()
+done = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+done.write("plan-33-acc3-w02\nplan-33-acc3-w04\n")
+done.close()
+a.done_file = done.name
+cl.cmd_refresh(a, "tok")
+b = board(fake)
+check("w02 ticked from the poll", "- [x] `plan-33-acc3-w02`" in b)
+check("w04 ticked from the poll", "- [x] `plan-33-acc3-w04`" in b)
+check("w03, which did not report, stays open", "- [ ] `plan-33-acc3-w03`" in b)
+check("counter 2/3", "— 2/3" in b)
+
+print("\n-- done-file and stamps union, they do not fight --")
+stamp(fake, "plan-33-acc3-w03", "done")
+cl.cmd_refresh(a, "tok")
+check("all three done", board(fake).count("- [x] ") == 3, board(fake))
+
+print("\n-- a missing done-file is not an error --")
+a.done_file = "/tmp/definitely-not-here-12345.txt"
+check("refresh still succeeds", cl.cmd_refresh(a, "tok") == 0)
+a.done_file = ""
 
 print("\n-- no checklist on the issue: must not crash or invent one --")
 fake2 = Fake()
