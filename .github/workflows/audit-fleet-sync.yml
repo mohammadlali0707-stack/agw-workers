@@ -106,7 +106,21 @@ jobs:
               fi
               local has_sudofree has_uniqpath has_quota=n/a
               grep -q 'AGY_BIN_DIR=' "$path" && has_sudofree=yes || has_sudofree=NO
-              grep -q 'AGENT_REPO:' "$path" && has_uniqpath=yes || has_uniqpath=NO
+              # `AGENT_REPO:` was the marker until 2026-09-17 and it was
+              # INVERTED: that colon form is the job-level env: line whose
+              # `${{ runner.temp }}` GitHub refuses to compile. This audit
+              # therefore reported all 8 accounts SYNCED while every one of
+              # them carried a workflow that could not start -- a probe
+              # measuring the bug as if it were the fix. The marker is now
+              # the step-level setter, which only the FIXED file has, and a
+              # surviving job-level `runner.` fails the account outright.
+              grep -q 'AGENT_REPO=\${RUNNER_TEMP}' "$path" \
+                && has_uniqpath=yes || has_uniqpath=NO
+              if grep -qE '^      AGENT_REPO: \$\{\{ runner\.' "$path"; then
+                echo "  $f: STILL CARRIES the job-level runner.temp form -- this"
+                echo "      workflow cannot start at all (zero jobs, no log)."
+                has_uniqpath=NO
+              fi
               if [ "$f" = "agy-lead-plan.yml" ]; then
                 grep -q 'AGY_QUOTA' "$path" && has_quota=yes || has_quota=NO
               fi

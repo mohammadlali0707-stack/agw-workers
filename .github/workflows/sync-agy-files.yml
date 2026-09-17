@@ -1,0 +1,47 @@
+name: Sync AGY workflow files to all forks (with readback)
+
+# Replaces two partial tools. sync-agw-worker.yml pushes one file to accounts
+# 1-8; sync-lead-plan-oneoff.yml pushes a different single file to seven --
+# account 0 is in neither. The 2026-09-17 `runner` context bug was in FOUR
+# files at once, which is how three of them stayed broken on every fork for
+# hours while the fleet believed the sync had happened.
+#
+# Every file pushed is fetched back and re-checked against the same rule
+# Tools/check_job_env_contexts.py enforces locally. A 200 from the Contents API
+# means a commit was written, not that the fork now holds a workflow GitHub can
+# compile -- and this fleet has twice believed a sync that had not landed.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-agy-files
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse to push anything that is broken here
+        run: python3 Tools/check_job_env_contexts.py .github/workflows
+
+      - name: Push all four AGY files to every fork and read each one back
+        run: |
+          set -eu
+          python3 Tools/sync_agy_files_to_forks.py | tee "$RUNNER_TEMP/sync.log"
+          grep -o '##TBS##.*' "$RUNNER_TEMP/sync.log" | tail -1 >> "$GITHUB_STEP_SUMMARY"
