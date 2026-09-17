@@ -42,12 +42,20 @@ jobs:
       # mid-clone. That failure is silent, unlike the dir-exists error it
       # replaced. runner.temp is per-runner and the run/attempt/job triple
       # makes it unique even if the temp dir is ever shared.
-      AGENT_REPO: ${{ runner.temp }}/agent-repo-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      # AGENT_REPO is set by the first step below. The `runner` context is
+      # NOT available in a job-level env: block -- only in step-level ones --
+      # so `${{ runner.temp }}` here made GitHub reject the whole workflow at
+      # startup: zero jobs, no log, the same signature as an unparseable file.
+      # 74f136f shipped exactly that in four files; d99dbc0 fixed one of them.
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TARGET_REPO: ${{ inputs.target_repo }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       ALL_ACCOUNTS: ${{ inputs.all_accounts }}
     steps:
+      - name: Set unique AGENT_REPO path
+        run: |
+          echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-final-report" >> "$GITHUB_ENV"
+
       - name: Install AGY CLI from HF Dataset
         run: |
           curl -L \

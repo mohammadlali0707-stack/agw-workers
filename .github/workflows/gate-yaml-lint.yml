@@ -242,3 +242,10 @@ jobs:
           else:
               print(f"✅ check_heredoc_backticks passed ({len(files)} files checked)")
           PYEOF
+
+      # CHECK-4: a context used where GitHub evaluates it before any step runs.
+      # Not a YAML error and not visible by reading -- the workflow simply never
+      # starts, with zero jobs and no log. Shipped in four files on 2026-09-17
+      # and survived three separate reviews. See Tools/check_job_env_contexts.py.
+      - name: Job-level context availability
+        run: python3 Tools/check_job_env_contexts.py .github/workflows

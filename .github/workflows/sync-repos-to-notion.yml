@@ -56,7 +56,11 @@ jobs:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_DB_ID: ${{ secrets.NOTION_DB_ID }}
       ACC6_PAT: ${{ secrets.ACC6_PAT }}
-      REPOS_ROOT: ${{ runner.temp }}/fleet
+      # REPOS_ROOT is set per step, not here: the `runner` context is not
+      # available in a job-level env: block, and using it there makes GitHub
+      # reject the whole workflow at startup -- zero jobs, no log. That is the
+      # bug 74f136f shipped in four files, and this file repeated it on the
+      # same day. Tools/check_job_env_contexts.py now fails the build on it.
     steps:
       - name: Checkout agw-workers (for Tools/)
         uses: actions/checkout@v4
@@ -77,6 +81,8 @@ jobs:
 
       - name: Clone all five repos
         if: steps.preflight.outputs.ready == 'true'
+        env:
+          REPOS_ROOT: ${{ runner.temp }}/fleet
         run: |
           set -eu
           if [ -z "${ACC6_PAT}" ]; then
@@ -94,6 +100,8 @@ jobs:
 
       - name: Mirror into Notion
         if: steps.preflight.outputs.ready == 'true'
+        env:
+          REPOS_ROOT: ${{ runner.temp }}/fleet
         run: |
           set -eu
           python3 Tools/sync_repos_to_notion.py --full | tee "$RUNNER_TEMP/sync.log"

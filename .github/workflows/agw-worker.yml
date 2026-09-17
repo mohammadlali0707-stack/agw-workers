@@ -73,7 +73,11 @@ jobs:
       # mid-clone. That failure is silent, unlike the dir-exists error it
       # replaced. runner.temp is per-runner and the run/attempt/job triple
       # makes it unique even if the temp dir is ever shared.
-      AGENT_REPO: ${{ runner.temp }}/agent-repo-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      # AGENT_REPO is set by the first step below. The `runner` context is
+      # NOT available in a job-level env: block -- only in step-level ones --
+      # so `${{ runner.temp }}` here made GitHub reject the whole workflow at
+      # startup: zero jobs, no log, the same signature as an unparseable file.
+      # 74f136f shipped exactly that in four files; d99dbc0 fixed one of them.
     # runner_type input: set by agy-issue-bot after billing check.
     # ACC0 (Mohammadlali) and ACC6 (mohammadlali0707-stack) always self-hosted.
     # ACC1-5, ACC7-8 default to ubuntu-latest (GitHub free minutes) unless
@@ -85,6 +89,10 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      - name: Set unique AGENT_REPO path
+        run: |
+          echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-run-agy" >> "$GITHUB_ENV"
+
       # This file is byte-identical across all 8 accounts (deployed by
       # relay-deploy-file.yml from mohammadlali0707-stack), so it cannot
       # hardcode which account it is. GITHUB_REPOSITORY_OWNER is filled in
