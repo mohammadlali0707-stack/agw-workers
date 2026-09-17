@@ -86,11 +86,22 @@ jobs:
             echo "  HEAD: $SHA"
 
             local ok=1
+            # agy-plan-bot.yml and agy-final-report.yml are CONTROL-REPO-only
+            # by design (they dispatch to ACC6 specifically, never run on a
+            # worker fork) -- their absence here is correct, not a defect.
+            # Measured 2026-09-17: the first version of this script required
+            # them on every fork and reported all 8 accounts STALE on that
+            # account alone, while the two files that matter on a fork
+            # (agw-worker.yml, agy-lead-plan.yml) were fully fixed on all 8.
             for f in agw-worker.yml agy-lead-plan.yml agy-plan-bot.yml agy-final-report.yml; do
               local path="$WORKDIR/.github/workflows/$f"
               if [ ! -f "$path" ]; then
-                echo "  $f: MISSING"
-                ok=0
+                if [ "$f" = "agy-plan-bot.yml" ] || [ "$f" = "agy-final-report.yml" ]; then
+                  echo "  $f: absent (expected -- control-repo-only)"
+                else
+                  echo "  $f: MISSING"
+                  ok=0
+                fi
                 continue
               fi
               local has_sudofree has_uniqpath has_quota=n/a
