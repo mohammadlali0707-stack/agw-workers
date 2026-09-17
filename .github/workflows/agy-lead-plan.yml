@@ -90,7 +90,8 @@ jobs:
       # mid-clone. That failure is silent, unlike the dir-exists error it
       # replaced. runner.temp is per-runner and the run/attempt/job triple
       # makes it unique even if the temp dir is ever shared.
-      AGENT_REPO: ${{ runner.temp }}/agent-repo-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+      # AGENT_REPO is set by the setup step below (runner context is not
+      # available in job-level env blocks -- only in step-level contexts).
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CONTROL_REPO: ${{ inputs.control_repo }}
       # Used only by the steps that talk to control_repo (issue comments,
@@ -140,6 +141,10 @@ jobs:
       # Same case statement as agw-worker.yml's own "Checkout target repo"
       # step -- kept in sync deliberately, not sourced from one place,
       # since GitHub Actions has no shared-step-library mechanism here.
+      - name: Set unique AGENT_REPO path
+        run: |
+          echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-propose" >> "$GITHUB_ENV"
+
       - name: Checkout target repo (kept open for the whole job -- planning, polling and two commits all reuse it)
         id: checkout_target
         env:
