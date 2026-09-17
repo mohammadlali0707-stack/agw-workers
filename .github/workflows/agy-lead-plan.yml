@@ -79,7 +79,7 @@ permissions:
 
 jobs:
   lead:
-    runs-on: self-hosted
+    runs-on: ${{ github.repository_owner == 'Mohammadlali' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 60
     env:
       # Unique per job execution. /tmp/agent-repo was a single shared path:

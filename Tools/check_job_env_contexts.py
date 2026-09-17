@@ -64,6 +64,19 @@ def scan_file(path):
     for jid, job in (doc.get("jobs") or {}).items():
         if not isinstance(job, dict):
             continue
+
+        # An `env:` (or `with:`, `outputs:`) key with nothing but comments
+        # under it parses as null, and GitHub rejects the workflow for that
+        # exactly as it rejects a bad context: zero jobs, no log. This is not
+        # hypothetical -- deleting the last key from agw-worker.yml's job env
+        # on 2026-09-17 left the file unparseable on all eight forks AFTER the
+        # runner-context fix had supposedly cleared it, and the readback in
+        # sync_agy_files_to_forks.py passed it because this checker did not
+        # look. The fix is to delete the `env:` line too, not to add a filler.
+        for key in ("env", "outputs", "defaults", "with"):
+            if key in job and job[key] in (None, {}):
+                out.append((jid, key, "<null-or-empty>"))
+
         for key in PRE_STEP_KEYS:
             if key not in job:
                 continue
@@ -82,14 +95,22 @@ def self_test():
     bad = ("on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
            "    env:\n      P: ${{ runner.temp }}/x\n    steps:\n"
            "      - run: echo hi\n")
+    # The second failure mode, and the one that actually shipped: an env: key
+    # holding nothing but a comment.
+    null_env = ("on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
+                "    env:\n      # only a comment lives here\n    steps:\n"
+                "      - run: echo hi\n")
     good = ("on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n"
             "    env:\n      P: ${{ github.run_id }}\n    steps:\n"
             "      - env:\n          Q: ${{ runner.temp }}\n        run: echo hi\n")
     with tempfile.TemporaryDirectory() as d:
-        bp, gp = os.path.join(d, "bad.yml"), os.path.join(d, "good.yml")
-        open(bp, "w").write(bad)
-        open(gp, "w").write(good)
-        return bool(scan_file(bp)) and not scan_file(gp)
+        paths = {}
+        for name, body in (("bad", bad), ("null_env", null_env), ("good", good)):
+            paths[name] = os.path.join(d, f"{name}.yml")
+            open(paths[name], "w").write(body)
+        return (bool(scan_file(paths["bad"]))
+                and bool(scan_file(paths["null_env"]))
+                and not scan_file(paths["good"]))
 
 
 def main():

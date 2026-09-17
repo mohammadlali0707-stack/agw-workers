@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   check-marker:
-    runs-on: self-hosted
+    runs-on: ${{ github.repository_owner == 'Mohammadlali' && 'self-hosted' || 'ubuntu-latest' }}
     if: always()
     outputs:
       match: ${{ steps.check.outputs.match }}
@@ -58,7 +58,7 @@ jobs:
 
   propose:
     needs: [check-marker]
-    runs-on: self-hosted
+    runs-on: ${{ github.repository_owner == 'Mohammadlali' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 30
     if: >
       (github.event_name == 'issues' &&

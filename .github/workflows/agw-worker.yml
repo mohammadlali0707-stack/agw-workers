@@ -53,7 +53,7 @@ on:
         default: ''
         type: string
       runner_type:
-        description: 'Runner to use: ubuntu-latest (GitHub-hosted, free minutes) or self-hosted (our server). Set automatically by agy-issue-bot based on billing check. Empty = auto (self-hosted for ACC0/ACC6, ubuntu-latest for others).'
+        description: 'Runner to use: ubuntu-latest (GitHub-hosted, free minutes) or self-hosted (our server). Set automatically by agy-issue-bot based on billing check. Empty = auto (self-hosted for ACC0 only, ubuntu-latest for every other account).'
         required: false
         default: ''
         type: string
@@ -64,25 +64,29 @@ permissions:
 
 jobs:
   run-agy:
-    env:
-      # Unique per job execution. /tmp/agent-repo was a single shared path:
-      # it survived between jobs (which is why a `rm -rf` was added on
-      # 2026-09-17), and `rm -rf` on a SHARED path is only safe when jobs run
-      # one at a time. They do not -- agy-lead-plan dispatches 10 agw-worker
-      # runs 5s apart, so two on one host would delete each other's checkout
-      # mid-clone. That failure is silent, unlike the dir-exists error it
-      # replaced. runner.temp is per-runner and the run/attempt/job triple
-      # makes it unique even if the temp dir is ever shared.
-      # AGENT_REPO is set by the first step below. The `runner` context is
-      # NOT available in a job-level env: block -- only in step-level ones --
-      # so `${{ runner.temp }}` here made GitHub reject the whole workflow at
-      # startup: zero jobs, no log, the same signature as an unparseable file.
-      # 74f136f shipped exactly that in four files; d99dbc0 fixed one of them.
+    # AGENT_REPO is set by the first step below, and this job has no other
+    # job-level env, so there is deliberately no `env:` key here at all. An
+    # `env:` with nothing but comments under it parses as null, and GitHub
+    # rejects that exactly like the bug it replaced: zero jobs, no log. That
+    # is what kept this file unparseable on every fork AFTER the runner-context
+    # fix landed. check_job_env_contexts.py now fails on a null/empty env too.
+    #
+    # Why a unique path at all: /tmp/agent-repo was a single shared path. It
+    # survived between jobs (which is why a `rm -rf` was added on 2026-09-17),
+    # and `rm -rf` on a SHARED path is only safe when jobs run one at a time.
+    # They do not -- agy-lead-plan dispatches 10 agw-worker runs 5s apart, so
+    # two on one host would delete each other's checkout mid-clone. That
+    # failure is silent, unlike the dir-exists error it replaced. RUNNER_TEMP
+    # is per-runner and the run/attempt/job triple makes it unique even if the
+    # temp dir is ever shared.
+    #
     # runner_type input: set by agy-issue-bot after billing check.
-    # ACC0 (Mohammadlali) and ACC6 (mohammadlali0707-stack) always self-hosted.
-    # ACC1-5, ACC7-8 default to ubuntu-latest (GitHub free minutes) unless
-    # agy-issue-bot detected low quota and passed runner_type=self-hosted.
-    runs-on: ${{ inputs.runner_type != '' && inputs.runner_type || (github.repository_owner == 'mohammadlali0707-stack' && 'self-hosted') || (github.repository_owner == 'Mohammadlali' && 'self-hosted') || 'ubuntu-latest' }}
+    # Owner instruction 2026-09-17: ONLY ACC0 (Mohammadlali) stays on the
+    # self-hosted Arvan pool. Every other account, the control repo
+    # included, uses ubuntu-latest -- one small runner pool shared by nine
+    # accounts is why jobs sat Queued. An explicit runner_type from
+    # agy-issue-bot still wins, so a low-quota account can be sent back.
+    runs-on: ${{ inputs.runner_type != '' && inputs.runner_type || (github.repository_owner == 'Mohammadlali' && 'self-hosted') || 'ubuntu-latest' }}
     # 30 was enough for one attempt; a same-run retry needs headroom too. A
     # quota/rate-limit rejection surfaces near-instantly, so this only bites
     # in the rare case where attempt 1 burns real time before failing.
