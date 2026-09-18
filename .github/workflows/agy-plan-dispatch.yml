@@ -304,5 +304,5 @@ jobs:
             --field "target_repo_pat=$TARGET_REPO_PAT" \
             --field "control_repo_pat=$ACC6_PAT" \
             --field "issue_number=${{ github.event.issue.number }}" \
-            --field "callback_id=plan-${{ github.event.issue.number }}-acc${{ matrix.account }}" \
+            --field "callback_id=plan-${{ github.event.issue.number }}-${{ needs.parse-proposal.outputs.plan_fp }}-acc${{ matrix.account }}" \
             --field "all_accounts=$ALL_ACCOUNTS"

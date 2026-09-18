@@ -109,6 +109,22 @@ def main():
         failures.append("the start marker does not carry the fingerprint, so "
                         "the guard has nothing to find and blocks nothing")
 
+    # THE RUN TAG MUST BE UNIQUE PER DISPATCH, not per issue.
+    # callback_id was `plan-<issue>-acc<N>`, identical for every run on one
+    # issue, so two CCP-308 dispatches on #38 (16:14 and 20:57 on 2026-09-18)
+    # wrote their worker reports to the SAME paths and overwrote each other.
+    # Nothing could then attribute a report to a run -- which is how a file's
+    # mtime came to be read as evidence of what a given dispatch produced, and
+    # read wrongly. Third instance of the same root cause as the per-issue
+    # guard and the per-issue freshness stamp.
+    if "callback_id=plan-${{ github.event.issue.number }}-acc" in code:
+        failures.append(
+            "callback_id is still per-issue, so two dispatches on one issue "
+            "overwrite each other's worker reports at identical paths")
+    if "plan_fp }}-acc" not in code:
+        failures.append("the run tag does not carry the plan fingerprint, so "
+                        "reports from different dispatches collide")
+
     plan_a = {"kind": "tbs_account_plan", "target_repo": "x/y",
               "packages": [{"account": 4, "title": "write options.rpy"}]}
     # A real revision: different content, same issue.
