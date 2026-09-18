@@ -181,10 +181,38 @@ def cmd_refresh(a, token):
     return 0
 
 
+def cmd_tick(a, token):
+    """Mark ONE item done and re-render, in a single call.
+
+    WHY THIS EXISTS. `post` + `refresh --done-file` already covered the lead
+    tier, and the lead tier is the only place they were ever wired in. Every
+    other bot -- the planner above all -- ran a silent multi-minute agy call
+    and then dropped one finished wall of text, which is what the owner asked
+    to be fixed at the root on 2026-09-18.
+
+    The root fix is not a second checklist mechanism; it is making the
+    existing one cheap enough to call from any workflow step. Three lines of
+    shell per step (append to a file, then refresh) is enough friction that
+    nobody does it. One line is not.
+
+    The done-file is still the state of record, exactly as for the lead, so a
+    tick is idempotent and re-running a step cannot un-tick anything.
+    """
+    done_file = a.done_file
+    seen = set()
+    if os.path.exists(done_file):
+        with open(done_file, encoding="utf-8") as fh:
+            seen = {l.strip() for l in fh if l.strip()}
+    if a.tag not in seen:
+        with open(done_file, "a", encoding="utf-8") as fh:
+            fh.write(a.tag + "\n")
+    return cmd_refresh(a, token)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("post", "refresh"):
+    for name in ("post", "refresh", "tick"):
         s = sub.add_parser(name)
         s.add_argument("--repo", required=True)
         s.add_argument("--issue", required=True)
@@ -196,6 +224,9 @@ def main():
         else:
             s.add_argument("--done-file", default="", dest="done_file",
                            help="one completed tag per line, from the lead's poll")
+        if name == "tick":
+            s.add_argument("--tag", required=True,
+                           help="the one roster tag to mark done")
     a = ap.parse_args()
 
     token = os.environ.get("GH_TOKEN", "")
@@ -203,7 +234,8 @@ def main():
         print("GH_TOKEN is not set", file=sys.stderr)
         return 1
     try:
-        return cmd_post(a, token) if a.cmd == "post" else cmd_refresh(a, token)
+        return {"post": cmd_post, "refresh": cmd_refresh,
+                "tick": cmd_tick}[a.cmd](a, token)
     except Exception as e:                                   # noqa: BLE001
         # A checklist is progress reporting. It must never take down the run
         # whose progress it reports.

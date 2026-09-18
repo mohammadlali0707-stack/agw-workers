@@ -124,6 +124,12 @@ jobs:
       ACC6_PAT: ${{ secrets.ACC6_PAT }}
       PROJECT_TAG: ${{ needs.check-marker.outputs.project_tag }}
     steps:
+      # Needed for Tools/agy_checklist.py. This job did not check out its own
+      # repo before, because everything it used lived in the workflow file --
+      # so the first draft of the checklist wiring below called a tool that was
+      # not on disk.
+      - uses: actions/checkout@v4
+
       - name: Set unique AGENT_REPO path
         run: |
           echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-propose" >> "$GITHUB_ENV"
@@ -139,11 +145,40 @@ jobs:
             *) echo "target_repo=mohammadlali0707-stack/Claud-Cloud-Project" >> "$GITHUB_OUTPUT" ;;
           esac
 
-      - name: Ack on the issue
+      # THE CHECKLIST, POSTED BEFORE ANY WORK STARTS.
+      # Owner instruction 2026-09-18: "the bot must write a checklist of what
+      # it is going to do before it sends the full answer, and tick each item
+      # as it finishes -- solve this at the root."
+      # It WAS solved, but only for the lead tier: agy-lead-plan.yml has called
+      # Tools/agy_checklist.py since the checklist was built, and five live
+      # checklists exist on issue #38 for plan-38-acc1/acc2/acc7/... The
+      # planner -- the bot the owner actually watched -- was never wired in. It
+      # posted a one-line "preparing a proposal..." and then went silent for
+      # minutes before dropping ~5000 characters in one block.
+      # The root fix is not a second mechanism. It is the same tool, made cheap
+      # enough to call from any step (`tick`, one line), and then actually
+      # called here. The items are THIS JOB'S OWN steps, known before the model
+      # is asked anything, so the list is honest at the moment it is posted
+      # rather than being a promise the model might not keep.
+      - name: Post the work checklist before doing any of it
+        env:
+          CHECKLIST_MARKER: "<!-- agy-checklist:plan-bot-${{ github.run_id }} -->"
         run: |
-          gh issue comment "${{ github.event.issue.number }}" \
+          echo "CHECKLIST_MARKER=${CHECKLIST_MARKER}" >> "$GITHUB_ENV"
+          echo "CHECKLIST_DONE=${RUNNER_TEMP}/plan_bot_done.txt" >> "$GITHUB_ENV"
+          : > "${RUNNER_TEMP}/plan_bot_done.txt"
+          printf '%s\t%s\t%s\n' \
+            "plan-checkout" "خواندن مخزن هدف" "${{ steps.resolve.outputs.target_repo }}" \
+            "plan-thread" "خواندن کل گفتگوی این ایشو" "planner" \
+            "plan-draft" "تدوین پروپوزال با agy" "planner" \
+            "plan-post" "ارسال پروپوزال به‌عنوان کامنت" "planner" \
+            > /tmp/plan_bot_tasks.tsv
+          python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" post \
             --repo "${{ github.repository }}" \
-            --body "Project Manager: در حال آماده‌سازی پروپوزال برای **${{ steps.resolve.outputs.target_repo }}**..."
+            --issue "${{ github.event.issue.number }}" \
+            --marker "$CHECKLIST_MARKER" \
+            --title "Project Manager — نقشه‌ی کار برای ${{ steps.resolve.outputs.target_repo }}" \
+            --tasks /tmp/plan_bot_tasks.tsv
 
       - name: Checkout target repo
         env:
@@ -159,6 +194,15 @@ jobs:
           mkdir -p "${AGENT_REPO}"
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
             "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
+
+
+      - name: Tick "plan-checkout"
+        run: |
+          python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" tick \
+            --repo "${{ github.repository }}" \
+            --issue "${{ github.event.issue.number }}" \
+            --marker "$CHECKLIST_MARKER" \
+            --done-file "$CHECKLIST_DONE" --tag "plan-checkout" || true
 
       - name: Install AGY CLI from HF Dataset
         run: |
@@ -202,6 +246,15 @@ jobs:
             --json title,body,comments \
             --jq '"ISSUE: " + .title + "\n" + .body + "\n\n" + ([.comments[] | "--- COMMENT by " + .author.login + " ---\n" + .body] | join("\n\n"))' \
             > /tmp/thread.txt || echo "(could not fetch thread)" > /tmp/thread.txt
+
+
+      - name: Tick "plan-thread"
+        run: |
+          python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" tick \
+            --repo "${{ github.repository }}" \
+            --issue "${{ github.event.issue.number }}" \
+            --marker "$CHECKLIST_MARKER" \
+            --done-file "$CHECKLIST_DONE" --tag "plan-thread" || true
 
       - name: Build the planning prompt
         id: prompt
@@ -252,6 +305,15 @@ jobs:
           echo "$OUTPUT" > /tmp/agy_output.txt
           echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
 
+
+      - name: Tick "plan-draft"
+        run: |
+          python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" tick \
+            --repo "${{ github.repository }}" \
+            --issue "${{ github.event.issue.number }}" \
+            --marker "$CHECKLIST_MARKER" \
+            --done-file "$CHECKLIST_DONE" --tag "plan-draft" || true
+
       - name: Post the proposal as a comment
         run: |
           if [ ! -s /tmp/agy_output.txt ]; then
@@ -263,3 +325,11 @@ jobs:
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
             --body-file /tmp/agy_output.txt
+
+      - name: Tick "plan-post"
+        run: |
+          python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" tick \
+            --repo "${{ github.repository }}" \
+            --issue "${{ github.event.issue.number }}" \
+            --marker "$CHECKLIST_MARKER" \
+            --done-file "$CHECKLIST_DONE" --tag "plan-post" || true
