@@ -90,6 +90,7 @@ jobs:
       skip: ${{ steps.parse.outputs.skip }}
       accounts: ${{ steps.parse.outputs.accounts }}
       proposal: ${{ steps.parse.outputs.proposal }}
+      plan_fp: ${{ steps.parse.outputs.plan_fp }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -101,12 +102,19 @@ jobs:
             --repo "${{ github.repository }}" \
             --json comments --jq '.comments[].body' > /tmp/all_comments.txt
 
-          if grep -q '^Project Manager: 🚀 Lead dispatch started' /tmp/all_comments.txt; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Already dispatched once on this issue -- refusing to dispatch again."
-            exit 0
-          fi
-          echo "skip=false" >> "$GITHUB_OUTPUT"
+          # THE GUARD IS PER-PROPOSAL, NOT PER-ISSUE.
+          # It used to grep for "Lead dispatch started" anywhere on the issue
+          # and refuse, which conflates "this PLAN already went out" with "this
+          # ISSUE has ever dispatched". Measured 2026-09-18 on issue #38: that
+          # issue dispatched CCP-307 in the morning, so when a revised plan
+          # (CCP-308) was approved on the same issue that evening, run
+          # 35365720134 printed "Already dispatched once on this issue" and
+          # skipped -- check-marker green, parse-proposal green, dispatch
+          # skipped, whole run reported Success. An issue could never carry a
+          # second plan, and nothing said so out loud.
+          # The fingerprint is computed below, after the proposal is selected,
+          # and the guard is applied there -- it cannot run before we know
+          # WHICH plan is being approved.
 
           # Extract every fenced ```json block, keep the LAST one that
           # parses as a tbs_account_plan (the most recent revision wins).
@@ -131,8 +139,28 @@ jobs:
               json.dump(proposal, f)
           with open('/tmp/accounts.json', 'w', encoding='utf-8') as f:
               json.dump(accounts, f)
+          # Fingerprint of THIS proposal: stable across reruns (sorted keys,
+          # no whitespace), different for any revision. The start marker
+          # carries it, so re-approving the same plan is still refused while a
+          # revised plan on the same issue goes through.
+          import hashlib
+          fp = hashlib.sha256(
+              json.dumps(proposal, sort_keys=True,
+                         separators=(',', ':')).encode('utf-8')).hexdigest()[:12]
+          with open('/tmp/plan_fp.txt', 'w', encoding='utf-8') as f:
+              f.write(fp)
           print('parsed', len(proposal.get('packages', [])), 'package(s) across', len(accounts), 'accounts')
+          print('proposal fingerprint:', fp)
           PYEOF
+
+          PLAN_FP="$(cat /tmp/plan_fp.txt)"
+          echo "plan_fp=${PLAN_FP}" >> "$GITHUB_OUTPUT"
+          if grep -qF "[plan:${PLAN_FP}]" /tmp/all_comments.txt; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "This exact proposal (${PLAN_FP}) was already dispatched on this issue -- refusing to dispatch it twice."
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
 
           {
             echo "proposal<<PROPOSALEOF"
@@ -148,7 +176,7 @@ jobs:
           COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/proposal.json'))['packages']))")
           gh issue comment "${{ github.event.issue.number }}" \
             --repo "${{ github.repository }}" \
-            --body "Project Manager: 🚀 Lead dispatch started -- ${COUNT} account package(s): ${{ steps.parse.outputs.accounts }}. Each lead will plan and dispatch its own 10 subordinates; a final ACC6 summary posts once all report back."
+            --body "Project Manager: 🚀 Lead dispatch started [plan:${{ steps.parse.outputs.plan_fp }}] -- ${COUNT} account package(s): ${{ steps.parse.outputs.accounts }}. Each lead plans and dispatches up to its subordinate cap; a final ACC6 summary posts once all report back."
 
   dispatch:
     needs: [parse-proposal]
