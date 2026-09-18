@@ -38,6 +38,7 @@ permissions:
 jobs:
   check-marker:
     runs-on: self-hosted
+    timeout-minutes: 5
     if: >
       github.event_name == 'issue_comment' &&
       contains(github.event.comment.body, '@agy') &&
@@ -94,6 +95,7 @@ jobs:
   agy-same-repo:
     needs: [check-marker]
     runs-on: self-hosted
+    timeout-minutes: 5
     if: >
       (github.event_name == 'issues' &&
         needs.check-marker.outputs.match == 'true' &&
