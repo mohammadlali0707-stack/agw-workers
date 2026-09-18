@@ -32,7 +32,10 @@ permissions:
 jobs:
   check-marker:
     runs-on: ${{ github.repository_owner == 'Mohammadlali' && 'self-hosted' || 'ubuntu-latest' }}
-    if: always()
+    if: >
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@agy-plan') &&
+      !contains(github.event.comment.body, '@agy-plan-approved')
     outputs:
       match: ${{ steps.check.outputs.match }}
       project_tag: ${{ steps.check.outputs.project_tag }}
