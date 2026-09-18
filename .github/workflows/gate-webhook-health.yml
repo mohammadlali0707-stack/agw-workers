@@ -10,7 +10,12 @@ jobs:
   webhook-health:
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Reading repos/{repo}/hooks needs ADMIN on the repo. GITHUB_TOKEN has no
+      # webhook permission at all -- there is no `permissions:` key that grants
+      # it -- so this gate answered 403 every hour since it was written, and
+      # never reached the endpoint check below. A PAT with admin:repo_hook can
+      # do it; GITHUB_TOKEN stays as the fallback for everything else.
+      GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
       EXPECTED_URL: "https://n8n.airboxvip.top/webhook/github-runner-trigger"
       REQUIRED_EVENTS: "issues issue_comment workflow_job"
     steps:
@@ -21,7 +26,20 @@ jobs:
           REPO="${GITHUB_REPOSITORY}"
           FAILED=0
 
-          HOOKS=$(gh api "repos/$REPO/hooks")
+          # Not being ALLOWED to look is not the same as looking and finding a
+          # problem. Reporting "webhook broken" when the real answer is "this
+          # token cannot read webhooks" is a false alarm, and an hourly one
+          # trains everybody to ignore the gate -- which is what happened.
+          if ! HOOKS=$(gh api "repos/$REPO/hooks" 2>/tmp/hooks_err); then
+            echo "::warning::cannot read this repo's webhooks -- $(tr -d '\n' < /tmp/hooks_err)"
+            echo "Reading webhooks needs repo ADMIN. GITHUB_TOKEN never has it."
+            echo "Set ACC6_PAT (or another PAT with admin:repo_hook) to enable"
+            echo "the configuration half of this gate."
+            echo '##TBS##{"data": {"reason": "no_webhook_read_permission"}, "probe": "webhook_health", "status": "skip", "v": 1}'
+            echo "The endpoint reachability check below still runs, and still fails"
+            echo "for real if n8n is down -- that part needs no GitHub permission."
+            exit 0
+          fi
           HOOK_COUNT=$(echo "$HOOKS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
           echo "Found $HOOK_COUNT webhook(s)"
 
@@ -74,6 +92,9 @@ jobs:
           EOF
 
       - name: Verify webhook endpoint is reachable
+        # always(): this half needs no GitHub permission, so a skipped
+        # configuration check above must not silently skip it too.
+        if: always()
         run: |
           echo "=== Checking n8n endpoint reachability ==="
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -94,6 +115,17 @@ jobs:
       - name: Post alert if webhook health fails
         if: failure()
         run: |
+          # The alert itself was broken: `--label alert` on a repo with no such
+          # label makes `gh issue create` exit 1, so a real webhook failure
+          # produced a failed alert step and no issue. Measured 2026-09-18 in
+          # run 35326224643: "could not add label: 'alert' not found".
+          # Created here rather than by hand because this gate is synced to all
+          # eight forks, and none of them has the label either.
+          gh label create alert \
+            --repo "$GITHUB_REPOSITORY" \
+            --color B60205 \
+            --description "Automated gate failure needing a human" 2>/dev/null \
+            || echo "label 'alert' already exists (or cannot be created); continuing"
           gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
