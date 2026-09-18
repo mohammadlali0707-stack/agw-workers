@@ -29,7 +29,9 @@ permissions:
 jobs:
   check-marker:
     runs-on: self-hosted
-    if: always()
+    if: >
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@agy-plan-approved')
     outputs:
       match: ${{ steps.check.outputs.match }}
     steps:
