@@ -576,7 +576,23 @@ jobs:
           cd "${AGENT_REPO}"
           git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
           mkdir -p Reports/agy/team_reports
-          cp /tmp/account_summary.txt "Reports/agy/team_reports/acc${ACCOUNT}.md"
+          # STAMP THE RUN, so a stale file cannot pass as a fresh one.
+          # Measured on CCP-307 (issue #38, report Claud-Cloud-Project#44):
+          # accounts 4, 5 and 8 produced NO team report for that run, but their
+          # acc<N>.md files from 2026-09-15 (issues #13/#14) were still on
+          # disk. agy-final-report.yml tests `os.path.isfile` and nothing else,
+          # so it read those three-day-old files and the fleet report presented
+          # them as this cycle's accomplishments -- which is why it described
+          # gui.rpy, screens.rpy and 31 GUI assets in detail while the
+          # repository contained zero .rpy files.
+          # The path is fixed and overwritten per run, so absence of a fresh
+          # report looks exactly like presence of an old one. This header is
+          # what tells them apart.
+          {
+            printf '%s\n' "<!-- agy-team-report: tag=${BASE_TAG:-none} issue=${ISSUE_NUMBER:-none} account=${ACCOUNT} written=$(date -u +%Y-%m-%dT%H:%M:%SZ) -->"
+            printf '\n'
+            cat /tmp/account_summary.txt
+          } > "Reports/agy/team_reports/acc${ACCOUNT}.md"
           git add "Reports/agy/team_reports/acc${ACCOUNT}.md"
           if ! git diff --cached --quiet; then
             git commit -m "agy: account ${ACCOUNT} team report (${{ steps.poll.outputs.found }}/${{ steps.dispatch.outputs.expected }} subordinates reported)"

@@ -289,12 +289,41 @@ jobs:
             grep -qiE 'too many requests|rate limit|rate-limit|429|quota' "$1"
           }
 
-          PROMPT="$PROMPT_INPUT"
+          # WHERE THE AGENT MUST WRITE, stated to the agent rather than
+          # assumed. Measured on CCP-307 (report Claud-Cloud-Project#44):
+          # account 4's and account 5's agents built gui.rpy, screens.rpy and
+          # 31 GUI assets in their CLI's OWN scratch directory
+          # (/home/runner/.gemini/antigravity-cli/scratch/renpy_project/) --
+          # the report's own file links say so -- and the repo ended the task
+          # with ZERO .rpy files. The jobs were green. `cd "${AGENT_REPO}"`
+          # below set the working directory correctly, but nothing ever told
+          # the agent that the directory mattered, and the push step only ever
+          # pushes what is COMMITTED in that checkout. Work written anywhere
+          # else was discarded by a pipeline that reported success.
+          {
+            printf '%s\n' "You are running inside a git checkout at ${AGENT_REPO}, which is your working directory."
+            printf '\n%s\n' "WHERE TO PUT FILES -- this is not advice:"
+            printf '%s\n' "  - Create and edit files ONLY under that directory, using paths relative to it."
+            printf '%s\n' "  - Do NOT write into a scratch, temp or home directory. NOTHING outside the checkout is collected: it is deleted with the runner and the job still reports success, so work written elsewhere is silently lost."
+            printf '%s\n' "  - Commit what you change (git add + git commit inside the checkout). The pipeline pushes your commits; it does not go looking for your files."
+            printf '%s\n' "  - If you did not change any file, say so plainly in your output rather than describing files you did not write."
+            printf '\n%s\n\n' "---"
+            printf '%s\n' "$PROMPT_INPUT"
+          } > /tmp/agy_prompt.txt
+          PROMPT=$(cat /tmp/agy_prompt.txt)
           USED_IDX="$PRIMARY_IDX"
           restore_token "$USED_IDX" "$AGY_TOKEN_INPUT"
 
           echo "Running agy prompt with acc${USED_IDX}..."
-          cd "${AGENT_REPO}" 2>/dev/null || true
+          # NOT `|| true`. A failed cd used to be swallowed, and agy then ran
+          # in whatever directory the step happened to be in -- the same class
+          # of silent misplacement this step's prompt now warns the agent
+          # about, one layer down.
+          cd "${AGENT_REPO}"
+          # Baseline for the "did this worker actually change anything?" check
+          # in the push step. Recorded BEFORE agy runs, so it cannot be
+          # confused by the agent's own commits.
+          echo "AGY_BASE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
           # --print-timeout is agy's OWN internal wait-for-a-response ceiling,
           # separate from the outer shell `timeout` below. The old local-docker
@@ -327,7 +356,7 @@ jobs:
             USED_IDX="$FALLBACK_IDX"
             restore_token "$USED_IDX"
             echo "Retrying with acc${USED_IDX}..."
-            cd "${AGENT_REPO}" 2>/dev/null || true
+            cd "${AGENT_REPO}"
             OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
             echo "$OUTPUT" > /tmp/agy_output.txt
           fi
@@ -425,6 +454,12 @@ jobs:
           TARGET_REPO: ${{ inputs.target_repo }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
           TARGET_REPO_PAT_INPUT: ${{ inputs.target_repo_pat }}
+          # Through env, never interpolated into the shell body: callback_id is
+          # caller-supplied, and check_run_injection.py flagged my first draft
+          # for putting `${{ inputs.callback_id }}` straight into a
+          # `git commit -m` string. The gate was right -- a tag containing
+          # $(...) would have executed.
+          CALLBACK_ID: ${{ inputs.callback_id }}
           ACC0_PAT: ${{ secrets.ACC0_PAT }}
           ACC6_PAT: ${{ secrets.ACC6_PAT }}
           ACC1_PAT: ${{ secrets.ACC1_PAT }}
@@ -441,6 +476,37 @@ jobs:
           cd "${AGENT_REPO}"
           BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+
+          # RESCUE WHAT THE AGENT WROTE BUT DID NOT COMMIT.
+          # This step has only ever pushed what was already committed inside
+          # the checkout. An agent that edited files and forgot `git commit`
+          # produced the same green job as one that did nothing -- the push
+          # said "Everything up-to-date" and exited 0.
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::warning::the agent left uncommitted changes in the checkout -- committing them rather than dropping them"
+            git status --porcelain | head -40
+            git add -A
+            git commit -m "agy: work left uncommitted by ${CALLBACK_ID:-run-${GITHUB_RUN_ID}}" || true
+          fi
+
+          # DID THIS WORKER CHANGE ANYTHING AT ALL?
+          # Measured on CCP-307 (report Claud-Cloud-Project#44): accounts 4 and
+          # 5 reported building gui.rpy, screens.rpy and 31 GUI assets, and the
+          # repository finished the task with ZERO .rpy files -- the work was
+          # written into the CLI's own scratch directory. Every one of those
+          # jobs was green, because nothing here ever asked the question.
+          # A worker that changed no file is not necessarily wrong (an audit
+          # task legitimately changes nothing), so this is RECORDED, not
+          # failed -- but it is recorded where the lead and the fleet report
+          # can see it, instead of being indistinguishable from real work.
+          AGENT_COMMITS=$(git rev-list --count "${AGY_BASE_COMMIT:-HEAD}..HEAD" 2>/dev/null || echo 0)
+          AGENT_FILES=$(git diff --name-only "${AGY_BASE_COMMIT:-HEAD}..HEAD" 2>/dev/null | wc -l | tr -d ' ')
+          echo "AGENT_COMMITS=${AGENT_COMMITS}" >> "$GITHUB_ENV"
+          echo "AGENT_FILES=${AGENT_FILES}" >> "$GITHUB_ENV"
+          echo "agent commits: ${AGENT_COMMITS}, files changed: ${AGENT_FILES}"
+          if [ "${AGENT_COMMITS}" -eq 0 ]; then
+            echo "::warning::this worker committed NOTHING to the checkout. If its output describes files it created, they were written outside ${AGENT_REPO} and are gone."
+          fi
 
           # Shared by BOTH pushes below -- the agent's own commits (if any)
           # and the raw-output commit. Needed for real once agy-lead-plan.yml
@@ -523,8 +589,28 @@ jobs:
               echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             } > /tmp/agy_output.txt
           fi
+          # The header the fleet report could not have written itself. Report
+          # Claud-Cloud-Project#44 had to infer "the .rpy files are stranded"
+          # from a file link pointing at a scratch path; with this line the
+          # answer is stated by the run, per worker, in the report file the
+          # aggregator already reads.
+          {
+            echo "##TBS##{\"v\":1,\"probe\":\"agw_worker_effect\",\"status\":\"$([ "${AGENT_COMMITS:-0}" -gt 0 ] && echo pass || echo empty)\",\"data\":{\"tag\":\"${RUN_TAG}\",\"commits\":${AGENT_COMMITS:-0},\"files_changed\":${AGENT_FILES:-0},\"checkout\":\"${AGENT_REPO}\"}}"
+            if [ "${AGENT_COMMITS:-0}" -eq 0 ]; then
+              echo "WORKER CHANGED NO FILE IN THE REPOSITORY."
+              echo "Anything this output claims to have created was written"
+              echo "outside the checkout and no longer exists. Treat file"
+              echo "claims below as UNVERIFIED."
+            else
+              echo "Worker committed ${AGENT_COMMITS} commit(s), ${AGENT_FILES} file(s) changed."
+            fi
+            echo ""
+            echo "---"
+            echo ""
+          } > "$OUT_PATH.hdr"
           mkdir -p "$(dirname "$OUT_PATH")"
-          cp /tmp/agy_output.txt "$OUT_PATH"
+          cat "$OUT_PATH.hdr" /tmp/agy_output.txt > "$OUT_PATH"
+          rm -f "$OUT_PATH.hdr"
           git add "$OUT_PATH"
           if ! git diff --cached --quiet; then
             git commit -m "agy: record raw output for ${RUN_TAG}"

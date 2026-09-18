@@ -116,21 +116,49 @@ jobs:
         run: |
           cd "${AGENT_REPO}"
           python3 - <<'PYEOF'
-          import json, os
+          import json, os, re
+          # A TEAM REPORT ON DISK IS NOT A TEAM REPORT FROM THIS RUN.
+          # Measured on CCP-307 (issue #38, report Claud-Cloud-Project#44):
+          # accounts 4, 5 and 8 produced nothing for that run, but their
+          # acc<N>.md files from 2026-09-15 (issues #13/#14) were still there,
+          # because the path is fixed and overwritten per run. This step tested
+          # os.path.isfile and nothing else, so it fed three-day-old reports to
+          # the summariser as current work -- which is how the fleet report came
+          # to describe gui.rpy, screens.rpy and 31 GUI assets in detail while
+          # the repository held zero .rpy files.
+          # agy-lead-plan.yml now stamps each report with the run that wrote it.
+          # An unstamped file predates that change and is treated as stale, not
+          # as current: the safe direction, since every stale file seen so far
+          # was unstamped.
           accounts = json.loads(os.environ['ALL_ACCOUNTS'])
-          parts = []
-          missing = []
+          this_issue = os.environ.get('ISSUE_NUMBER', '').strip()
+          stamp_re = re.compile(
+              r'<!--\s*agy-team-report:\s*tag=(\S*)\s+issue=(\S*)\s+'
+              r'account=(\S*)\s+written=(\S*)\s*-->')
+          parts, missing, stale = [], [], []
           for a in accounts:
               path = 'Reports/agy/team_reports/acc{}.md'.format(a)
-              if os.path.isfile(path):
-                  with open(path, encoding='utf-8') as f:
-                      parts.append('--- Account {} ---\n{}'.format(a, f.read()))
-              else:
+              if not os.path.isfile(path):
                   missing.append(a)
+                  continue
+              with open(path, encoding='utf-8') as f:
+                  body = f.read()
+              m = stamp_re.search(body)
+              fresh = bool(m) and this_issue != '' and m.group(2) == this_issue
+              if fresh:
+                  parts.append('--- Account {} ---\n{}'.format(a, body))
+              else:
+                  where = m.group(4) if m else 'no stamp'
+                  stale.append('{} (written for issue {}, {})'.format(
+                      a, m.group(2) if m else 'unknown', where))
           with open('/tmp/all_reports.txt', 'w', encoding='utf-8') as f:
               f.write('\n\n'.join(parts))
           with open('/tmp/missing.txt', 'w', encoding='utf-8') as f:
               f.write(','.join(str(m) for m in missing))
+          with open('/tmp/stale.txt', 'w', encoding='utf-8') as f:
+              f.write('; '.join(stale))
+          print('fresh: {}, missing: {}, stale: {}'.format(
+              len(parts), len(missing), len(stale)))
           PYEOF
           {
             printf '%s\n' 'You are the ACC6 fleet reviewer. Below are the team reports from every account that was dispatched work on this project.'
@@ -139,6 +167,10 @@ jobs:
             MISSING=$(cat /tmp/missing.txt)
             if [ -n "$MISSING" ]; then
               printf '\n(Accounts with NO report on file, do not invent what they did: %s)\n' "$MISSING"
+            fi
+            STALE=$(cat /tmp/stale.txt 2>/dev/null)
+            if [ -n "$STALE" ]; then
+              printf '\n(Accounts whose ONLY team report belongs to an EARLIER run and was therefore NOT given to you: %s. They produced nothing this cycle. Report them as having produced nothing -- do not describe work from their old reports as if it happened now.)\n' "$STALE"
             fi
             printf '\nWrite ONE comprehensive Persian report covering: what was accomplished overall, account by account, anything that failed or is incomplete, and what should happen next. This is a final deliverable, not a proposal -- plain prose, no JSON.\n'
           } > /tmp/final_prompt.txt
