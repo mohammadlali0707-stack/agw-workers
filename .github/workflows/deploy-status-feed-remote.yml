@@ -52,6 +52,10 @@ on:
         default: 'status.airboxvip.top'
         type: string
 
+concurrency:
+  group: refresh-status-dashboard
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
