@@ -67,7 +67,7 @@ def extract_filter(text):
     return "\n".join(lines)
 
 
-def run_filter(src, reports, issue):
+def run_filter(src, reports, issue, plan=""):
     """Execute the extracted classifier over a synthetic team_reports dir."""
     tmp = tempfile.mkdtemp()
     d = os.path.join(tmp, "Reports", "agy", "team_reports")
@@ -84,6 +84,7 @@ def run_filter(src, reports, issue):
         env = dict(os.environ)
         env["ALL_ACCOUNTS"] = json.dumps(sorted(reports))
         env["ISSUE_NUMBER"] = issue
+        env["PLAN_FP"] = plan
         ns = {"os": type("O", (), {"environ": env, "path": os.path,
                                    "getcwd": os.getcwd})(),
               "json": json, "re": re, "print": lambda *a, **k: None,
@@ -99,10 +100,12 @@ def run_filter(src, reports, issue):
         os.chdir(cwd)
 
 
-def stamp(issue, tag="plan-38-acc4", when="2026-09-18T13:00:00Z", acc="4"):
-    return ("<!-- agy-team-report: tag=%s issue=%s account=%s written=%s -->\n"
+def stamp(issue, tag="plan-38-acc4", when="2026-09-18T13:00:00Z", acc="4",
+          plan="d6642b08f38b"):
+    return ("<!-- agy-team-report: tag=%s issue=%s plan=%s account=%s "
+            "written=%s -->\n"
             "\nThis account built gui.rpy and 31 GUI assets.\n"
-            % (tag, issue, acc, when))
+            % (tag, issue, plan, acc, when))
 
 
 def main():
@@ -154,6 +157,25 @@ def main():
                             "every stale file in the real incident was "
                             "unstamped, so this filter would have caught none "
                             "of them")
+
+        # TWO RUNS ON THE SAME ISSUE -- the case the first version of this fix
+        # got wrong, and the reason the plan fingerprint exists. CCP-307 and
+        # CCP-308 were both issue #38, so an issue-keyed check called the
+        # morning's reports fresh in the evening: measured 2026-09-18, the
+        # final report was posted at 20:59 while the six leads of the new run
+        # acked at 21:00.
+        got = run_filter(src, {
+            "4": stamp("38", plan="OLDPLAN00001"),   # this morning's run
+            "5": stamp("38", plan="d6642b08f38b", acc="5"),  # tonight's
+        }, issue="38", plan="d6642b08f38b")
+        if "Account 4" in got["all_reports"]:
+            failures.append(
+                "a report from an EARLIER run on the SAME issue was treated as "
+                "fresh -- keying on the issue number cannot separate two runs, "
+                "which is exactly what fired the premature final report")
+        if "Account 5" not in got["all_reports"]:
+            failures.append("tonight's own report was rejected by the "
+                            "fingerprint check")
 
         # And the other direction, so this is not just a filter that rejects
         # everything: the same report, stamped for this run, must get through.

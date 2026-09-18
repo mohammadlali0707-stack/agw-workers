@@ -31,6 +31,11 @@ on:
         description: 'Account index 0-8 (never 6 or 9) this lead plans and dispatches for'
         required: true
         type: string
+      plan_fp:
+        description: 'Fingerprint of the approved proposal, from agy-plan-dispatch.yml. Stamped into this account''s team report and used to tell THIS run''s reports from an earlier run''s on the same issue. Empty in a manual dispatch.'
+        required: false
+        default: ''
+        type: string
       max_subordinates:
         description: 'Hard cap on subordinates this lead may dispatch. 0 = the lead does the whole package itself as w01 and dispatches nobody. Default 2.'
         required: false
@@ -118,6 +123,12 @@ jobs:
       # mechanism -- the parser below wrote one dispatch per task the model
       # returned, however many that was. It is clamped in code now.
       MAX_SUBORDINATES: ${{ inputs.max_subordinates != '' && inputs.max_subordinates || '2' }}
+      # Identifies THIS dispatch. The team-report stamp keyed on the ISSUE
+      # number, which cannot tell two runs on the same issue apart -- and
+      # CCP-307 and CCP-308 were both issue #38, so tonight's final report
+      # read this morning's team reports as current. Same shape as the
+      # per-issue dispatch guard fixed in 8d166cc, one level down.
+      PLAN_FP: ${{ inputs.plan_fp }}
     steps:
       # Needed for Tools/agy_checklist.py. This job did not check out its own
       # repo before, because everything it used lived in the workflow file.
@@ -589,7 +600,7 @@ jobs:
           # report looks exactly like presence of an old one. This header is
           # what tells them apart.
           {
-            printf '%s\n' "<!-- agy-team-report: tag=${BASE_TAG:-none} issue=${ISSUE_NUMBER:-none} account=${ACCOUNT} written=$(date -u +%Y-%m-%dT%H:%M:%SZ) -->"
+            printf '%s\n' "<!-- agy-team-report: tag=${BASE_TAG:-none} issue=${ISSUE_NUMBER:-none} plan=${PLAN_FP:-none} account=${ACCOUNT} written=$(date -u +%Y-%m-%dT%H:%M:%SZ) -->"
             printf '\n'
             cat /tmp/account_summary.txt
           } > "Reports/agy/team_reports/acc${ACCOUNT}.md"
@@ -620,7 +631,23 @@ jobs:
           ALL_DONE=$(python3 - <<'PYEOF'
           import json, os
           accounts = json.loads(os.environ['ALL_ACCOUNTS'])
-          missing = [a for a in accounts if not os.path.isfile('Reports/agy/team_reports/acc{}.md'.format(a))]
+          # A team report ON DISK is not a team report FROM THIS RUN. With the
+          # previous run's files still present, the FIRST lead to reach this
+          # check saw every account "done" and fired the final report before
+          # any lead had finished -- measured 2026-09-18: the final report was
+          # posted at 20:59 while the six leads acked at 21:00.
+          import re as _re
+          fp = os.environ.get('PLAN_FP', '').strip()
+          def _is_this_run(path):
+              if not os.path.isfile(path):
+                  return False
+              if not fp:
+                  return True          # manual dispatch: no fingerprint to match
+              with open(path, encoding='utf-8') as fh:
+                  head = fh.read(400)
+              return bool(_re.search(r'plan=' + _re.escape(fp) + r'\b', head))
+          missing = [a for a in accounts
+                     if not _is_this_run('Reports/agy/team_reports/acc{}.md'.format(a))]
           print('yes' if not missing else 'no:' + ','.join(str(m) for m in missing))
           PYEOF
           )
@@ -637,7 +664,7 @@ jobs:
           # is the same "git is the only channel" pattern the rest of this
           # fleet relies on, not a new mechanism.
           mkdir -p Reports/agy/team_reports
-          MARKER="Reports/agy/team_reports/.final_dispatched_${ISSUE_NUMBER:-noissue}"
+          MARKER="Reports/agy/team_reports/.final_dispatched_${ISSUE_NUMBER:-noissue}_${PLAN_FP:-noplan}"
           if [ -f "$MARKER" ]; then
             echo "Marker already exists -- another lead already triggered the final report."
             exit 0
@@ -651,7 +678,8 @@ jobs:
               --repo "$CONTROL_REPO" \
               --field "target_repo=$TARGET_REPO" \
               --field "issue_number=${ISSUE_NUMBER}" \
-              --field "all_accounts=$ALL_ACCOUNTS"
+              --field "all_accounts=$ALL_ACCOUNTS" \
+              --field "plan_fp=$PLAN_FP"
           else
             echo "Push of the marker failed (another lead won the race) -- not dispatching."
           fi

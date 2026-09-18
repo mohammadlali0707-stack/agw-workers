@@ -297,6 +297,7 @@ jobs:
             --repo "${DISPATCH_OWNER}/agw-workers" \
             --field "account=${{ matrix.account }}" \
             --field "max_subordinates=${{ vars.AGY_MAX_SUBORDINATES || '2' }}" \
+            --field "plan_fp=${{ needs.parse-proposal.outputs.plan_fp }}" \
             --field "package_goal=$PACKAGE_GOAL" \
             --field "target_repo=$TARGET_REPO" \
             --field "agy_token_b64=$AGY_TOKEN" \

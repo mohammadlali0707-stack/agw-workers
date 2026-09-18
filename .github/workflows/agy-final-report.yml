@@ -20,6 +20,11 @@ on:
         required: false
         default: ''
         type: string
+      plan_fp:
+        description: 'Fingerprint of the dispatch whose team reports this report covers. A report stamped with any other run is treated as stale. Empty falls back to matching on issue_number, which cannot tell two runs on the SAME issue apart.'
+        required: false
+        default: ''
+        type: string
       all_accounts:
         description: 'JSON array of every account that had a package, e.g. [0,1,3]'
         required: true
@@ -50,6 +55,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TARGET_REPO: ${{ inputs.target_repo }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
+      PLAN_FP: ${{ inputs.plan_fp }}
       ALL_ACCOUNTS: ${{ inputs.all_accounts }}
     steps:
       - name: Set unique AGENT_REPO path
@@ -132,9 +138,15 @@ jobs:
           # was unstamped.
           accounts = json.loads(os.environ['ALL_ACCOUNTS'])
           this_issue = os.environ.get('ISSUE_NUMBER', '').strip()
+          # PREFER THE PLAN FINGERPRINT over the issue number. Keying on the
+          # issue cannot separate two runs on the SAME issue, and CCP-307 and
+          # CCP-308 were both #38 -- so the morning's team reports read as
+          # fresh in the evening. The issue check stays as the fallback for a
+          # lead dispatched by hand with no fingerprint.
+          this_plan = os.environ.get('PLAN_FP', '').strip()
           stamp_re = re.compile(
-              r'<!--\s*agy-team-report:\s*tag=(\S*)\s+issue=(\S*)\s+'
-              r'account=(\S*)\s+written=(\S*)\s*-->')
+              r'<!--\s*agy-team-report:\s*tag=(\S*)\s+issue=(\S*)'
+              r'(?:\s+plan=(\S*))?\s+account=(\S*)\s+written=(\S*)\s*-->')
           parts, missing, stale = [], [], []
           for a in accounts:
               path = 'Reports/agy/team_reports/acc{}.md'.format(a)
@@ -144,13 +156,19 @@ jobs:
               with open(path, encoding='utf-8') as f:
                   body = f.read()
               m = stamp_re.search(body)
-              fresh = bool(m) and this_issue != '' and m.group(2) == this_issue
+              if not m:
+                  fresh = False
+              elif this_plan:
+                  fresh = (m.group(3) or '') == this_plan
+              else:
+                  fresh = this_issue != '' and m.group(2) == this_issue
               if fresh:
                   parts.append('--- Account {} ---\n{}'.format(a, body))
               else:
-                  where = m.group(4) if m else 'no stamp'
-                  stale.append('{} (written for issue {}, {})'.format(
-                      a, m.group(2) if m else 'unknown', where))
+                  where = m.group(5) if m else 'no stamp'
+                  stale.append('{} (issue {}, plan {}, written {})'.format(
+                      a, m.group(2) if m else 'unknown',
+                      (m.group(3) or 'none') if m else 'unknown', where))
           with open('/tmp/all_reports.txt', 'w', encoding='utf-8') as f:
               f.write('\n\n'.join(parts))
           with open('/tmp/missing.txt', 'w', encoding='utf-8') as f:
