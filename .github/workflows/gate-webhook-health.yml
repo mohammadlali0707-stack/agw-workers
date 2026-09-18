@@ -43,10 +43,19 @@ jobs:
           HOOK_COUNT=$(echo "$HOOKS" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
           echo "Found $HOOK_COUNT webhook(s)"
 
-          echo "$HOOKS" | python3 - <<'EOF'
+          # `echo "$HOOKS" | python3 - <<'EOF'` cannot work: `python3 -` takes the
+          # PROGRAM from stdin, and the heredoc is what supplies it, so the pipe
+          # is discarded and json.load(sys.stdin) reads an exhausted stream --
+          # "Expecting value: line 1 column 1 (char 0)". This has been broken
+          # since the gate was written; nobody saw it because the `gh api` call
+          # above 403'd first and killed the step before Python ever ran. Fixing
+          # the token is what exposed it. The data goes through a file now.
+          printf '%s' "$HOOKS" > /tmp/hooks.json
+          python3 - <<'EOF'
           import sys, json, os
 
-          hooks = json.load(sys.stdin)
+          with open('/tmp/hooks.json', encoding='utf-8') as fh:
+              hooks = json.load(fh)
           expected_url = os.environ['EXPECTED_URL']
           required_events = os.environ['REQUIRED_EVENTS'].split()
           failed = False
