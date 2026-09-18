@@ -58,17 +58,39 @@ SIGNALS = [
 ]
 
 
+class _DropAuthOnRedirect(urllib.request.HTTPRedirectHandler):
+    """The job-logs endpoint 302s to blob storage, which REJECTS a request that
+    still carries the GitHub Authorization header. urllib replays headers across
+    redirects by default, so every log download failed -- and the first version
+    of this tool counted those failures as "examined", making "0 matched" look
+    like "the tag is absent" when it actually meant "nothing could be read".
+    A probe that cannot tell those two apart is not a probe."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            for h in ("Authorization", "authorization"):
+                new.headers.pop(h, None)
+                new.unredirected_hdrs.pop(h, None)
+        return new
+
+
+_OPENER = urllib.request.build_opener(_DropAuthOnRedirect)
+
+
 def req(url, token, raw=False):
     r = urllib.request.Request(url, method="GET")
     r.add_header("Authorization", f"Bearer {token}")
     r.add_header("Accept", "application/vnd.github+json")
     try:
-        with urllib.request.urlopen(r, timeout=90) as resp:
+        with _OPENER.open(r, timeout=90) as resp:
             body = resp.read()
             return (body.decode("utf-8", "replace") if raw
                     else json.loads(body.decode())), resp.status
     except urllib.error.HTTPError as e:
         return ("" if raw else {}), e.code
+    except urllib.error.URLError as e:
+        return ("" if raw else {}), f"URLERROR:{e.reason}"
 
 
 def main():
@@ -96,7 +118,7 @@ def main():
         print(f"::error::cannot list runs for {repo}: HTTP {code}", file=sys.stderr)
         return 1
 
-    findings, examined, matched = [], 0, 0
+    findings, examined, matched, unreadable = [], 0, 0, {}
     for run in runs.get("workflow_runs", []):
         jobs, code = req(f"{API}/repos/{repo}/actions/runs/{run['id']}/jobs", token)
         if code != 200:
@@ -104,9 +126,12 @@ def main():
         for job in jobs.get("jobs", []):
             log, code = req(f"{API}/repos/{repo}/actions/jobs/{job['id']}/logs",
                             token, raw=True)
-            examined += 1
             if code != 200 or not log:
+                # Counted SEPARATELY from examined. Conflating the two is what
+                # made the first run's "0 matched" unreadable.
+                unreadable[str(code)] = unreadable.get(str(code), 0) + 1
                 continue
+            examined += 1
             if a.match and a.match not in log:
                 continue
             matched += 1
@@ -130,14 +155,16 @@ def main():
             for e in hit["errors"]:
                 print(f"    error              {e[:110]}")
 
-    print(f"\n{examined} job log(s) examined, {matched} matched "
-          f"{a.match!r} in {repo}")
+    print(f"\n{examined} job log(s) READ, {matched} matched {a.match!r}, "
+          f"{sum(unreadable.values())} could not be downloaded {unreadable} "
+          f"in {repo}")
     print('##TBS##' + json.dumps(
-        {"data": {"repo": repo, "examined": examined, "matched": matched,
-                  "findings": findings},
+        {"data": {"repo": repo, "read": examined, "matched": matched,
+                  "unreadable": unreadable, "findings": findings},
          "probe": "fork_run_logs",
-         "status": "pass" if matched else "fail", "v": 1}, sort_keys=True))
-    return 0 if matched else 1
+         "status": "pass" if (matched and not unreadable) else "fail",
+         "v": 1}, sort_keys=True))
+    return 0 if (matched and not unreadable) else 1
 
 
 if __name__ == "__main__":
