@@ -38,7 +38,10 @@ permissions:
 jobs:
   check-marker:
     runs-on: self-hosted
-    if: always()
+    if: >
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@agy') &&
+      !contains(github.event.comment.body, '@agy-plan')
     outputs:
       match: ${{ steps.check.outputs.match }}
       target_repo: ${{ steps.check.outputs.target_repo }}
