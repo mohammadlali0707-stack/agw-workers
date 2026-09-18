@@ -1,13 +1,16 @@
-name: AGY Account Lead (plan + dispatch up to 10 subordinates, collect, aggregate)
+name: AGY Account Lead (plan + dispatch up to max_subordinates, collect, aggregate)
 
 # Dispatched once per account by agy-plan-dispatch.yml (never triggered by
 # an issue event directly). This is the "account lead" tier the owner
 # asked for: bot #1 (w01) of the given account.
 #
 # 1. Runs agy AS this account's own identity to break package_goal into up
-#    to 10 tasks -- a CEILING, not a quota -- one per subordinate member (w02-w11 per Team/
-#    org.json -- w01 itself is the lead and does not get a worker task).
-# 2. Dispatches agw-worker.yml once per task, same account identity,
+#    to max_subordinates tasks (default 2, owner instruction 2026-09-18) --
+#    one per subordinate member (w02-w11 per Team/org.json). The cap is
+#    ENFORCED in the parser, not merely requested in the prompt. With
+#    max_subordinates=0 the lead does the whole package itself as w01 and
+#    dispatches nobody, which is one bot per account instead of eleven.
+# 2. Dispatches agw-worker.yml once per surviving task, same identity,
 #    5 SECONDS APART (the owner's own anti-rate-limit design -- these
 #    calls share the lead's own Antigravity quota), each writing its
 #    report under Reports/agy/acc<N>/ in target_repo (report_dir input).
@@ -28,8 +31,13 @@ on:
         description: 'Account index 0-8 (never 6 or 9) this lead plans and dispatches for'
         required: true
         type: string
+      max_subordinates:
+        description: 'Hard cap on subordinates this lead may dispatch. 0 = the lead does the whole package itself as w01 and dispatches nobody. Default 2.'
+        required: false
+        default: '2'
+        type: string
       package_goal:
-        description: 'The scope of work this account''s lead should break down among its subordinates (up to 10; fewer is correct when the work is smaller)'
+        description: 'The scope of work this account''s lead should break down among its subordinates (up to max_subordinates; fewer is correct when the work is smaller)'
         required: true
         type: string
       target_repo:
@@ -85,7 +93,7 @@ jobs:
       # Unique per job execution. /tmp/agent-repo was a single shared path:
       # it survived between jobs (which is why a `rm -rf` was added on
       # 2026-09-17), and `rm -rf` on a SHARED path is only safe when jobs run
-      # one at a time. They do not -- agy-lead-plan dispatches 10 agw-worker
+      # one at a time. They do not -- agy-lead-plan dispatches several agw-worker
       # runs 5s apart, so two on one host would delete each other's checkout
       # mid-clone. That failure is silent, unlike the dir-exists error it
       # replaced. runner.temp is per-runner and the run/attempt/job triple
@@ -103,6 +111,13 @@ jobs:
       TARGET_REPO: ${{ inputs.target_repo }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       BASE_TAG: ${{ inputs.callback_id }}
+      # Owner instruction 2026-09-18: ten subordinates per lead exhausts the
+      # AGY quota almost immediately, and there is a parallelism wall well
+      # below ten. The ceiling used to live ONLY in the prompt text ("TEN IS A
+      # CEILING, NOT A TARGET"), which is a request to a model, not a
+      # mechanism -- the parser below wrote one dispatch per task the model
+      # returned, however many that was. It is clamped in code now.
+      MAX_SUBORDINATES: ${{ inputs.max_subordinates != '' && inputs.max_subordinates || '2' }}
     steps:
       # Needed for Tools/agy_checklist.py. This job did not check out its own
       # repo before, because everything it used lived in the workflow file.
@@ -114,7 +129,7 @@ jobs:
           GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
           gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
-            --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌های ۱۰ زیردست..."
+            --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌ها (سقف ${MAX_SUBORDINATES} زیردست)..."
 
       - name: Install AGY CLI from HF Dataset
         run: |
@@ -228,9 +243,12 @@ jobs:
             printf '%s\n' "You are agw-ACC${ACCOUNT}-w01, the LEAD of account ${ACCOUNT} on this fleet. This is a PLANNING request only -- do not write, edit, commit or dispatch anything yourself."
             printf '\nYOUR PACKAGE (the scope your team owns):\n%s\n' "$SAFE_GOAL"
             printf '\nDo this, in order:\n'
-            printf '%s\n' '1. Read Team/org.json in this checked-out repo. Find the "members" entries whose "account" is your own account number and whose "role" is NOT "lead" -- those are your 10 subordinates (w02..w11). Note each one'"'"'s id, title, and guild.'
+            printf '%s\n' "1. Read Team/org.json in this checked-out repo. Find the \"members\" entries whose \"account\" is your own account number and whose \"role\" is NOT 'lead' -- those are your subordinates (w02..w11). Note each one's id, title, and guild. You may use AT MOST ${MAX_SUBORDINATES} of them."
+            if [ "${MAX_SUBORDINATES}" -eq 0 ]; then
+              printf '%s\n' '   THIS RUN HAS A CAP OF ZERO SUBORDINATES. You do the whole package YOURSELF as w01. Produce exactly ONE task, with member_id set to your own w01 id, whose task text is the complete work -- not a plan for someone else to do.'
+            fi
             printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block for what is already done or in progress, so you do not propose duplicate work.'
-            printf '%s\n' '3. Break YOUR PACKAGE into as many concrete tasks as the work genuinely contains -- one per subordinate whose title/guild is a real fit. TEN IS A CEILING, NOT A TARGET: if the package is honestly three tasks, produce three. Do not pad, do not split one piece of work in half to reach a number, and do not invent busywork for a subordinate whose guild has nothing to do here. A short, real list beats a full, padded one. Never invent a member_id, never assign two tasks to the same member_id.'
+            printf '%s\n' "3. Break YOUR PACKAGE into as many concrete tasks as the work genuinely contains -- one per subordinate whose title/guild is a real fit. THE CAP THIS RUN IS ${MAX_SUBORDINATES} AND IT IS ENFORCED IN CODE: anything beyond it is DISCARDED, not queued, so a longer list silently loses work. Fewer is correct whenever the package is smaller. Do not pad, do not split one piece of work in half to reach a number, and do not invent busywork for a subordinate whose guild has nothing to do here. A short, real list beats a full, padded one. Never invent a member_id, never assign two tasks to the same member_id."
             printf '\n%s\n' '4. Output your ENTIRE response as exactly two parts, nothing else:'
             printf '%s\n' '   a) A short Persian paragraph (2-4 sentences) summarizing your plan.'
             printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape:'
@@ -323,6 +341,27 @@ jobs:
                           .format(len(blocks)))
               sys.exit(1)
           tasks = plan.get('tasks', [])
+          # THE CAP, ENFORCED. Until 2026-09-18 the only thing holding a lead
+          # to ten subordinates was a sentence in its own prompt, and this
+          # line wrote one dispatch per task the model returned -- so a lead
+          # that came back with fourteen dispatched fourteen. A ceiling a
+          # model is asked to respect is not a ceiling.
+          #
+          # cap 0 is the owner's preferred shape: the lead does the whole
+          # package itself as w01 and dispatches nobody, so the fleet runs one
+          # bot per account instead of eleven. It still goes through
+          # agw-worker (one dispatch, tagged w01) rather than a second
+          # execution path in this file, so reporting, the checklist and the
+          # polling below all keep working unchanged.
+          cap = int(os.environ.get('MAX_SUBORDINATES', '2'))
+          lead_does_it = (cap == 0)
+          effective = 1 if lead_does_it else cap
+          if len(tasks) > effective:
+              print('CAP: lead proposed {0} task(s), cap is {1} -- keeping the '
+                    'first {1} and DISCARDING {2}. The discarded titles: {3}'
+                    .format(len(tasks), effective, len(tasks) - effective,
+                            [t.get('title', '?') for t in tasks[effective:]]))
+              tasks = tasks[:effective]
           os.makedirs('/tmp/subtasks', exist_ok=True)
           for i, t in enumerate(tasks):
               member = t.get('member_id') or 'unknown'
@@ -384,7 +423,17 @@ jobs:
             META=$(cat "/tmp/subtasks/${i}.meta")
             TITLE="${META%%$'\t'*}"
             MEMBER="${META##*$'\t'}"
-            TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
+            # Subordinates are w02..w11. With MAX_SUBORDINATES=0 the single
+            # task IS the lead doing its own package, so it is tagged w01 --
+            # otherwise a lead-only run reports itself as w02 and the
+            # checklist names a subordinate nobody asked for. Both the
+            # checklist roster and the dispatch below must agree on this, so
+            # the rule is identical in both loops.
+            if [ "${MAX_SUBORDINATES}" -eq 0 ]; then
+              TAG="${BASE_TAG}-w01"
+            else
+              TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
+            fi
             printf '%s\t%s\t%s\n' "$TAG" "$TITLE" "$MEMBER" >> /tmp/checklist.tsv
           done
           python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" post \
@@ -407,7 +456,17 @@ jobs:
             META=$(cat "/tmp/subtasks/${i}.meta")
             TITLE="${META%%$'\t'*}"
             MEMBER="${META##*$'\t'}"
-            TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
+            # Subordinates are w02..w11. With MAX_SUBORDINATES=0 the single
+            # task IS the lead doing its own package, so it is tagged w01 --
+            # otherwise a lead-only run reports itself as w02 and the
+            # checklist names a subordinate nobody asked for. Both the
+            # checklist roster and the dispatch below must agree on this, so
+            # the rule is identical in both loops.
+            if [ "${MAX_SUBORDINATES}" -eq 0 ]; then
+              TAG="${BASE_TAG}-w01"
+            else
+              TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
+            fi
             echo "Dispatching $((i + 1))/$COUNT for account ${ACCOUNT}: $TITLE ($MEMBER) tag=$TAG"
             # This job may itself be running inside this account's OWN copy
             # of the repo (cross-dispatched by agy-plan-dispatch.yml) --
