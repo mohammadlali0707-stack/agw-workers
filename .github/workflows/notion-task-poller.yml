@@ -28,7 +28,28 @@ name: Notion task -> GitHub issue (poller)
 
 on:
   schedule:
+    # WHAT THIS CRON ACTUALLY DELIVERS, measured 2026-09-19 by
+    # Tools/probe_notion_path_attribution.py over 11 real runs: a MEDIAN gap of
+    # 188 minutes and a worst of 303. Not ten minutes -- GitHub deprioritises
+    # `schedule` under load and there is no setting that changes it. The cron
+    # stays as a floor, not a promise; anyone who needs a ticked Notion task
+    # picked up promptly uses the repository_dispatch below.
     - cron: '*/10 * * * *'
+  # THE LOW-LATENCY DOOR, for whoever can push instead of waiting to be polled.
+  # A Notion automation, an n8n node, or a person with a token can fire this
+  # and the task is picked up in seconds rather than hours:
+  #
+  #   curl -X POST -H "Authorization: Bearer <token>" \
+  #        -H "Accept: application/vnd.github+json" \
+  #        https://api.github.com/repos/mohammadlali0707-stack/agw-workers/dispatches \
+  #        -d '{"event_type":"notion-task"}'
+  #
+  # It runs exactly the same job as the schedule -- same poller, same shared
+  # lock on the row's `Github Issue URL` -- so firing it while a scheduled run
+  # is in flight costs nothing but a duplicate skip. This does NOT make n8n
+  # work; it removes the reason to wait for it.
+  repository_dispatch:
+    types: [notion-task]
   workflow_dispatch:
     inputs:
       dry_run:
