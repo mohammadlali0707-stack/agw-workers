@@ -23,7 +23,18 @@ permissions:
 
 jobs:
   wire:
-    runs-on: ubuntu-latest
+    # MEASURED, not guessed: ubuntu-latest's first real run (35436778477)
+    # hit a Cloudflare Managed Challenge (a JS challenge page, not n8n
+    # itself) on https://n8n.airboxvip.top/api/v1/credentials -- a script
+    # cannot solve that regardless of headers or retries. From an
+    # unrelated sandbox IP the SAME two paths (a bare GET on /webhook/...
+    # and an unauthenticated /api/v1/credentials) both answered with n8n's
+    # own real responses (404, {"message":"Unauthorized"}), no challenge --
+    # so this is runner-IP reputation, not a path rule. self-hosted runs on
+    # infra this fleet already uses to reach this same host hourly (the
+    # n8n webhook health check in Gate 2), which is why it is tried here --
+    # not yet proven un-challenged itself, only more likely to be.
+    runs-on: self-hosted
     timeout-minutes: 10
     env:
       N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
