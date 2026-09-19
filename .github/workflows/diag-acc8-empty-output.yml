@@ -1,0 +1,94 @@
+name: One-off -- why did acc8's morning-report run produce no agy output
+
+# Issue #47 (Claud-Cloud-Project, today's morning report) shows a comment
+# "(no output)" from AGY worker run
+# https://github.com/moradzahra85-png/agw-workers/actions/runs/35447723008
+# (job 105909451965), conclusion=success. audit_fork_run_logs.py's
+# keyword scan already found "no agy output" and "falling back" in that
+# job's log, but its patterns only report WHICH line matched, not the
+# real text around it -- not enough to say WHY the agy/claude invocation
+# itself produced nothing (an actual timeout kill, an API error, a rate
+# limit with wording the scanner does not know to look for, or something
+# else). This pulls the job's real log directly with secrets.ACC8_PAT and
+# prints a wide window around the relevant markers so the real cause is
+# read, not inferred from a keyword hit.
+#
+# Read-only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job id on moradzahra85-png/agw-workers to read'
+        required: false
+        default: '105909451965'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Fetch the real job log and print context around the failure markers
+        env:
+          IN_JOB_ID: ${{ inputs.job_id }}
+        run: |
+          cat <<'PYEOF' > /tmp/get_log.py
+          import os
+          import re
+          import sys
+          import urllib.error
+          import urllib.request
+
+
+          class DropAuthOnRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  new = super().redirect_request(req, fp, code, msg, headers, newurl)
+                  if new is not None:
+                      new.remove_header("Authorization")
+                  return new
+
+
+          TOKEN = os.environ["ACC8_PAT"]
+          JOB_ID = sys.argv[1]
+          opener = urllib.request.build_opener(DropAuthOnRedirect)
+          req = urllib.request.Request(
+              "https://api.github.com/repos/moradzahra85-png/agw-workers"
+              "/actions/jobs/%s/logs" % JOB_ID,
+              method="GET")
+          req.add_header("Authorization", "Bearer " + TOKEN)
+          req.add_header("Accept", "application/vnd.github+json")
+          try:
+              with opener.open(req, timeout=60) as r:
+                  text = r.read().decode("utf-8", "replace")
+          except urllib.error.HTTPError as e:
+              print("HTTP %s fetching job log: %s" % (e.code, e.read()[:300]))
+              sys.exit(1)
+
+          print("fetched %d bytes" % len(text))
+          lines = text.splitlines()
+
+          markers = ["no agy output", "falling back", "timeout 1700", "rc=",
+                     "claude", "Usage limit", "rate limit", "429", "quota",
+                     "Error", "error", "AGY_", "record raw output"]
+          hit_idx = set()
+          for i, line in enumerate(lines):
+              low = line.lower()
+              if any(m.lower() in low for m in markers):
+                  hit_idx.add(i)
+
+          shown = set()
+          for i in sorted(hit_idx):
+              lo, hi = max(0, i - 3), min(len(lines), i + 4)
+              for j in range(lo, hi):
+                  if j not in shown:
+                      print(lines[j])
+                      shown.add(j)
+              print("---")
+          PYEOF
+          python3 /tmp/get_log.py "$IN_JOB_ID"
