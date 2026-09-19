@@ -313,8 +313,19 @@ def step_execution_detail(key, exec_id):
             print("node %r ran ok, %d item(s) out"
                   % (node_name, len(out[0]) if out and out[0] else 0))
             if out and out[0]:
-                print("  first item json: %s"
-                      % json.dumps(out[0][0].get("json", {}))[:500])
+                item_json = out[0][0].get("json", {})
+                # The webhook item mixes headers (large, uninteresting here)
+                # with the real POST body under "body" -- print the body in
+                # full, separately, rather than truncating the mixed blob
+                # and losing exactly the part that decides everything.
+                if "body" in item_json:
+                    print("  body (full): %s"
+                          % json.dumps(item_json["body"], ensure_ascii=False))
+                    rest = {k: v for k, v in item_json.items() if k != "body"}
+                    print("  other top-level keys: %s" % sorted(rest))
+                else:
+                    print("  first item json (full): %s"
+                          % json.dumps(item_json, ensure_ascii=False)[:4000])
 
 
 def main():
