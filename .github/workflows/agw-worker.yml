@@ -317,6 +317,17 @@ jobs:
             printf '%s\n' "  - Commit what you change (git add + git commit inside the checkout). The pipeline pushes your commits; it does not go looking for your files."
             printf '%s\n' "  - If you did not change any file, say so plainly in your output rather than describing files you did not write."
             printf '\n%s\n\n' "---"
+            printf '%s\n' "PLANNING REQUIREMENT -- read this before you start:"
+            printf '%s\n' "Before writing a single file or running any command, you MUST produce a numbered work plan"
+            printf '%s\n' "in your output that lists every concrete step you will take to complete the task."
+            printf '%s\n' "Minimum 4 steps. Each step must name the specific file, tool, or check involved."
+            printf '%s\n' "Example format:"
+            printf '%s\n' "  1. Read <file> to understand <X>"
+            printf '%s\n' "  2. Create <file> with <content>"
+            printf '%s\n' "  3. Run <command> to verify <Y>"
+            printf '%s\n' "  4. git add + git commit with message '<message>'"
+            printf '%s\n' "Do NOT skip this. A response that jumps straight to code without a plan will be rejected."
+            printf '\n%s\n\n' "---"
             printf '%s\n' "$PROMPT_INPUT"
           } > /tmp/agy_prompt.txt
           PROMPT=$(cat /tmp/agy_prompt.txt)
