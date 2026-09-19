@@ -16,7 +16,12 @@ on:
         required: false
         default: 'all'
         type: choice
-        options: [all, credential, workflow, fix-marker, verify, recent-executions]
+        options: [all, credential, workflow, fix-marker, verify, recent-executions, execution-detail]
+      exec_id:
+        description: 'Execution id for the execution-detail step'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -96,4 +101,10 @@ jobs:
       - name: Run the requested step(s)
         env:
           STEP: ${{ inputs.step }}
-        run: python3 Tools/n8n_wire_notion_bridge.py --step "$STEP"
+          EXEC_ID: ${{ inputs.exec_id }}
+        run: |
+          if [ -n "$EXEC_ID" ]; then
+            python3 Tools/n8n_wire_notion_bridge.py --step "$STEP" --exec-id "$EXEC_ID"
+          else
+            python3 Tools/n8n_wire_notion_bridge.py --step "$STEP"
+          fi

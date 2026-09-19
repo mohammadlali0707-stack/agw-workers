@@ -275,13 +275,56 @@ def step_recent_executions(key, wf_ids, minutes):
                      x.get("startedAt")))
 
 
+def step_execution_detail(key, exec_id):
+    """Pull one execution's full data and print WHICH node failed and why.
+
+    n8n's execution detail nests each node's run data under
+    resultData.runData[node_name][-1], and an error there carries
+    .error.message / .error.node.name / .error.description -- print all of
+    it rather than a summary, since a wrong guess here costs another round
+    trip through a real Notion firing.
+    """
+    status, body = api("GET", "/executions/%s?includeData=true" % exec_id,
+                       key)
+    if status != 200:
+        print("could not fetch execution %s (HTTP %s): %s"
+              % (exec_id, status, body))
+        return
+    print("execution %s status=%s mode=%s startedAt=%s" %
+          (exec_id, body.get("status"), body.get("mode"),
+           body.get("startedAt")))
+    try:
+        run_data = (body["data"]["resultData"]["runData"])
+    except (KeyError, TypeError):
+        print("no resultData.runData in this execution's payload -- full "
+              "top-level keys: %s" % sorted(body.keys()))
+        return
+    for node_name, runs in run_data.items():
+        last = runs[-1] if runs else {}
+        err = last.get("error")
+        if err:
+            print("NODE %r FAILED: %s" % (node_name, err.get("message")))
+            if err.get("description"):
+                print("  description: %s" % err["description"])
+            if err.get("httpCode"):
+                print("  httpCode: %s" % err["httpCode"])
+        else:
+            out = last.get("data", {}).get("main", [[]])
+            print("node %r ran ok, %d item(s) out"
+                  % (node_name, len(out[0]) if out and out[0] else 0))
+            if out and out[0]:
+                print("  first item json: %s"
+                      % json.dumps(out[0][0].get("json", {}))[:500])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--step", required=True,
                     choices=["credential", "workflow", "fix-marker", "verify",
-                             "recent-executions", "all"])
+                             "recent-executions", "execution-detail", "all"])
     ap.add_argument("--minutes", type=int, default=15,
                     help="window for --step recent-executions")
+    ap.add_argument("--exec-id", help="execution id for --step execution-detail")
     a = ap.parse_args()
 
     key = os.environ.get("N8N_API_KEY", "")
@@ -333,6 +376,11 @@ def main():
         ids = [(wf_id, "new workflow (dispatch)"),
                (MARKER_WORKFLOW_ID, "old workflow (Notion Event -> issue)")]
         step_recent_executions(key, ids, a.minutes)
+
+    if a.step == "execution-detail":
+        if not a.exec_id:
+            die("--exec-id is required for --step execution-detail")
+        step_execution_detail(key, a.exec_id)
 
     return 0
 
