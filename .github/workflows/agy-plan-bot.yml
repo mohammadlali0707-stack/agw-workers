@@ -33,10 +33,23 @@ jobs:
   check-marker:
     runs-on: ${{ github.repository_owner == 'Mohammadlali' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 5
+    # ACCEPTS BOTH EVENTS THIS WORKFLOW SUBSCRIBES TO.
+    # `on:` declares `issues: [opened]` AND `issue_comment`, the `check` step
+    # below already reads `comment.body || issue.body`, and the `propose` job
+    # already branches on both -- but THIS gate required
+    # `event_name == 'issue_comment'`, so an issue OPENED could never get past
+    # it. Measured 2026-09-19: the Notion poller created issue #42 from a real
+    # Notion page, correctly ending in `ccp @agy-plan`; agy-plan-bot fired 3
+    # seconds later on the `issues` event and reported **skipped**. The whole
+    # Notion -> GitHub -> plan chain stopped here, on a workflow that
+    # subscribes to the event and then refuses it.
     if: >
-      github.event_name == 'issue_comment' &&
-      contains(github.event.comment.body, '@agy-plan') &&
-      !contains(github.event.comment.body, '@agy-plan-approved')
+      (github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@agy-plan') &&
+        !contains(github.event.comment.body, '@agy-plan-approved')) ||
+      (github.event_name == 'issues' &&
+        contains(github.event.issue.body, '@agy-plan') &&
+        !contains(github.event.issue.body, '@agy-plan-approved'))
     outputs:
       match: ${{ steps.check.outputs.match }}
       project_tag: ${{ steps.check.outputs.project_tag }}

@@ -51,10 +51,23 @@ jobs:
   check-marker:
     runs-on: self-hosted
     timeout-minutes: 5
+    # ACCEPTS BOTH EVENTS THIS WORKFLOW SUBSCRIBES TO.
+    # `on:` declares `issues` AND `issue_comment`, and the job below already
+    # branches on `github.event_name == 'issues'` with its own
+    # author_association checks -- but THIS gate admitted only
+    # `issue_comment`, so that branch was unreachable dead code and an issue
+    # OPENED could never trigger anything.
+    # Found 2026-09-19 by Tools/probe_trigger_event_coverage.py, written after
+    # the identical bug in agy-plan-bot.yml stopped the Notion -> GitHub ->
+    # plan chain on issue #42: the workflow fired on the event and then
+    # refused it, green and silent.
     if: >
-      github.event_name == 'issue_comment' &&
-      contains(github.event.comment.body, '@agy') &&
-      !contains(github.event.comment.body, '@agy-plan')
+      (github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@agy') &&
+        !contains(github.event.comment.body, '@agy-plan')) ||
+      (github.event_name == 'issues' &&
+        contains(github.event.issue.body, '@agy') &&
+        !contains(github.event.issue.body, '@agy-plan'))
     outputs:
       match: ${{ steps.check.outputs.match }}
       target_repo: ${{ steps.check.outputs.target_repo }}
