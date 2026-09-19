@@ -1,0 +1,180 @@
+name: Diagnose ACC0's own copy of the status-feed workflows (read-only)
+
+# Owner's question, prompted by a real push notification: two workflows on
+# [Mohammadlali/agw-workers] -- "Refresh Status Dashboard Data" and "Gate 2
+# -- Webhook Health Checker" -- are failing. Are they ALSO failing on THIS
+# (ACC6) copy? No: checked first, before writing this file --
+# mohammadlali0707-stack/agw-workers's own runs of both are green as of
+# today (Gate 2 run 35444176891, success; Refresh run earlier the same
+# day). The failing runs are on a SEPARATE repository under a different
+# GitHub account (Mohammadlali, ACC0), not this one -- confirmed by the
+# notification's own "[Mohammadlali/agw-workers]" prefix and by this
+# repo's clean run history at the same timestamps.
+#
+# The owner asked: should this workflow live in ACC0, or should it be
+# defined inside ACC6, in the status-dashboard repo? This reads ACC0's
+# actual copy (using secrets.ACC0_PAT, already present on this repo) to
+# answer with what is really there, not a guess -- and prints the
+# reasoning already on record in THIS repo's own
+# deploy-status-feed-remote.yml for why it was placed in agw-workers
+# (not status-dashboard) in the first place, so the owner has both sides.
+#
+# A LIKELY answer, stated here so the read-only findings below can be
+# checked against it rather than taken on faith: deploy-status-feed-remote.yml's
+# own header records that it clones status-dashboard using secrets.ACC6_PAT,
+# because status-dashboard itself moved from ACC0 to ACC6 on 2026-09-17,
+# and the step FAILS FAST with an explicit ::error:: if ACC6_PAT is empty.
+# ACC0's account has no structural reason to hold a copy of ACC6's PAT, so
+# if ACC0's fork of this workflow was never given one, it cannot succeed --
+# not a placement question, a leftover pre-migration copy that was never
+# retired.
+#
+# Read-only. Makes no write call anywhere. Deliberately does not attempt
+# to fix, disable, or delete anything on ACC0 -- this session has no
+# reason to believe ACC0_PAT still carries write access there, and the
+# owner asked to "check", not to change anything yet.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+    steps:
+      - name: Write the helper script once, run it for every check below
+        run: |
+          cat <<'PYEOF' > /tmp/diag.py
+          import base64
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          TOKEN = os.environ["ACC0_PAT"]
+          API = "https://api.github.com"
+
+
+          def get(path):
+              req = urllib.request.Request(API + path, method="GET")
+              req.add_header("Authorization", "Bearer " + TOKEN)
+              req.add_header("Accept", "application/vnd.github+json")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      return r.status, json.loads(r.read())
+              except urllib.error.HTTPError as e:
+                  try:
+                      return e.code, json.loads(e.read())
+                  except ValueError:
+                      return e.code, {}
+
+
+          cmd = sys.argv[1]
+
+          if cmd == "whoami":
+              status, body = get("/user")
+              print("GET /user -> HTTP %s" % status)
+              if status == 200:
+                  print("  login:", body.get("login"))
+                  print("  id:", body.get("id"))
+              else:
+                  print("  ", body.get("message"))
+                  print("::error::ACC0_PAT does not authenticate at all "
+                        "(HTTP %s) -- ACC0 is not merely 'failing', the "
+                        "token itself is dead. Nothing below can run." % status)
+                  sys.exit(1)
+
+          elif cmd == "repo":
+              status, body = get("/repos/Mohammadlali/agw-workers")
+              print("GET /repos/Mohammadlali/agw-workers -> HTTP %s" % status)
+              if status == 200:
+                  print("  full_name:", body.get("full_name"))
+                  print("  private:", body.get("private"))
+                  print("  default_branch:", body.get("default_branch"))
+                  print("  pushed_at:", body.get("pushed_at"))
+                  print("  archived:", body.get("archived"))
+              else:
+                  print("  ", body.get("message"))
+                  print("::warning::repo not reachable with ACC0_PAT -- "
+                        "either it was deleted, or ACC0_PAT lost access to "
+                        "it, matching the tbs-morning.yml finding on "
+                        "Claud-Cloud-Project")
+
+          elif cmd == "workflow":
+              fname = sys.argv[2]
+              status, body = get(
+                  "/repos/Mohammadlali/agw-workers/contents/.github/workflows/" + fname)
+              print("GET contents/%s -> HTTP %s" % (fname, status))
+              if status != 200:
+                  print("  ", body.get("message"))
+              else:
+                  content = base64.b64decode(body["content"]).decode(
+                      "utf-8", "replace")
+                  in_on = False
+                  print("--- on: block ---")
+                  for line in content.splitlines():
+                      if line.startswith("on:"):
+                          in_on = True
+                      elif line and not line[0].isspace() and in_on:
+                          break
+                      if in_on:
+                          print(line)
+                  print("--- runs-on ---")
+                  for line in content.splitlines():
+                      if "runs-on:" in line:
+                          print(" ", line.strip())
+                  print("--- secrets referenced ---")
+                  import re
+                  found = sorted(set(re.findall(r"secrets\.[A-Z0-9_]+", content)))
+                  for s in found:
+                      print(" ", s)
+
+          elif cmd == "runs":
+              fname = sys.argv[2]
+              status, body = get(
+                  "/repos/Mohammadlali/agw-workers/actions/workflows/%s/runs"
+                  "?per_page=3" % fname)
+              print("GET .../%s/runs -> HTTP %s" % (fname, status))
+              if "workflow_runs" not in body:
+                  print("  (could not list:", body.get("message"), ")")
+              for r in body.get("workflow_runs", []):
+                  print("  id=%s event=%s status=%s conclusion=%s created=%s"
+                        % (r["id"], r["event"], r["status"],
+                           r.get("conclusion"), r["created_at"]))
+          PYEOF
+
+      - name: Is ACC0_PAT even still a live token, and whose?
+        run: |
+          if [ -z "$ACC0_PAT" ]; then
+            echo "::error::secrets.ACC0_PAT is not set on THIS repo -- cannot check ACC0 at all"
+            exit 1
+          fi
+          python3 /tmp/diag.py whoami
+
+      - name: Does Mohammadlali/agw-workers still exist, and as what
+        run: python3 /tmp/diag.py repo
+
+      - name: What does ACC0's own copy of each workflow actually say
+        run: |
+          python3 /tmp/diag.py workflow deploy-status-feed-remote.yml
+          echo
+          python3 /tmp/diag.py workflow gate-webhook-health.yml
+
+      - name: Recent runs of both workflows, directly from ACC0's repo
+        run: |
+          python3 /tmp/diag.py runs deploy-status-feed-remote.yml
+          echo
+          python3 /tmp/diag.py runs gate-webhook-health.yml
+
+      - name: Why THIS repo's own copy lives here, not on status-dashboard
+        run: |
+          echo "The reasoning already on record in this repo's own"
+          echo "deploy-status-feed-remote.yml header, unchanged by anything above:"
+          echo
+          sed -n '1,35p' .github/workflows/deploy-status-feed-remote.yml
