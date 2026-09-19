@@ -190,10 +190,18 @@ def check(n8n_text, poller_text, readme_text):
         bad.append("the n8n HTTP node carries no header credential -- GitHub "
                    "answers 401 and n8n records a failed execution nobody "
                    "reads")
-    if f["guard"] != "notion":
-        bad.append("the IF node no longer requires source == 'notion' "
-                   "(rightValue=%r) -- the webhook is public, so anything that "
-                   "finds the URL can make the fleet dispatch" % (f["guard"],))
+    if f["guard"] != "automation":
+        # Was 'notion' until this was measured against a real firing
+        # (execution 7101): Notion's own webhook envelope already puts an
+        # OBJECT at `source` (`{type:'automation', automation_id, ...}`),
+        # which collided with this repo's invented string-valued `source`
+        # and made every real firing fail type coercion -- three real
+        # attempts, then Notion auto-paused the automation. 'automation' is
+        # the authentic signal Notion itself sends, not another guess.
+        bad.append("the IF node no longer requires source.type == "
+                   "'automation' (rightValue=%r) -- the webhook is public, "
+                   "so anything that finds the URL can make the fleet "
+                   "dispatch" % (f["guard"],))
     if not f["refuses"] or not f["branches_differ"]:
         bad.append("the guard's false branch is not wired to a dead end, so "
                    "it filters nothing while looking like it does")
@@ -235,7 +243,7 @@ def main():
          (sever(n8n_text, EXPECT_REPO, "someone-else/other-repo"),
           poller_text, readme_text)),
         ("the source guard opened up",
-         (sever(n8n_text, '"rightValue": "notion"', '"rightValue": ""'),
+         (sever(n8n_text, '"rightValue": "automation"', '"rightValue": ""'),
           poller_text, readme_text)),
         ("the README pointing at the test url",
          (n8n_text, poller_text,
@@ -257,7 +265,8 @@ def main():
               "Notion from, its dispatch event type matches what the poller "
               "subscribes to, the poller admits that event, the call is "
               "authenticated and aimed at %s, and the public webhook still "
-              "refuses anything not marked source=notion. All %d severed "
+              "refuses anything whose source.type isn't 'automation'. All "
+              "%d severed "
               "variants were detected." % (EXPECT_REPO, len(cases)))
     print(MARKER + json.dumps(
         {"v": 1, "probe": "notion_event_chain", "status": status,

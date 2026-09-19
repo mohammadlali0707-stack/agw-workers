@@ -56,14 +56,43 @@ credential inside the Notion workspace**, where every workspace member with
 automation rights can read and re-aim it.
 
 n8n belongs in this path precisely because it holds the credential Notion
-should not. Notion's automation carries no secret at all: it POSTs an unsigned
-`{source, page_id}` to a public webhook URL. n8n is where that turns into an
-authenticated GitHub call. The worst a leaked Notion webhook URL can do is
-make the poller run early against a Notion database it was already reading.
+should not. Notion's automation carries no secret at all: it POSTs its own
+native envelope to a public webhook URL (below). n8n is where that turns
+into an authenticated GitHub call. The worst a leaked Notion webhook URL can
+do is make the poller run early against a Notion database it was already
+reading.
 
 That is also why the n8n workflow's second node exists. It checks
-`source == "notion"` and routes anything else to a dead-end "Refuse anything
-else" node rather than to GitHub. The webhook is public; the dispatch is not.
+`source.type == "automation"` and routes anything else to a dead-end "Refuse
+anything else" node rather than to GitHub. The webhook is public; the
+dispatch is not.
+
+**What Notion actually sends, measured on a real firing, not assumed.**
+The first version of this guide had this wrong: it specified a custom JSON
+body (`{"source": "notion", "page_id": "..."}`) that does not match what
+Notion's "Send webhook" action really sends, regardless of which content
+option is picked in its UI. A real automation firing (n8n execution 7101,
+2026-09-19) produced:
+
+```json
+{
+  "source": {"type": "automation", "automation_id": "...", "action_id": "...",
+             "event_id": "...", "attempt": 1},
+  "data": {"object": "page", "id": "<page-id>", "parent": {...},
+           "properties": {"Plan": {"type": "checkbox", "checkbox": true}},
+           "url": "https://app.notion.com/p/...", ...}
+}
+```
+
+`source` is Notion's OWN metadata object, not a string -- the original guard
+compared it to the literal string `"notion"`, which is neither what Notion
+sends nor a value this guide should have invented in the first place. Every
+real firing failed the guard's type check and Notion auto-paused the
+automation after 3 failed attempts. Fixed to check `source.type ==
+"automation"` (Notion's own, authentic signal) and to read the page id from
+`data.id`. **No custom JSON body is needed in Notion at all** -- the default
+"Select all existing properties" content option already produces this
+envelope.
 
 ## The chain, end to end
 
@@ -73,9 +102,9 @@ Notion row: Plan checkbox ticked
         |  Notion database automation  (UI only -- see below)
         v
 POST https://n8n.airboxvip.top/webhook/notion-task
-     {"source": "notion", "page_id": "<uuid>"}
+     {"source": {"type": "automation", ...}, "data": {"id": "<page-id>", ...}}
         |
-        |  n8n: webhook -> IF source == notion -> HTTP Request
+        |  n8n: webhook -> IF source.type == "automation" -> HTTP Request
         v
 POST https://api.github.com/repos/mohammadlali0707-stack/agw-workers/dispatches
      {"event_type": "notion-task", "client_payload": {...}}
@@ -111,22 +140,29 @@ instruction that gets done slightly differently and then debugged for an hour.
 3. **New automation**.
 4. Name it `Plan ticked -> agw-workers`.
 5. Trigger: **Property edited** -> pick the **`Plan`** property.
-   (Not "Page added". A row is usually created before Plan is ticked, and a
-   page-added trigger would fire on the empty row and deliver nothing.)
+   **Use only this one trigger.** An earlier version of this setup also had
+   "Page added" combined with **"When all triggers occur"** (AND) -- that
+   combination can never fire for an EXISTING row (a row that already
+   existed does not re-fire "Page added" when Plan is later ticked), which
+   silently blocked every real task. If more than one trigger is present,
+   the combinator dropdown must read **"When any triggers occur"**, but the
+   simplest correct setup has only the one trigger and no combinator
+   decision to get wrong.
 6. Add a condition: **`Plan` is checked**. Without it the automation also
    fires when someone *un*-ticks the box.
 7. Action: **Send webhook**.
 8. URL: `https://n8n.airboxvip.top/webhook/notion-task`
-9. Body: switch to the JSON/custom editor and send exactly these two keys --
-   ```json
-   {"source": "notion", "page_id": "{{page.id}}"}
-   ```
-   `source` is what n8n's IF node checks; a body without it is refused.
-   `page_id` is carried through to GitHub as `client_payload.page_id`, which
-   is how a delivery gets attributed later. The poller re-queries Notion for
-   ticked rows regardless, so a missing `page_id` degrades attribution, not
-   delivery.
-10. **Save**, then **turn the automation on** (it is created disabled).
+9. Content: leave the default (**"Select all existing properties"**). No
+   custom JSON is needed -- see the measured payload shape above; n8n reads
+   `source.type` and `data.id` from Notion's own envelope directly.
+10. **Save**, then confirm the **Active** toggle at the top of the dialog is
+    on (it is created disabled).
+11. **If Notion ever shows "Automation has been paused"** (a push
+    notification, or the automation's own status): it auto-pauses after 3
+    consecutive failed webhook deliveries. Check
+    `Tools/n8n_wire_notion_bridge.py --step recent-executions` (or n8n's
+    Executions tab) for what actually failed before re-enabling -- retrying
+    blind repeats whatever broke it the first three times.
 11. Tick `Plan` on any row and watch n8n's Executions tab.
 
 ## Part 2 -- the n8n workflow
@@ -165,7 +201,7 @@ Three checks, in the order that isolates a failure fastest:
 #    IF node refuses -- an HTTP 200 with "refused" tells you the guard works)
 curl -sS -X POST https://n8n.airboxvip.top/webhook/notion-task \
      -H 'Content-Type: application/json' \
-     -d '{"source":"notion","page_id":"00000000-0000-0000-0000-000000000000"}'
+     -d '{"source":{"type":"automation"},"data":{"id":"00000000-0000-0000-0000-000000000000"}}'
 
 # 2. Did GitHub receive a dispatch? A run of the poller with
 #    event == repository_dispatch, created within seconds of the curl.

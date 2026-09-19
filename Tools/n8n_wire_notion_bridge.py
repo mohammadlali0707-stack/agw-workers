@@ -328,11 +328,60 @@ def step_execution_detail(key, exec_id):
                           % json.dumps(item_json, ensure_ascii=False)[:4000])
 
 
+def step_fix_guard(key, wf_id):
+    """Correct the new dispatch workflow's guard against Notion's REAL payload.
+
+    Measured on a real firing (execution 7101), not assumed: Notion's
+    native automation webhook envelope is
+        {"source": {"type": "automation", "automation_id": ..., ...},
+         "data": {"id": "<page-id>", "properties": {...}, ...}}
+    `source` is an OBJECT -- the original guard compared it to the string
+    'notion', which this repo invented and Notion's real payload does not
+    send, so every real firing failed type coercion in the IF node and
+    Notion auto-paused the automation after 3 attempts. The correct,
+    already-authentic signal Notion itself provides is
+    `source.type == 'automation'`; the page id is `data.id`, not a
+    `page_id` key this repo also invented.
+    """
+    status, body = api("GET", "/workflows/%s" % wf_id, key)
+    if status != 200:
+        die("could not fetch workflow %s (HTTP %s): %s" % (wf_id, status, body))
+    nodes = body["nodes"]
+
+    guard = next((n for n in nodes if n.get("name") == "Is it really from Notion?"), None)
+    if guard is None:
+        die("guard node not found -- renamed? fix this script")
+    conds = guard["parameters"]["conditions"]["conditions"]
+    conds[0]["leftValue"] = "={{ $json.body?.source?.type ?? $json.source?.type ?? '' }}"
+    conds[0]["rightValue"] = "automation"
+
+    dispatch = next((n for n in nodes if n.get("name") == "GitHub repository_dispatch"), None)
+    if dispatch is None:
+        die("dispatch node not found -- renamed? fix this script")
+    old = dispatch["parameters"]["jsonBody"]
+    needle = "page_id: ($json.body?.page_id ?? $json.page_id ?? '')"
+    if needle not in old:
+        die("expected page_id expression not found in jsonBody -- someone "
+            "already changed it; refusing to guess. Current value: %s" % old)
+    dispatch["parameters"]["jsonBody"] = old.replace(
+        needle, "page_id: ($json.body?.data?.id ?? $json.data?.id ?? '')")
+
+    payload = {"name": body["name"], "nodes": nodes,
+               "connections": body["connections"],
+               "settings": body.get("settings", {})}
+    status, body2 = api("PUT", "/workflows/%s" % wf_id, key, payload)
+    if status != 200:
+        die("guard fix PUT failed HTTP %s: %s" % (status, body2))
+    print("guard corrected: now checks source.type == 'automation', "
+          "page_id now reads data.id")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--step", required=True,
-                    choices=["credential", "workflow", "fix-marker", "verify",
-                             "recent-executions", "execution-detail", "all"])
+                    choices=["credential", "workflow", "fix-marker",
+                             "fix-guard", "verify", "recent-executions",
+                             "execution-detail", "all"])
     ap.add_argument("--minutes", type=int, default=15,
                     help="window for --step recent-executions")
     ap.add_argument("--exec-id", help="execution id for --step execution-detail")
@@ -387,6 +436,10 @@ def main():
         ids = [(wf_id, "new workflow (dispatch)"),
                (MARKER_WORKFLOW_ID, "old workflow (Notion Event -> issue)")]
         step_recent_executions(key, ids, a.minutes)
+
+    if a.step == "fix-guard":
+        wf_id = state.get("wf_id") or "UwLuW7GLo2lvXlzG"
+        step_fix_guard(key, wf_id)
 
     if a.step == "execution-detail":
         if not a.exec_id:

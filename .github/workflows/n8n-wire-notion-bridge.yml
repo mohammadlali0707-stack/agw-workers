@@ -16,7 +16,7 @@ on:
         required: false
         default: 'all'
         type: choice
-        options: [all, credential, workflow, fix-marker, verify, recent-executions, execution-detail]
+        options: [all, credential, workflow, fix-marker, fix-guard, verify, recent-executions, execution-detail]
       exec_id:
         description: 'Execution id for the execution-detail step'
         required: false

@@ -27,8 +27,8 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $json.body?.source ?? $json.source ?? '' }}",
-              "rightValue": "notion",
+              "leftValue": "={{ $json.body?.source?.type ?? $json.source?.type ?? '' }}",
+              "rightValue": "automation",
               "operator": {
                 "type": "string",
                 "operation": "equals"
@@ -73,7 +73,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ event_type: 'notion-task', client_payload: { via: 'n8n', page_id: ($json.body?.page_id ?? $json.page_id ?? ''), fired_at: new Date().toISOString() } }) }}",
+        "jsonBody": "={{ JSON.stringify({ event_type: 'notion-task', client_payload: { via: 'n8n', page_id: ($json.body?.data?.id ?? $json.data?.id ?? ''), fired_at: new Date().toISOString() } }) }}",
         "options": {}
       },
       "id": "github-dispatch",
