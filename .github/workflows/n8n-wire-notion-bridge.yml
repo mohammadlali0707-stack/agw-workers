@@ -78,6 +78,21 @@ jobs:
           fi
           echo "required secrets are present"
 
+      - name: Diagnose -- what does THIS runner actually resolve and reach
+        run: |
+          echo "--- getent hosts ---"
+          getent hosts n8n.airboxvip.top || true
+          echo "--- cat /etc/hosts (grep) ---"
+          grep -i airboxvip /etc/hosts || echo "no matching /etc/hosts entry"
+          echo "--- resolv.conf ---"
+          cat /etc/resolv.conf || true
+          echo "--- curl -v (headers only, redacted key) ---"
+          curl -sS -v -m 20 "https://n8n.airboxvip.top/api/v1/credentials" \
+            -H "X-N8N-API-KEY: x" -o /tmp/body.json 2>&1 | \
+            grep -Ev "^\* (SSL certificate verify|  CApath|  CAfile)" | head -60
+          echo "--- response body ---"
+          cat /tmp/body.json
+
       - name: Run the requested step(s)
         env:
           STEP: ${{ inputs.step }}
