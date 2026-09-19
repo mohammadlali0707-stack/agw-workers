@@ -248,11 +248,40 @@ def step_verify(key, new_wf_id):
     return 0 if ok else 1
 
 
+def step_recent_executions(key, wf_ids, minutes):
+    """List each workflow's recent executions, to see whether a real Notion
+    automation firing ever reached n8n at all -- distinct from whether it
+    then reached GitHub. GET /executions filters by workflowId one at a
+    time; includeData is deliberately left off (metadata is enough to
+    answer "did anything run, and when").
+    """
+    import datetime as dt
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=minutes)
+    for wf_id, label in wf_ids:
+        status, body = api("GET", "/executions?workflowId=%s&limit=10" % wf_id,
+                           key)
+        if status != 200:
+            print("%s (%s): could not list executions (HTTP %s: %s)"
+                  % (label, wf_id, status, body))
+            continue
+        items = body.get("data", body if isinstance(body, list) else [])
+        recent = [x for x in items
+                  if x.get("startedAt", "") >= cutoff.isoformat()]
+        print("%s (%s): %d execution(s) in the last %d min"
+              % (label, wf_id, len(recent), minutes))
+        for x in recent:
+            print("  - id=%s status=%s mode=%s startedAt=%s"
+                  % (x.get("id"), x.get("status"), x.get("mode"),
+                     x.get("startedAt")))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--step", required=True,
                     choices=["credential", "workflow", "fix-marker", "verify",
-                             "all"])
+                             "recent-executions", "all"])
+    ap.add_argument("--minutes", type=int, default=15,
+                    help="window for --step recent-executions")
     a = ap.parse_args()
 
     key = os.environ.get("N8N_API_KEY", "")
@@ -296,6 +325,14 @@ def main():
         if not wf_id:
             die("no workflow id in state -- run --step workflow first")
         return step_verify(key, wf_id)
+
+    if a.step == "recent-executions":
+        # Falls back to the id from the run that created it (35437673833)
+        # if this runner's /tmp state was cleared since.
+        wf_id = state.get("wf_id") or "UwLuW7GLo2lvXlzG"
+        ids = [(wf_id, "new workflow (dispatch)"),
+               (MARKER_WORKFLOW_ID, "old workflow (Notion Event -> issue)")]
+        step_recent_executions(key, ids, a.minutes)
 
     return 0
 

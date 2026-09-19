@@ -16,7 +16,7 @@ on:
         required: false
         default: 'all'
         type: choice
-        options: [all, credential, workflow, fix-marker, verify]
+        options: [all, credential, workflow, fix-marker, verify, recent-executions]
 
 permissions:
   contents: read
