@@ -99,6 +99,24 @@ jobs:
                       refs_acc6 = "secrets.ACC6_PAT" in content
                   print("  %-45s refs_ACC6_PAT=%s" % (name, refs_acc6))
 
+          elif cmd == "runs":
+              fname = sys.argv[2]
+              status, body = call(
+                  "GET", "/repos/%s/actions/workflows/%s/runs?per_page=5"
+                  % (REPO, fname))
+              runs = body.get("workflow_runs", [])
+              if status != 200 or not runs:
+                  print("%-38s NO RUN HISTORY (never triggered, or list "
+                        "failed HTTP %s) -- cannot judge, not a candidate"
+                        % (fname, status))
+              else:
+                  concl = [r.get("conclusion") for r in runs]
+                  all_fail = all(c == "failure" for c in concl)
+                  print("%-38s last %d run(s): %s%s"
+                        % (fname, len(concl), concl,
+                           "  <-- ALL FAILURE, candidate" if all_fail else
+                           "  -- has a non-failure, KEEP"))
+
           elif cmd == "delete":
               fname = sys.argv[2]
               path = ".github/workflows/%s" % fname
@@ -139,3 +157,24 @@ jobs:
 
       - name: Delete gate-webhook-health.yml (confirmed 3/3 failures)
         run: python3 /tmp/acc0.py delete gate-webhook-health.yml
+
+      # Owner's follow-up: "آن ها را بررسی و حذف کن" -- the survey above
+      # found 11 MORE files on ACC0's repo referencing secrets.ACC6_PAT
+      # that were never checked. Referencing ACC6_PAT alone is not proof
+      # of anything -- agw-worker.yml and tbs-worker.yml are the shared,
+      # account-agnostic worker scripts every account's fork runs
+      # (including ACC0's own use as a cross-account dispatch target);
+      # they use ACC6_PAT only conditionally (e.g. when a job's resolved
+      # target account happens to be 6), so a reference by itself says
+      # nothing about whether ACC0's copy is broken. Read run history for
+      # each first -- read-only -- before deciding anything is dead.
+      - name: Read run history for the 11 not-yet-judged files (read-only)
+        run: |
+          for f in agw-worker.yml agy-lead-plan.yml \
+                   deploy-status-dashboard-remote.yml read-acc6-issue.yml \
+                   read-acc6-orchestration.yml read-acc6-runs.yml \
+                   relay-deploy-acc6-migration.yml scan-all-accounts.yml \
+                   tbs-worker.yml test-agy-chat-live.yml \
+                   verify-fleet-facts.yml; do
+            python3 /tmp/acc0.py runs "$f"
+          done

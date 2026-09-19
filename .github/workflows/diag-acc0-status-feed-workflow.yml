@@ -47,6 +47,9 @@ jobs:
     env:
       ACC0_PAT: ${{ secrets.ACC0_PAT }}
     steps:
+      - name: Checkout (needed only for the last step's local file read)
+        uses: actions/checkout@v4
+
       - name: Write the helper script once, run it for every check below
         run: |
           cat <<'PYEOF' > /tmp/diag.py
