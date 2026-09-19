@@ -1,0 +1,141 @@
+name: One-off -- delete ACC0's stale duplicate workflows (write, ACC0-side)
+
+# Owner's instruction, after diag-acc0-status-feed-workflow.yml's read-only
+# findings: "خودت حذف کن ورکفلوهای اضافی ACC0 رو" -- delete ACC0's extra
+# workflows yourself.
+#
+# WHAT WAS CONFIRMED BEFORE THIS FILE WAS WRITTEN (diag run 35448987216,
+# read-only, from ACC0's own API via secrets.ACC0_PAT):
+#   - ACC0_PAT is a live token (GET /user -> 200, login: Mohammadlali).
+#   - Mohammadlali/agw-workers is a live, unarchived repo (pushed
+#     2026-09-18, not deleted).
+#   - deploy-status-feed-remote.yml there: its LAST 3 runs (all
+#     workflow_dispatch) are ALL conclusion=failure (14:11, 14:14, 14:17
+#     UTC today). It references secrets.ACC6_PAT and fails fast with an
+#     explicit ::error:: if that secret is empty -- which it structurally
+#     must be on ACC0's repo, since ACC6_PAT belongs to a different
+#     GitHub account.
+#   - gate-webhook-health.yml there: its LAST 3 scheduled runs are ALL
+#     conclusion=failure (05:38, 10:41, 14:16 UTC today -- every single
+#     hourly cron tick). Also references secrets.ACC6_PAT.
+#   - mohammadlali0707-stack/agw-workers's OWN copies of both are healthy
+#     (green) at the same timestamps -- these are not "the" workflows,
+#     they are ACC0's stale, un-retired pre-migration duplicates.
+#
+# This workflow lists EVERY workflow file on ACC0's repo first (read-only,
+# printed to the log) so a third stale duplicate is not deleted by
+# assumption if the survey does not also confirm it -- then deletes
+# exactly the two files named above via the Contents API, reading back
+# that each is actually gone afterward.
+#
+# Does NOT touch: the repository itself, any other workflow file, any
+# branch, any secret. If ACC0_PAT turns out not to carry write access to
+# this repo, the delete calls fail loudly (printed HTTP status + body)
+# rather than silently.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  delete-stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+    steps:
+      - name: Write the helper script
+        run: |
+          cat <<'PYEOF' > /tmp/acc0.py
+          import base64
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          TOKEN = os.environ["ACC0_PAT"]
+          API = "https://api.github.com"
+          REPO = "Mohammadlali/agw-workers"
+
+
+          def call(method, path, body=None):
+              data = json.dumps(body).encode("utf-8") if body is not None else None
+              req = urllib.request.Request(API + path, data=data, method=method)
+              req.add_header("Authorization", "Bearer " + TOKEN)
+              req.add_header("Accept", "application/vnd.github+json")
+              if data is not None:
+                  req.add_header("Content-Type", "application/json")
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      raw = r.read()
+                      return r.status, (json.loads(raw) if raw else {})
+              except urllib.error.HTTPError as e:
+                  raw = e.read()
+                  try:
+                      return e.code, json.loads(raw)
+                  except ValueError:
+                      return e.code, {"raw": raw.decode("utf-8", "replace")}
+
+
+          cmd = sys.argv[1]
+
+          if cmd == "survey":
+              status, body = call("GET", "/repos/%s/contents/.github/workflows" % REPO)
+              print("GET .github/workflows listing -> HTTP %s" % status)
+              if status != 200:
+                  print("  ", body.get("message"))
+                  sys.exit(1)
+              for entry in body:
+                  name = entry["name"]
+                  s2, wf = call("GET", "/repos/%s/contents/.github/workflows/%s"
+                               % (REPO, name))
+                  refs_acc6 = False
+                  if s2 == 200:
+                      content = base64.b64decode(wf["content"]).decode(
+                          "utf-8", "replace")
+                      refs_acc6 = "secrets.ACC6_PAT" in content
+                  print("  %-45s refs_ACC6_PAT=%s" % (name, refs_acc6))
+
+          elif cmd == "delete":
+              fname = sys.argv[2]
+              path = ".github/workflows/%s" % fname
+              status, body = call("GET", "/repos/%s/contents/%s" % (REPO, path))
+              print("GET %s -> HTTP %s" % (path, status))
+              if status != 200:
+                  print("  ", body.get("message"))
+                  print("::error::could not read %s to get its sha -- cannot "
+                        "delete safely without one" % fname)
+                  sys.exit(1)
+              sha = body["sha"]
+              dstatus, dbody = call(
+                  "DELETE", "/repos/%s/contents/%s" % (REPO, path),
+                  {"message": "chore: remove stale pre-migration duplicate "
+                              "(fails 100%% of runs, needs ACC6_PAT which "
+                              "belongs to a different account)",
+                   "sha": sha})
+              print("DELETE %s -> HTTP %s" % (path, dstatus))
+              if dstatus not in (200, 201):
+                  print("  ", dbody)
+                  print("::error::delete failed for %s" % fname)
+                  sys.exit(1)
+              # Read the property back: it must now 404.
+              vstatus, _ = call("GET", "/repos/%s/contents/%s" % (REPO, path))
+              if vstatus == 404:
+                  print("  confirmed gone: %s" % fname)
+              else:
+                  print("::error::STILL EXISTS after delete (HTTP %s): %s"
+                        % (vstatus, fname))
+                  sys.exit(1)
+          PYEOF
+
+      - name: Survey every workflow file on ACC0's repo (read-only)
+        run: python3 /tmp/acc0.py survey
+
+      - name: Delete deploy-status-feed-remote.yml (confirmed 3/3 failures)
+        run: python3 /tmp/acc0.py delete deploy-status-feed-remote.yml
+
+      - name: Delete gate-webhook-health.yml (confirmed 3/3 failures)
+        run: python3 /tmp/acc0.py delete gate-webhook-health.yml
