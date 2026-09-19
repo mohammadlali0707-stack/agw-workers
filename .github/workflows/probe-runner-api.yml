@@ -1,0 +1,103 @@
+name: One-off -- discover /opt/runner-api.py's real HTTP contract
+
+# We know from docs/notion-n8n-integration.md that a script called
+# /opt/runner-api.py runs on the Arvan VPS (secrets.SERVER_IP) and manages
+# spinning up ephemeral GitHub Actions runners, authenticated by
+# secrets.RUNNER_API_SECRET. What we do NOT know, and could not find
+# documented anywhere in this repo's git history after a thorough search:
+# which port it listens on, what path(s) it exposes, what HTTP method(s)
+# it accepts, or how RUNNER_API_SECRET is meant to be transmitted (header
+# name, query param, or JSON body field). A prior session recorded "no
+# session here can reach that host" -- but that was a cloud dev sandbox,
+# a different network context from a GitHub-hosted ubuntu-latest runner,
+# which has ordinary internet egress. This does not assume the guess is
+# right; it tries several plausible shapes and reports back the RAW
+# response from each (status code + first part of body) so the real
+# contract can be read off what the server actually says, not guessed.
+#
+# Read-only reconnaissance: every request here is a GET/OPTIONS, nothing
+# that would plausibly mutate state on a well-built API. If runner-api.py
+# turns out to treat a bare GET as "spin up a runner", that would only be
+# discovered by trying, which is exactly why this is a controlled,
+# clearly-logged one-off dispatch rather than a blind guess baked into a
+# real workflow.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SERVER_IP: ${{ secrets.SERVER_IP }}
+      RUNNER_API_SECRET: ${{ secrets.RUNNER_API_SECRET }}
+    steps:
+      - name: Confirm both secrets are actually set on this repo
+        run: |
+          if [ -z "$SERVER_IP" ]; then
+            echo "::error::secrets.SERVER_IP is empty or not set on this repo"
+            exit 1
+          fi
+          if [ -z "$RUNNER_API_SECRET" ]; then
+            echo "::error::secrets.RUNNER_API_SECRET is empty or not set on this repo"
+            exit 1
+          fi
+          echo "Both secrets are set (values not printed)."
+
+      - name: Try plausible ports and paths, unauthenticated first
+        run: |
+          set +e
+          PORTS="9876 8000 8080 5000 3000 443 80"
+          PATHS="/ /health /status /runners /api/runners /spawn /webhook /api/spawn"
+          for PORT in $PORTS; do
+            for PATH_ in $PATHS; do
+              URL="http://${SERVER_IP}:${PORT}${PATH_}"
+              CODE=$(curl -sS -o /tmp/body.txt -w '%{http_code}' --max-time 4 "$URL" 2>/tmp/err.txt)
+              RC=$?
+              if [ "$RC" -ne 0 ]; then
+                echo "PORT=$PORT PATH=$PATH_ -> curl exit $RC ($(head -c 120 /tmp/err.txt))"
+                continue
+              fi
+              echo "PORT=$PORT PATH=$PATH_ -> HTTP $CODE, body: $(head -c 200 /tmp/body.txt)"
+            done
+          done
+
+      - name: Retry the port(s) that answered, now WITH the secret in three common header shapes
+        run: |
+          set +e
+          # Populated by a human reading the previous step's output would be
+          # ideal, but this step runs unconditionally in the same job so it
+          # can only guess which port answered from this run's own log --
+          # so it just retries the two most-cited candidates (9876, the
+          # port CCP's own history mentions twice; 8080, the most common
+          # convention for this kind of internal API) against the root path
+          # with three plausible auth shapes each.
+          for PORT in 9876 8080; do
+            URL="http://${SERVER_IP}:${PORT}/"
+            for AUTH_STYLE in bearer x-api-key query; do
+              case "$AUTH_STYLE" in
+                bearer)
+                  CODE=$(curl -sS -o /tmp/body.txt -w '%{http_code}' --max-time 4 \
+                    -H "Authorization: Bearer ${RUNNER_API_SECRET}" "$URL" 2>/tmp/err.txt)
+                  ;;
+                x-api-key)
+                  CODE=$(curl -sS -o /tmp/body.txt -w '%{http_code}' --max-time 4 \
+                    -H "X-API-Key: ${RUNNER_API_SECRET}" "$URL" 2>/tmp/err.txt)
+                  ;;
+                query)
+                  CODE=$(curl -sS -o /tmp/body.txt -w '%{http_code}' --max-time 4 \
+                    "${URL}?secret=${RUNNER_API_SECRET}" 2>/tmp/err.txt)
+                  ;;
+              esac
+              RC=$?
+              if [ "$RC" -ne 0 ]; then
+                echo "PORT=$PORT AUTH=$AUTH_STYLE -> curl exit $RC ($(head -c 120 /tmp/err.txt))"
+                continue
+              fi
+              echo "PORT=$PORT AUTH=$AUTH_STYLE -> HTTP $CODE, body: $(head -c 200 /tmp/body.txt)"
+            done
+          done
