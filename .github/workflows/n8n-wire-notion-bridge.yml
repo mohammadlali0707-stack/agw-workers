@@ -1,0 +1,56 @@
+name: One-off -- wire the Notion event-driven bridge into n8n
+
+# Manual, one-time setup. The owner set an n8n API key as a repo secret
+# rather than pasting it into chat -- this workflow is the reason: it is
+# the only place that key is ever dereferenced. See Tools/n8n_wire_notion_bridge.py
+# for what each step actually does and why.
+#
+# Safe to re-run: credential/workflow lookup by name makes steps 1-2
+# idempotent; step 3 checks for the marker before touching anything.
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: 'Which step to run (all = every step in order)'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, credential, workflow, fix-marker, verify]
+
+permissions:
+  contents: read
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+      # The exact fallback notion-task-poller.yml already uses for issue
+      # creation -- reused verbatim, not re-decided.
+      GH_DISPATCH_PAT: ${{ secrets.AGY_ISSUE_PAT || secrets.ACC6_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight -- the secrets this job needs must be real
+        env:
+          STEP: ${{ inputs.step }}
+        run: |
+          set -e
+          if [ -z "$N8N_API_KEY" ]; then
+            echo "::error::secrets.N8N_API_KEY is empty or does not exist"
+            exit 1
+          fi
+          if [ "$STEP" = "credential" ] || [ "$STEP" = "all" ]; then
+            if [ -z "$GH_DISPATCH_PAT" ]; then
+              echo "::error::neither secrets.AGY_ISSUE_PAT nor secrets.ACC6_PAT is set"
+              exit 1
+            fi
+          fi
+          echo "required secrets are present"
+
+      - name: Run the requested step(s)
+        env:
+          STEP: ${{ inputs.step }}
+        run: python3 Tools/n8n_wire_notion_bridge.py --step "$STEP"
