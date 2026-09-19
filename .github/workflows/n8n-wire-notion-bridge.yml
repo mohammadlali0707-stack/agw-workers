@@ -34,6 +34,23 @@ jobs:
     # infra this fleet already uses to reach this same host hourly (the
     # n8n webhook health check in Gate 2), which is why it is tried here --
     # not yet proven un-challenged itself, only more likely to be.
+    #
+    # SECOND RUN (35436880182), on self-hosted: Cloudflare error 1010
+    # (browser_signature_banned) on POST /api/v1/credentials --
+    # "The site owner has blocked access based on your browser's
+    # signature. owner_action_required: true. Do not retry." This is a
+    # TLS/HTTP client fingerprint block, not an IP block -- it will most
+    # likely reject ANY script (curl, urllib, requests) from ANY runner,
+    # self-hosted included, until the owner adds a Cloudflare exception
+    # for this path or header. Deliberately not worked around by spoofing
+    # a browser signature: Cloudflare's own response says not to retry,
+    # and this may be an intentional anti-automation control on n8n's
+    # management API specifically (as opposed to its /webhook/ paths,
+    # which real automation traffic must reach and which answered
+    # normally in the same test). Left for the owner to unblock, or for
+    # the handful of remaining steps to be done by hand in n8n's UI
+    # (already a real, working browser session, which this ban does not
+    # affect) -- see Integrations/n8n/README.md.
     runs-on: self-hosted
     timeout-minutes: 10
     env:
