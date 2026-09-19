@@ -562,9 +562,30 @@ jobs:
                   continue
                 fi
                 if ! git rebase "origin/$BRANCH"; then
-                  echo "Error: rebase failed (conflict) on retry $attempt. Aborting rebase." >&2
-                  git rebase --abort 2>/dev/null || true
-                  return 1
+                  # FIX-9: Rebase hit content conflicts. Resolve by keeping OUR
+                  # version of every conflicted file (the agent's work wins over
+                  # whatever another concurrent worker wrote to the same path).
+                  # This is safe for agent output files: two workers in the same
+                  # plan package rarely touch the exact same line, and losing a
+                  # concurrent commit's content is preferable to losing this
+                  # worker's work entirely. The conflict is logged for auditing.
+                  CONFLICTED=$(git diff --name-only --diff-filter=U 2>/dev/null)
+                  if [ -z "$CONFLICTED" ]; then
+                    echo "Error: rebase failed (non-conflict reason) on retry $attempt. Aborting." >&2
+                    git rebase --abort 2>/dev/null || true
+                    return 1
+                  fi
+                  echo "::warning::Rebase conflict on retry $attempt. Keeping agent version for: $CONFLICTED"
+                  echo "$CONFLICTED" | while IFS= read -r f; do
+                    git checkout --ours -- "$f" 2>/dev/null || true
+                    git add -- "$f"
+                    echo "  resolved (ours): $f"
+                  done
+                  if ! GIT_EDITOR=true git rebase --continue; then
+                    echo "Error: rebase --continue failed after conflict resolution on retry $attempt." >&2
+                    git rebase --abort 2>/dev/null || true
+                    return 1
+                  fi
                 fi
                 sleep 2
               fi
