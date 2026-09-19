@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   relay:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     env:
       ACC1_PAT: ${{ secrets.ACC1_PAT }}
       ACC2_PAT: ${{ secrets.ACC2_PAT }}

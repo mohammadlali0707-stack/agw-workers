@@ -16,7 +16,7 @@ jobs:
       github.event_name == 'issues' &&
       startsWith(github.event.issue.body, '@media') &&
       (github.event.issue.author_association == 'OWNER' || github.event.issue.user.login == 'github-actions[bot]')
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     steps:
       - name: Ack the request
         env:
@@ -32,7 +32,7 @@ jobs:
       startsWith(github.event.issue.body, '@media') &&
       github.event.comment.user.type != 'Bot' &&
       github.event.comment.author_association == 'OWNER'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     steps:
       - uses: actions/checkout@v4
 

@@ -26,7 +26,7 @@ on:
 
 jobs:
   gate-runner-deps:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     if: ${{ inputs.check_type == 'deps' || inputs.check_type == '' }}
     steps:
       - name: Check required CLI tools are installed on runner
@@ -80,7 +80,7 @@ jobs:
           echo "✅ All runner dependencies satisfied"
 
   gate-dispatch-schema:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     if: ${{ inputs.check_type == 'dispatch_schema' }}
     env:
       DISPATCH_FIELDS: ${{ inputs.dispatch_fields }}

@@ -92,7 +92,7 @@ permissions:
 
 jobs:
   lead:
-    runs-on: ${{ github.repository_owner == 'Mohammadlali' && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 60
     env:
       # Unique per job execution. /tmp/agent-repo was a single shared path:

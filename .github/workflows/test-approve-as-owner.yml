@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   approve:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 2
     env:
       ACC6_PAT: ${{ secrets.ACC6_PAT }}

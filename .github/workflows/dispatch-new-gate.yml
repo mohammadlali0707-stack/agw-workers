@@ -97,8 +97,9 @@ jobs:
             printf '%s\n' '   - `timeout-minutes: 10` on every job'
             printf '%s\n' ''
             printf '%s\n' '2. **Self-hosted rule**: The new gate MUST use `ubuntu-latest`.'
-            printf '%s\n' '   Only `agw-worker.yml` and `gate-runner-deps.yml` may use `self-hosted`.'
-            printf '%s\n' '   Verify gate-runs-on-policy.yml does not need whitelist update.'
+            printf '%s\n' '   Self-hosted is disabled fleet-wide as of 2026-09-19 (owner instruction) --'
+            printf '%s\n' '   no workflow in any repo may use `self-hosted` until further notice.'
+            printf '%s\n' '   See gate-runs-on-policy.yml for the current state of that rule.'
             printf '%s\n' ''
             if [ "$INPUT_DEPLOY_ALL" = "yes" ]; then
               printf '%s\n' '3. **Deploy to all repos**: After building the gate, deploy it to all 9 agw-workers repos:'

@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   check-marker:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 5
     if: >
       github.event_name == 'issue_comment' &&
@@ -78,7 +78,7 @@ jobs:
 
   parse-proposal:
     needs: [check-marker]
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 5
     if: >
       needs.check-marker.outputs.match == 'true' &&
@@ -184,7 +184,7 @@ jobs:
       needs.parse-proposal.result == 'success' &&
       needs.parse-proposal.outputs.skip != 'true' &&
       needs.parse-proposal.outputs.accounts != '[]'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 30
     strategy:
       fail-fast: false

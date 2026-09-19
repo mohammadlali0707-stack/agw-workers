@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   plan:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
       parallel: ${{ steps.build.outputs.parallel }}
@@ -73,7 +73,7 @@ jobs:
 
   work:
     needs: plan
-    runs-on: self-hosted
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     # Everything this job needs -- python, git, the agy binary -- is already
     # in the image, so there is no install step and nothing to cache. Pin
     # vars.TBS_WORKER_IMAGE to an IMMUTABLE tag (the sha the image workflow

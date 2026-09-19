@@ -4,7 +4,21 @@ name: Gate 4 -- runs-on Policy Enforcer
 # anywhere, EXCEPT the monitoring workflows listed in MUST_BE_HOSTED below,
 # which must stay on a GitHub-hosted runner.
 #
-# Why this was inverted:
+# STATUS 2026-09-19: every workflow in this repo was reverted from
+# self-hosted to ubuntu-latest that day (owner instruction: self-hosted is
+# not to be configured on ANY repo until further notice -- the Arvan
+# runner-api.py pool had no free capacity/API for the repos that actually
+# needed relief, and even this repo's own slots were full). This gate's
+# CODE did not need to change: it only enforces the deny-list below, it
+# never required self-hosted usage elsewhere, so an all-ubuntu-latest fleet
+# still passes it cleanly. But the paragraph above is now stale as a
+# description of the fleet -- "self-hosted is the fleet DEFAULT" was true
+# on 2026-09-17 and is not true today. Read it as history, not current
+# state, until self-hosted is reinstated; if/when it is, re-verify this
+# gate's deny-list still matches which workflows actually monitor the
+# self-hosted fleet.
+#
+# Why this was inverted (2026-09-17, for the historical record):
 #   The original rule was an allow-list naming agw-worker.yml and
 #   gate-runner-deps.yml as the only workflows permitted to use self-hosted.
 #   That predates the deliberate fleet-wide migration to the Arvan ephemeral

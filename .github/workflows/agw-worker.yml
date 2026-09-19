@@ -80,13 +80,22 @@ jobs:
     # is per-runner and the run/attempt/job triple makes it unique even if the
     # temp dir is ever shared.
     #
-    # runner_type input: set by agy-issue-bot after billing check.
-    # Owner instruction 2026-09-17: ONLY ACC0 (Mohammadlali) stays on the
-    # self-hosted Arvan pool. Every other account, the control repo
-    # included, uses ubuntu-latest -- one small runner pool shared by nine
-    # accounts is why jobs sat Queued. An explicit runner_type from
-    # agy-issue-bot still wins, so a low-quota account can be sent back.
-    runs-on: ${{ inputs.runner_type != '' && inputs.runner_type || (github.repository_owner == 'Mohammadlali' && 'self-hosted') || 'ubuntu-latest' }}
+    # runner_type input: historically set by agy-issue-bot after a billing
+    # check, honored so a caller could route ACC0 to the self-hosted Arvan
+    # pool while everyone else used ubuntu-latest (owner instruction
+    # 2026-09-17, after one shared runner pool for nine accounts left jobs
+    # sat Queued).
+    #
+    # DISABLED, owner instruction 2026-09-19: self-hosted is not to be
+    # configured on ANY repo until further notice -- the runner-api.py
+    # fleet was found to have no free capacity/API for the repos that
+    # actually needed relief (Claud-Cloud-Project etc.), and even
+    # agw-workers' own slots were full. `runner_type` is deliberately
+    # IGNORED here now, not just defaulted -- a caller passing
+    # `runner_type=self-hosted` must not be able to route around this.
+    # Restore the input's effect (`inputs.runner_type != '' &&
+    # inputs.runner_type ||`) once told to.
+    runs-on: ubuntu-latest
     # 30 was enough for one attempt; a same-run retry needs headroom too. A
     # quota/rate-limit rejection surfaces near-instantly, so this only bites
     # in the rare case where attempt 1 burns real time before failing.
