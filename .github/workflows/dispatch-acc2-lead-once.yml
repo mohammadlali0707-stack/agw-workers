@@ -1,0 +1,50 @@
+name: Dispatch ACC2 lead once (issue 55)
+
+# One-shot. Does NOT re-approve the plan. Dispatches a NEW agy-lead-plan.yml
+# run inside lali94m-max/agw-workers so the parser-fix commit is used.
+# Re-running the old failed job keeps the old workflow file.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  dispatch-acc2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      AGW_TOKEN_ACC2: ${{ secrets.AGW_TOKEN_ACC2 }}
+    steps:
+      - name: Dispatch ACC2 lead in its own repo
+        env:
+          GH_TOKEN: ${{ secrets.ACC2_PAT }}
+        run: |
+          set -e
+          if [ -z "$ACC2_PAT" ] || [ -z "$ACC6_PAT" ] || [ -z "$AGW_TOKEN_ACC2" ]; then
+            echo "::error::missing ACC2_PAT, ACC6_PAT, or AGW_TOKEN_ACC2"
+            exit 1
+          fi
+          echo "::add-mask::$ACC2_PAT"
+          echo "::add-mask::$ACC6_PAT"
+          echo "::add-mask::$AGW_TOKEN_ACC2"
+          PACKAGE_GOAL='Verify and document the live ingest path without rewriting FINAL_REPORT_CONTRACT.md or probe scripts; record explicitly in Team/reports/proveloop_acc2.md that the github-final-report webhook is decoupled from notion-task, HMAC is drawn from the server environment instead of header auth, and the Plan property on the Fleet report row remains disabled; ensure zero live n8n workflow activation for ingest JSON and zero modifications to Team/RULES.md, capturing execution output in Reports/ingest_live/run.txt as lead-only with no subordinate fan-out.'
+          gh workflow run agy-lead-plan.yml \
+            --repo lali94m-max/agw-workers \
+            --ref main \
+            --field account=2 \
+            --field max_subordinates=0 \
+            --field plan_fp=dd062be67d29 \
+            --field "package_goal=${PACKAGE_GOAL}" \
+            --field target_repo=mohammadlali0707-stack/Claud-Cloud-Project \
+            --field agy_token_b64="$AGW_TOKEN_ACC2" \
+            --field target_repo_pat="$ACC6_PAT" \
+            --field control_repo_pat="$ACC6_PAT" \
+            --field issue_number=55 \
+            --field callback_id=plan-55-dd062be67d29-acc2 \
+            --field 'all_accounts=[0, 1, 2, 3, 4, 5, 7, 8]'
+          echo "Dispatched NEW ACC2 lead on lali94m-max/agw-workers"
