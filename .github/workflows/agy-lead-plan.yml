@@ -307,22 +307,26 @@ jobs:
               rc = 0
           low = text.lower()
           reason = None
-          if 'quota reached' in low or 'upgrade your subscription' in low:
-              reason = ('AGY_QUOTA',
-                        'سهمیه‌ی این اکانت تمام شده است. تا ریست شدن سهمیه، '
-                        'برنامه‌ریزی این اکانت اجرا نمی‌شود.')
-          elif rc == 124:
+          if rc == 124:
               reason = ('AGY_TIMEOUT',
                         'اجرای agy به سقف زمانی رسید و قطع شد.')
-          elif ('authentication' in low or 'unauthorized' in low
-                or 'invalid api key' in low or 'not logged in' in low):
-              reason = ('AGY_AUTH',
-                        'احراز هویت agy برای این اکانت شکست خورد (توکن نامعتبر یا منقضی).')
+          elif rc != 0:
+              # Only check error keywords when agy actually failed (rc != 0).
+              # When rc == 0, the plan text may legitimately contain words like
+              # "authentication" as part of the task description -- do not misfire.
+              if 'quota reached' in low or 'upgrade your subscription' in low:
+                  reason = ('AGY_QUOTA',
+                            'سهمیه‌ی این اکانت تمام شده است. تا ریست شدن سهمیه، '
+                            'برنامه‌ریزی این اکانت اجرا نمی‌شود.')
+              elif ('authentication' in low or 'unauthorized' in low
+                    or 'invalid api key' in low or 'not logged in' in low):
+                  reason = ('AGY_AUTH',
+                            'احراز هویت agy برای این اکانت شکست خورد (توکن نامعتبر یا منقضی).')
+              else:
+                  reason = ('AGY_FAILED',
+                            'agy با کد خطای {0} خارج شد.'.format(rc))
           elif not text.strip():
               reason = ('AGY_EMPTY', 'agy هیچ خروجی‌ای تولید نکرد.')
-          elif rc != 0:
-              reason = ('AGY_FAILED',
-                        'agy با کد خطای {0} خارج شد.'.format(rc))
 
           if reason is not None:
               code, persian = reason
