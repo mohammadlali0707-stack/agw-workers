@@ -17,13 +17,22 @@ Plan stays false on a newly created twin. Copying a Plan tick would make
 both rows candidates and open two GitHub issues. Tick Plan on one of the
 two pages; the issue opener writes Github Issue URL onto both twins.
 
-Fleet inbox rows are dual-written by n8n with the same Name. Those are
-PAIRED by Name, not created a third and fourth time.
+FLEET INBOX -- NO CREATE, NO LOOP
+---------------------------------
+n8n already dual-writes each GitHub report as a row named "Fleet report N"
+on BOTH boards. Those rows are PAIRED by exact Name. This script never
+CREATES a Fleet report twin. Creating one would race n8n (poller runs
+between the two n8n writes) and then the extra unmatched copy would grow
+a third, fourth, ... page every ten minutes.
+
+Create is also refused when the destination already has ANY row with that
+Name, Fleet or not. Pairing still links the two n8n copies.
 
 Edits after creation are not live-synced. Ask if that is needed later.
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -34,6 +43,8 @@ NOTION_VERSION = "2022-06-28"
 NOTION_API = "https://api.notion.com/v1"
 TWIN_PROP = "Twin page ID"
 CREATE_WINDOW = timedelta(hours=48)
+# n8n Create Fleet report row uses Name "Fleet report {{ number }}".
+FLEET_NAME = re.compile(r"^fleet\s+report\b", re.IGNORECASE)
 _last = [0.0]
 
 
@@ -61,6 +72,19 @@ def _req(method, url, token, body=None, _tries=0):
 
 def plain(rich):
     return "".join(x.get("plain_text", "") for x in rich or [])
+
+
+def is_fleet_name(name):
+    return bool(name and FLEET_NAME.match(name.strip()))
+
+
+def names_on(rows):
+    found = set()
+    for row in rows:
+        name = page_name(row)
+        if name:
+            found.add(name)
+    return found
 
 
 def load_boards(env):
@@ -261,7 +285,8 @@ def main():
     env = os.environ
     dry = env.get("DRY_RUN", "") == "1"
     boards = load_boards(env)
-    stats = {"paired": 0, "created": 0, "skipped": 0, "failed": 0}
+    stats = {"paired": 0, "created": 0, "skipped": 0, "skipped_fleet": 0,
+             "skipped_name_exists": 0, "failed": 0}
     if len(boards) < 2:
         print("only one Task Board configured; nothing to mirror")
         print("##TBS##" + json.dumps(
@@ -301,6 +326,7 @@ def main():
         (b_token, b_rows, a_token, a_db, a_rows),
     ]
     for src_token, src_rows, dst_token, dst_db, dst_rows in sides:
+        dest_names = names_on(dst_rows)
         for src_row in src_rows:
             sid = src_row["id"]
             if sid in seen or twin_of(src_row):
@@ -312,6 +338,14 @@ def main():
             if not name:
                 stats["skipped"] += 1
                 continue
+            if is_fleet_name(name):
+                print(f"  SKIP CREATE {name!r}: n8n dual-writes Fleet rows; pair only")
+                stats["skipped_fleet"] += 1
+                continue
+            if name in dest_names:
+                print(f"  SKIP CREATE {name!r}: dest already has this Name")
+                stats["skipped_name_exists"] += 1
+                continue
             if not recent_enough(src_row, now):
                 stats["skipped"] += 1
                 continue
@@ -319,6 +353,7 @@ def main():
                 create_twin(src_token, src_row, dst_token, dst_db, dry)
                 stats["created"] += 1
                 seen.add(sid)
+                dest_names.add(name)
             except Exception as e:  # noqa: BLE001
                 stats["failed"] += 1
                 print(f"     FAILED create {name!r}: {str(e)[:300]}", file=sys.stderr)
