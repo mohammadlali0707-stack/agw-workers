@@ -130,17 +130,42 @@ jobs:
           set -euo pipefail
           echo "::add-mask::$ACC6_PAT"
           python3 "$GITHUB_WORKSPACE/ccp/Tools/ingest_owner_asset.py" --root "$GITHUB_WORKSPACE/ccp" --parse-only --url "$ASSET_URL" --asset-id "$ASSET_ID"
-          curl -fL --location-trusted --retry 3 --retry-delay 2 \
-            -H "Authorization: Bearer ${ACC6_PAT}" \
+          # GitHub user-attachments are public. Sending ACC6_PAT as a Bearer
+          # header makes the redirected attachment request fail with curl
+          # exit 22 on some GitHub edge paths, so do not authenticate this
+          # public download. Keep diagnostics safe: never print headers or
+          # the token, only status/content-type/size and the first 16 bytes.
+          set +e
+          CURL_META=$(curl -sS -L --retry 3 --retry-delay 2 \
             -H "Accept: application/octet-stream" \
             -H "User-Agent: ccp-owner-asset-ingest/1.0" \
             -o /tmp/owner-asset.bin \
-            "$ASSET_URL"
+            -w '%{http_code} %{content_type} %{size_download}' \
+            "$ASSET_URL" 2>/tmp/owner-asset.curl.err)
+          CURL_EXIT=$?
+          set -e
+          FILE_INFO=$(file -b /tmp/owner-asset.bin 2>/dev/null || true)
+          FIRST16=$(xxd -l 16 -p /tmp/owner-asset.bin 2>/dev/null || true)
+          printf 'curl_exit=%s\nhttp=%s\nfile=%s\nfirst16=%s\n' \
+            "$CURL_EXIT" "$CURL_META" "$FILE_INFO" "$FIRST16" > /tmp/owner-asset.diag
+          cat /tmp/owner-asset.diag
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::error::public attachment download failed; see safe diagnostics above"
+            exit "$CURL_EXIT"
+          fi
+          set +e
           python3 "$GITHUB_WORKSPACE/ccp/Tools/ingest_owner_asset.py" \
             --root "$GITHUB_WORKSPACE/ccp" \
             --asset-id "$ASSET_ID" \
             --url "$ASSET_URL" \
-            --from-file /tmp/owner-asset.bin
+            --from-file /tmp/owner-asset.bin > /tmp/owner-asset.python.out 2>&1
+          PY_EXIT=$?
+          set -e
+          cat /tmp/owner-asset.python.out
+          if [ "$PY_EXIT" -ne 0 ]; then
+            echo "python_exit=$PY_EXIT" >> /tmp/owner-asset.diag
+            exit "$PY_EXIT"
+          fi
 
       - name: Commit ingested file to CCP
         id: commit
