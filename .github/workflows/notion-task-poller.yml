@@ -9,9 +9,10 @@ name: Notion task -> GitHub issue (poller)
 #
 # Two Notion workspaces: primary secrets are required. Optional second board
 # (NOTION_TOKEN_2 + NOTION_TASKS_DB_ID_2) is the Business-trial workspace.
-# A Plan tick on either board opens the issue. Do not copy pages between
-# workspaces; do not point the second board at /webhook/notion-task -- that
-# path still uses the primary Notion token.
+# A Plan tick on either board opens the issue. notion_board_sync.py mirrors
+# new rows across boards first (Plan stays false on the twin). Do not point
+# the second board at /webhook/notion-task -- that path still uses the
+# primary Notion token.
 #
 # WHY THIS EXISTS AT ALL
 # ----------------------
@@ -106,6 +107,13 @@ jobs:
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Mirror Task Board rows across Notion workspaces
+        if: steps.preflight.outputs.ready == 'true'
+        run: |
+          set -eu
+          python3 Tools/notion_board_sync.py | tee "$RUNNER_TEMP/sync.log"
+          grep -o '##TBS##.*' "$RUNNER_TEMP/sync.log" | tail -1 >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Turn ticked tasks into issues
         if: steps.preflight.outputs.ready == 'true'
