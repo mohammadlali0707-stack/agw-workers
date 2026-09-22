@@ -19,6 +19,13 @@ plan**, and the run said Success while doing nothing.
 The guard is now per-PROPOSAL. The selected plan is fingerprinted, the start
 marker carries `[plan:<fp>]`, and only that fingerprint blocks.
 
+HITL MOVE (2026-09-22)
+----------------------
+Owner HITL moved from a GitHub `@agy-plan-approved` comment to the Notion
+Task Board Plan checkbox. plan-bot must start agy-plan-dispatch.yml via
+workflow_dispatch after it posts a tbs_account_plan. The leftover GitHub
+approval path may remain as recovery; it is no longer the required gate.
+
 BOTH DIRECTIONS, because each failure is real
 ---------------------------------------------
 Too strict was the incident: a revision could never dispatch. Too loose is
@@ -39,10 +46,16 @@ import sys
 MARKER = "##TBS##"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WF = os.path.join(ROOT, ".github", "workflows", "agy-plan-dispatch.yml")
+BOT = os.path.join(ROOT, ".github", "workflows", "agy-plan-bot.yml")
 
 
 def read():
     with io.open(WF, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def read_bot():
+    with io.open(BOT, encoding="utf-8") as fh:
         return fh.read()
 
 
@@ -78,7 +91,7 @@ def fingerprint(proposal, width):
 
 
 def guard_skips(comments, fp):
-    """The shell guard, one line: grep -qF "[plan:<fp>]"."""
+    """The shell guard, one line: grep -qF \"[plan:<fp>]\"."""
     return ("[plan:%s]" % fp) in comments
 
 
@@ -87,6 +100,21 @@ def main():
     text = read()
 
     code = code_only(text)
+    try:
+        bot_code = code_only(read_bot())
+    except IOError:
+        bot_code = ""
+        failures.append("agy-plan-bot.yml is missing -- cannot prove auto-dispatch")
+
+    if "workflow_dispatch:" not in code:
+        failures.append(
+            "agy-plan-dispatch.yml has no workflow_dispatch -- plan-bot "
+            "cannot start leads after a Notion Plan tick")
+    if "gh workflow run agy-plan-dispatch.yml" not in bot_code:
+        failures.append(
+            "agy-plan-bot.yml does not start agy-plan-dispatch.yml after "
+            "posting a proposal -- HITL would still be a GitHub approval comment")
+
     if "Already dispatched once on this issue" in code:
         failures.append(
             "the per-ISSUE refusal is still in the workflow -- a second plan "

@@ -1,25 +1,37 @@
-name: AGY Project Planning -- Lead Dispatch on Approval
+name: AGY Project Planning -- Lead Dispatch after Notion Plan tick
 
-# Triggered by a comment ending in "@agy-plan-approved" on an issue that
-# carries a tbs_account_plan (posted by agy-plan-bot.yml). Parses the
-# LATEST such proposal from the issue's own comment history and, for each
-# account that has a package (0-8, never 6 or 9 -- ACC6 hosts this repo/
-# Control-Room and is not a task-execution identity, ACC9 is retired),
-# dispatches ONE agy-lead-plan.yml run for that account. Each lead then
-# plans and dispatches its OWN 10 subordinates with the 5-second stagger
+# HITL is the Notion Task Board Plan checkbox. The poller opens an issue
+# ending in @agy-plan; agy-plan-bot posts a tbs_account_plan; this workflow
+# then starts the 8 leads. A human @agy-plan-approved comment is no longer
+# required. workflow_dispatch (called by plan-bot) is the auto path.
+# The leftover issue_comment @agy-plan-approved path remains as a manual
+# recovery / dashboard Accept button.
+#
+# Parses the LATEST tbs_account_plan from the issue's own comment history
+# and, for each account that has a package (0-8, never 6 or 9 -- ACC6 hosts
+# this repo/Control-Room and is not a task-execution identity, ACC9 is
+# retired), dispatches ONE agy-lead-plan.yml run for that account. Each lead
+# then plans and dispatches its OWN 10 subordinates with the 5-second stagger
 # (see agy-lead-plan.yml) -- this workflow only starts the 8 leads, all in
 # parallel, since they are independent Antigravity identities/quotas and
 # there is exactly one dispatch per account here (the stagger requirement
 # is about calls sharing ONE identity, which leads vs. their own workers
 # are, not leads vs. each other).
 #
-# Same trigger contract as agy-issue-bot.yml/agy-plan-bot.yml: a real bash
-# check (GitHub Actions expressions have no escape sequences) and
-# author_association OWNER/COLLABORATOR or login == Mohammadlali.
+# Same author contract as agy-issue-bot.yml/agy-plan-bot.yml for the leftover
+# GitHub approval path: a real bash check and author_association
+# OWNER/COLLABORATOR or login == Mohammadlali. workflow_dispatch skips that
+# because the Notion Plan tick already was HITL.
 
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue whose latest tbs_account_plan should dispatch'
+        required: true
+        type: string
 
 permissions:
   issues: write
@@ -31,8 +43,9 @@ jobs:
     runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 5
     if: >
-      github.event_name == 'issue_comment' &&
-      contains(github.event.comment.body, '@agy-plan-approved')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@agy-plan-approved'))
     outputs:
       match: ${{ steps.check.outputs.match }}
     steps:
@@ -40,7 +53,12 @@ jobs:
         id: check
         env:
           BODY: ${{ github.event.comment.body || '' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # STRIP A TRAILING ATTRIBUTION FOOTER BEFORE TESTING THE MARKER.
           # Measured 2026-09-18 on issue #38: a task comment written by a
           # Claude Code session ends up with
@@ -82,10 +100,16 @@ jobs:
     timeout-minutes: 5
     if: >
       needs.check-marker.outputs.match == 'true' &&
-      github.event.comment.user.type != 'Bot' &&
-      (github.event.comment.author_association == 'OWNER' ||
-        github.event.comment.author_association == 'COLLABORATOR' ||
-        github.event.comment.user.login == 'Mohammadlali')
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.comment.user.type != 'Bot' &&
+          (github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'COLLABORATOR' ||
+            github.event.comment.user.login == 'Mohammadlali')
+        )
+      )
     outputs:
       skip: ${{ steps.parse.outputs.skip }}
       accounts: ${{ steps.parse.outputs.accounts }}
@@ -93,12 +117,13 @@ jobs:
       plan_fp: ${{ steps.parse.outputs.plan_fp }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.inputs.issue_number || github.event.issue.number }}
     steps:
       - name: Fetch comments, find the latest proposal, guard against a duplicate approval
         id: parse
         run: |
           set -e
-          gh issue view "${{ github.event.issue.number }}" \
+          gh issue view "$ISSUE_NUMBER" \
             --repo "${{ github.repository }}" \
             --json comments --jq '.comments[].body' > /tmp/all_comments.txt
 
@@ -174,7 +199,7 @@ jobs:
         if: steps.parse.outputs.skip != 'true'
         run: |
           COUNT=$(python3 -c "import json; print(len(json.load(open('/tmp/proposal.json'))['packages']))")
-          gh issue comment "${{ github.event.issue.number }}" \
+          gh issue comment "$ISSUE_NUMBER" \
             --repo "${{ github.repository }}" \
             --body "Project Manager: 🚀 Lead dispatch started [plan:${{ steps.parse.outputs.plan_fp }}] -- ${COUNT} account package(s): ${{ steps.parse.outputs.accounts }}. Each lead plans and dispatches up to its subordinate cap; a final ACC6 summary posts once all report back."
 
@@ -191,6 +216,7 @@ jobs:
       matrix:
         account: ${{ fromJson(needs.parse-proposal.outputs.accounts) }}
     env:
+      ISSUE_NUMBER: ${{ github.event.inputs.issue_number || github.event.issue.number }}
       PROPOSAL_JSON: ${{ needs.parse-proposal.outputs.proposal }}
       ALL_ACCOUNTS: ${{ needs.parse-proposal.outputs.accounts }}
       ACC0_PAT: ${{ secrets.ACC0_PAT }}
@@ -303,6 +329,6 @@ jobs:
             --field "agy_token_b64=$AGY_TOKEN" \
             --field "target_repo_pat=$TARGET_REPO_PAT" \
             --field "control_repo_pat=$ACC6_PAT" \
-            --field "issue_number=${{ github.event.issue.number }}" \
-            --field "callback_id=plan-${{ github.event.issue.number }}-${{ needs.parse-proposal.outputs.plan_fp }}-acc${{ matrix.account }}" \
+            --field "issue_number=$ISSUE_NUMBER" \
+            --field "callback_id=plan-${ISSUE_NUMBER}-${{ needs.parse-proposal.outputs.plan_fp }}-acc${{ matrix.account }}" \
             --field "all_accounts=$ALL_ACCOUNTS"
