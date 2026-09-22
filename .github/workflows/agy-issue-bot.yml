@@ -52,9 +52,11 @@ jobs:
     if: >
       (github.event_name == 'issue_comment' &&
         contains(github.event.comment.body, '@agy') &&
+        !contains(github.event.comment.body, '@agy-asset') &&
         !contains(github.event.comment.body, '@agy-plan')) ||
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@agy') &&
+        !contains(github.event.issue.body, '@agy-asset') &&
         !contains(github.event.issue.body, '@agy-plan'))
     outputs:
       match: ${{ steps.check.outputs.match }}

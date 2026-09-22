@@ -46,10 +46,12 @@ jobs:
     if: >
       (github.event_name == 'issue_comment' &&
         contains(github.event.comment.body, '@agy-plan') &&
-        !contains(github.event.comment.body, '@agy-plan-approved')) ||
+        !contains(github.event.comment.body, '@agy-plan-approved') &&
+        !contains(github.event.comment.body, '@agy-asset')) ||
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@agy-plan') &&
-        !contains(github.event.issue.body, '@agy-plan-approved'))
+        !contains(github.event.issue.body, '@agy-plan-approved') &&
+        !contains(github.event.issue.body, '@agy-asset'))
     outputs:
       match: ${{ steps.check.outputs.match }}
       project_tag: ${{ steps.check.outputs.project_tag }}
