@@ -7,6 +7,12 @@ name: Notion task -> GitHub issue (poller)
 # first wins and the other skips. Tools/notion_task_to_issue.py documents the
 # limits of that shared lock.
 #
+# Two Notion workspaces: primary secrets are required. Optional second board
+# (NOTION_TOKEN_2 + NOTION_TASKS_DB_ID_2) is the Business-trial workspace.
+# A Plan tick on either board opens the issue. Do not copy pages between
+# workspaces; do not point the second board at /webhook/notion-task -- that
+# path still uses the primary Notion token.
+#
 # WHY THIS EXISTS AT ALL
 # ----------------------
 # Measured 2026-09-17: four Notion tasks with Plan ticked produced zero issues,
@@ -75,6 +81,8 @@ jobs:
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NOTION_TASKS_DB_ID: ${{ secrets.NOTION_TASKS_DB_ID }}
+      NOTION_TOKEN_2: ${{ secrets.NOTION_TOKEN_2 }}
+      NOTION_TASKS_DB_ID_2: ${{ secrets.NOTION_TASKS_DB_ID_2 }}
       ISSUE_REPO: mohammadlali0707-stack/agw-workers
       DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
       # AGY_ISSUE_PAT if the owner adds a dedicated one; ACC6_PAT otherwise.
@@ -91,7 +99,7 @@ jobs:
           set -u
           if [ -z "${NOTION_TOKEN}" ] || [ -z "${NOTION_TASKS_DB_ID}" ]; then
             echo '::warning::NOTION_TOKEN and/or NOTION_TASKS_DB_ID are not set -- nothing to do.'
-            echo 'Create an Internal Integration at https://www.notion.so/my-integrations,'
+            echo 'Create an Internal Integration at notion.so/my-integrations,'
             echo 'grant it access to the Task Board database, and add both as repo secrets.'
             echo '##TBS##{"data": {"reason": "secrets_absent"}, "probe": "notion_task_to_issue", "status": "skip", "v": 1}'
             echo "ready=false" >> "$GITHUB_OUTPUT"

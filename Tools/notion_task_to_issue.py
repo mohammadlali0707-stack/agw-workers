@@ -6,6 +6,12 @@ Task Board for rows with Plan checked and no Github Issue URL yet, opens the
 issue in agw-workers with the marker agy-plan-bot expects, and writes the
 issue URL back into the row.
 
+Two workspaces are allowed: the primary board (NOTION_TOKEN +
+NOTION_TASKS_DB_ID) and an optional second board (NOTION_TOKEN_2 +
+NOTION_TASKS_DB_ID_2). A Plan tick on either board is enough. The second
+integration token is required -- a token from workspace A cannot query a
+database in workspace B.
+
 WHY THIS EXISTS ALONGSIDE n8n
 -----------------------------
 Measured 2026-09-17: four Notion tasks with Plan ticked (one with Project set
@@ -26,6 +32,9 @@ and this poller read the same empty field within the same instant, both will
 open an issue. The window is small and the cost is a duplicate issue, not a
 corrupted state -- but it is real, and the honest fix if it ever bites is to
 retire one of the two paths rather than to add a second guess here.
+
+Two independent plan pages (one per workspace) are two rows. Ticking Plan on
+both creates two issues. Tick only the page that should dispatch.
 """
 import json
 import os
@@ -138,6 +147,32 @@ def check_identity(gtoken):
     return me.get("login", "")
 
 
+def load_boards(env):
+    """Boards to poll: (label, token, db_id).
+
+    Primary is required at run time. Secondary is skipped unless both
+    NOTION_TOKEN_2 and NOTION_TASKS_DB_ID_2 are set. A second database id with
+    no second token is not a board -- workspace B cannot be read with workspace
+    A's integration.
+    """
+    boards = []
+    t1 = (env.get("NOTION_TOKEN") or "").strip()
+    d1 = (env.get("NOTION_TASKS_DB_ID") or "").strip()
+    if t1 and d1:
+        boards.append(("primary", t1, d1))
+    t2 = (env.get("NOTION_TOKEN_2") or "").strip()
+    d2 = (env.get("NOTION_TASKS_DB_ID_2") or "").strip()
+    if d2 and not t2:
+        print("::warning::NOTION_TASKS_DB_ID_2 set but NOTION_TOKEN_2 missing; "
+              "skipping second board")
+    elif t2 and not d2:
+        print("::warning::NOTION_TOKEN_2 set but NOTION_TASKS_DB_ID_2 missing; "
+              "skipping second board")
+    elif t2 and d2:
+        boards.append(("secondary", t2, d2))
+    return boards
+
+
 def find_candidates(token, db_id):
     body = {
         "filter": {"and": [
@@ -151,22 +186,29 @@ def find_candidates(token, db_id):
 
 
 def main():
-    ntoken = os.environ.get("NOTION_TOKEN", "")
-    db_id = os.environ.get("NOTION_TASKS_DB_ID", "")
-    gtoken = os.environ.get("GH_TOKEN", "")
-    repo = os.environ.get("ISSUE_REPO", "mohammadlali0707-stack/agw-workers")
-    dry = os.environ.get("DRY_RUN", "") == "1"
+    env = os.environ
+    boards = load_boards(env)
+    gtoken = env.get("GH_TOKEN", "")
+    repo = env.get("ISSUE_REPO", "mohammadlali0707-stack/agw-workers")
+    dry = env.get("DRY_RUN", "") == "1"
 
-    if not ntoken or not db_id or (not gtoken and not dry):
+    if not boards or (not gtoken and not dry):
         print("NOTION_TOKEN, NOTION_TASKS_DB_ID and GH_TOKEN must be set",
               file=sys.stderr)
         return 1
 
-    rows = find_candidates(ntoken, db_id)
-    stats = {"found": len(rows), "created": 0, "skipped_no_project": 0, "failed": 0}
-    print(f"{len(rows)} task(s) with Plan ticked and no issue yet")
+    stats = {"found": 0, "created": 0, "skipped_no_project": 0, "failed": 0,
+             "boards": [b[0] for b in boards]}
+    work = []
+    for label, token, db_id in boards:
+        rows = find_candidates(token, db_id)
+        print(f"{len(rows)} task(s) with Plan ticked and no issue yet "
+              f"({label})")
+        stats["found"] += len(rows)
+        for row in rows:
+            work.append((label, token, row))
 
-    if rows and not dry:
+    if work and not dry:
         who = check_identity(gtoken)
         if who != EXPECTED_AUTHOR:
             print(f"::error::this token authors as {who!r}, not {EXPECTED_AUTHOR!r}; "
@@ -179,7 +221,7 @@ def main():
             return 1
         print(f"token authors as {who}, which agy-plan-bot accepts")
 
-    for row in rows:
+    for label, token, row in work:
         pid = row["id"]
         props = row.get("properties", {})
         name = plain(props.get("Name", {}).get("title", [])) or "(untitled task)"
@@ -188,18 +230,18 @@ def main():
         if not tag:
             # Without a tag the trailing marker would read " @agy-plan" and the
             # bot could not route it. Say so rather than opening a broken issue.
-            print(f"  SKIP '{name}': Project={project!r} maps to no tag "
+            print(f"  SKIP '{name}' ({label}): Project={project!r} maps to no tag "
                   f"(known: {', '.join(sorted(set(PROJECT_TAG.values())))})")
             stats["skipped_no_project"] += 1
             continue
 
-        desc = page_text(ntoken, pid) if not dry else "(dry run: body not fetched)"
+        desc = page_text(token, pid) if not dry else "(dry run: body not fetched)"
         body = (
             f"{desc}\n\n"
             f"<!-- notion-page-id: {pid} -->\n\n"
             f"{tag} @agy-plan"
         )
-        print(f"  -> issue for '{name}' (project={project}, tag={tag})")
+        print(f"  -> issue for '{name}' (board={label}, project={project}, tag={tag})")
         if dry:
             print("     DRY RUN, not creating. Body would end:",
                   repr(body[-40:]))
@@ -212,7 +254,7 @@ def main():
             url = issue["html_url"]
             # Write back immediately: this field is the lock n8n also honours,
             # so the gap between creating and recording it is the race window.
-            _req("PATCH", f"{NOTION_API}/pages/{pid}", ntoken,
+            _req("PATCH", f"{NOTION_API}/pages/{pid}", token,
                  {"properties": {"Github Issue URL": {"select": {"name": url}}}})
             print(f"     created {url} and recorded it on the task")
             stats["created"] += 1
