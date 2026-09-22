@@ -1,0 +1,191 @@
+name: agy-asset-ingest
+
+# Public-repo ingest. CCP (private) Actions is blocked by billing/
+# spending-limit, so @agy-asset comments MUST be on THIS repo, not on
+# Claud-Cloud-Project#64. The job still writes files into CCP via ACC6_PAT.
+#
+#   @agy-asset 0009 https://github.com/user-attachments/assets/...
+#
+# No job-level if: a skipped job posts nothing.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: Four-digit asset id such as 0009
+        required: true
+        type: string
+      url:
+        description: Direct HTTPS file URL (GitHub user-attachments OK)
+        required: true
+        type: string
+      issue_number:
+        description: agw-workers issue to comment on
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Parse comment in bash
+        id: parse
+        env:
+          BODY: ${{ github.event.comment.body || '' }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ID: ${{ github.event.inputs.asset_id || '' }}
+          DISPATCH_URL: ${{ github.event.inputs.url || '' }}
+          ISSUE_FROM_EVENT: ${{ github.event.issue.number || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ISSUE_FROM_EVENT:-}" ]; then
+            echo "issue_number=$ISSUE_FROM_EVENT" >> "$GITHUB_OUTPUT"
+          else
+            echo "issue_number=${{ github.event.inputs.issue_number || '' }}" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            echo "parse_ok=true" >> "$GITHUB_OUTPUT"
+            echo "asset_id=$DISPATCH_ID" >> "$GITHUB_OUTPUT"
+            echo "url=$DISPATCH_URL" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! printf '%s' "$BODY" | grep -q '@agy-asset'; then
+            echo "match=false" >> "$GITHUB_OUTPUT"
+            echo "parse_ok=false" >> "$GITHUB_OUTPUT"
+            echo "asset_id=" >> "$GITHUB_OUTPUT"
+            echo "url=" >> "$GITHUB_OUTPUT"
+            echo "reason=no marker" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "match=true" >> "$GITHUB_OUTPUT"
+          LINE="$(printf '%s' "$BODY" | grep -Eo '@agy-asset[[:space:]]+[0-9]{4}[[:space:]]+https://[^[:space:]<>]+' | head -1 || true)"
+          if [ -z "$LINE" ]; then
+            echo "parse_ok=false" >> "$GITHUB_OUTPUT"
+            echo "asset_id=" >> "$GITHUB_OUTPUT"
+            echo "url=" >> "$GITHUB_OUTPUT"
+            echo "reason=need four-digit id and https URL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ASSET_ID="$(printf '%s' "$LINE" | awk '{print $2}')"
+          URL="$(printf '%s' "$LINE" | awk '{print $3}')"
+          echo "parse_ok=true" >> "$GITHUB_OUTPUT"
+          echo "asset_id=$ASSET_ID" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "reason=" >> "$GITHUB_OUTPUT"
+
+      - name: Ack
+        if: github.event_name == 'issue_comment' && steps.parse.outputs.match == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PARSE_OK: ${{ steps.parse.outputs.parse_ok }}
+          ASSET_ID: ${{ steps.parse.outputs.asset_id }}
+          REASON: ${{ steps.parse.outputs.reason }}
+        run: |
+          set -euo pipefail
+          if [ "$PARSE_OK" = "true" ]; then
+            BODY="Got asset \`$ASSET_ID\`. Running on public agw-workers (CCP Actions is billing-blocked). Writing into Claud-Cloud-Project game/."
+          else
+            BODY="Saw an ingest command but it was not parseable ($REASON). One line: four-digit id, then an https file URL."
+          fi
+          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "$BODY"
+
+      - name: Clone CCP with ACC6_PAT
+        if: steps.parse.outputs.parse_ok == 'true'
+        env:
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ACC6_PAT:-}" ]; then
+            echo "ACC6_PAT missing -- cannot clone private CCP" >&2
+            exit 1
+          fi
+          echo "::add-mask::$ACC6_PAT"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --depth 1 \
+            "https://github.com/mohammadlali0707-stack/Claud-Cloud-Project.git" "$GITHUB_WORKSPACE/ccp"
+          git -C "$GITHUB_WORKSPACE/ccp" lfs install --local || true
+
+      - name: Probe without network
+        if: steps.parse.outputs.parse_ok == 'true'
+        run: python3 "$GITHUB_WORKSPACE/ccp/Tools/probe_ingest_owner_asset.py"
+
+      - name: Download file into CCP game/
+        id: ingest
+        if: steps.parse.outputs.parse_ok == 'true'
+        env:
+          ASSET_ID: ${{ steps.parse.outputs.asset_id }}
+          ASSET_URL: ${{ steps.parse.outputs.url }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$ACC6_PAT"
+          python3 "$GITHUB_WORKSPACE/ccp/Tools/ingest_owner_asset.py" --root "$GITHUB_WORKSPACE/ccp" --parse-only --url "$ASSET_URL" --asset-id "$ASSET_ID"
+          curl -fL --location-trusted --retry 3 --retry-delay 2 \
+            -H "Authorization: Bearer ${ACC6_PAT}" \
+            -H "Accept: application/octet-stream" \
+            -H "User-Agent: ccp-owner-asset-ingest/1.0" \
+            -o /tmp/owner-asset.bin \
+            "$ASSET_URL"
+          python3 "$GITHUB_WORKSPACE/ccp/Tools/ingest_owner_asset.py" \
+            --root "$GITHUB_WORKSPACE/ccp" \
+            --asset-id "$ASSET_ID" \
+            --url "$ASSET_URL" \
+            --from-file /tmp/owner-asset.bin
+
+      - name: Commit ingested file to CCP
+        id: commit
+        if: steps.parse.outputs.parse_ok == 'true' && steps.ingest.outcome == 'success'
+        env:
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          ASSET_ID: ${{ steps.parse.outputs.asset_id }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$ACC6_PAT"
+          cd "$GITHUB_WORKSPACE/ccp"
+          git lfs install --local || true
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add "Narrative/asset_requests/${ASSET_ID}.json"
+          git add game || true
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "ingest ${ASSET_ID} into game/"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          BRANCH="$(git symbolic-ref --short HEAD)"
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Comment result
+        if: always() && github.event_name == 'issue_comment' && steps.parse.outputs.match == 'true' && steps.parse.outputs.parse_ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          INGEST_OUTCOME: ${{ steps.ingest.outcome }}
+          COMMIT_SHA: ${{ steps.commit.outputs.sha || '' }}
+          ASSET_ID: ${{ steps.parse.outputs.asset_id }}
+        run: |
+          set -euo pipefail
+          ISSUE="${{ github.event.issue.number }}"
+          if [ "$INGEST_OUTCOME" = "success" ]; then
+            BODY=$(printf 'Ingested `%s` into Claud-Cloud-Project `game/` (commit `%s`). Ran on public agw-workers because CCP Actions is billing-blocked.' "$ASSET_ID" "${COMMIT_SHA:-none}")
+          else
+            BODY=$(printf 'Ingest of `%s` failed after ack. Open the Actions run on agw-workers. Attachment download uses ACC6_PAT (private CCP files).' "$ASSET_ID")
+          fi
+          gh issue comment "$ISSUE" --repo "${{ github.repository }}" --body "$BODY"
+          if [ -n "${ACC6_PAT:-}" ]; then
+            GH_TOKEN="$ACC6_PAT" gh issue comment 64 --repo mohammadlali0707-stack/Claud-Cloud-Project --body "$BODY" || true
+          fi
