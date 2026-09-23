@@ -68,6 +68,7 @@ jobs:
           python-version: "3.12"
 
       - name: Upload to YouTube if secrets exist
+        continue-on-error: true
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
