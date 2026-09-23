@@ -1,0 +1,81 @@
+name: YouTube concat
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Data-table job id
+        required: true
+        type: string
+      folder_url:
+        description: Public Google Drive folder URL containing clips named 1, 2, 3...
+        required: false
+        type: string
+      clip_urls:
+        description: Optional fallback. One public HTTPS URL per line
+        required: false
+        type: string
+      title:
+        required: false
+        type: string
+      description:
+        required: false
+        type: string
+      tags:
+        description: Comma-separated tags
+        required: false
+        type: string
+      privacy:
+        description: unlisted, private, or public
+        required: false
+        default: unlisted
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  concat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Download clips
+        env:
+          FOLDER_URL: ${{ inputs.folder_url }}
+          CLIP_URLS: ${{ inputs.clip_urls }}
+        run: python3 scripts/download_drive_folder.py
+
+      - name: Concat clips
+        run: python3 scripts/concat_clips.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: youtube-job-${{ inputs.job_id }}
+          path: out/final.mp4
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Setup Python for YouTube upload
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Upload to YouTube if secrets exist
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YT_TITLE: ${{ inputs.title }}
+          YT_DESC: ${{ inputs.description }}
+          YT_TAGS: ${{ inputs.tags }}
+          YT_PRIVACY: ${{ inputs.privacy }}
+        run: |
+          python3 -m pip install --quiet google-api-python-client google-auth google-auth-oauthlib
+          python3 scripts/youtube_upload.py
