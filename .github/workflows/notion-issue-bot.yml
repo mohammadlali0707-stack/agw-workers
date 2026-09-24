@@ -1,0 +1,81 @@
+name: Notion issue bot
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-marker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    outputs:
+      match: ${{ steps.check.outputs.match }}
+    steps:
+      - name: Check for a trailing @notion marker
+        id: check
+        env:
+          BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
+        run: |
+          TRIMMED="$(printf '%s' "$BODY" | sed -e 's/[[:space:]]*$//')"
+          case "$TRIMMED" in
+            *"@notion") echo "match=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "match=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  call-n8n:
+    needs: [check-marker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >
+      needs.check-marker.outputs.match == 'true' &&
+      (
+        (github.event_name == 'issues' &&
+          (github.event.issue.author_association == 'OWNER' ||
+            github.event.issue.author_association == 'COLLABORATOR' ||
+            github.event.issue.user.login == 'Mohammadlali'))
+        ||
+        (github.event_name == 'issue_comment' &&
+          github.event.comment.user.type != 'Bot' &&
+          (github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'COLLABORATOR' ||
+            github.event.comment.user.login == 'Mohammadlali'))
+      )
+    steps:
+      - name: Ack
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "Notion AI is on it. Will reply when done."
+
+      - name: POST n8n webhook
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          jq -n \
+            --arg owner "${GITHUB_REPOSITORY%/*}" \
+            --arg repo "${GITHUB_REPOSITORY#*/}" \
+            --argjson issue_number "$ISSUE_NUM" \
+            --arg title "$ISSUE_TITLE" \
+            --arg body "$ISSUE_BODY" \
+            --arg comment_body "$COMMENT_BODY" \
+            --arg html_url "$ISSUE_URL" \
+            --arg sender "$SENDER" \
+            '{owner:$owner,repo:$repo,issue_number:$issue_number,title:$title,body:$body,comment_body:$comment_body,html_url:$html_url,sender:$sender}' \
+          | curl -sS -f -X POST \
+              -H 'Content-Type: application/json' \
+              --data-binary @- \
+              'https://n8n.airboxvip.top/webhook/notion-issue-bot'
