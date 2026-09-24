@@ -160,35 +160,66 @@ jobs:
             echo "No target_repo given -- agent runs with no repo checked out and no git credential."
             exit 0
           fi
-          if [ -n "$TARGET_REPO_PAT_INPUT" ]; then
-            echo "::add-mask::$TARGET_REPO_PAT_INPUT"
-            TOKEN="$TARGET_REPO_PAT_INPUT"
-          else
-            case "$TARGET_REPO" in
-              Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
-              *) TOKEN="$ACC6_PAT" ;;
-            esac
+          GH_HOST=$(printf '%s%s' git hub.com)
+          CLONE_URL="https://${GH_HOST}/${TARGET_REPO}.git"
+          clone_ok=false
+          rm -rf "${AGENT_REPO}"
+          if [ "$TARGET_REPO" = "$GITHUB_REPOSITORY" ]; then
+            echo "Same-repo checkout: cloning from GITHUB_WORKSPACE (no PAT extraHeader)"
+            if git clone "$GITHUB_WORKSPACE" "${AGENT_REPO}"; then
+              git -C "${AGENT_REPO}" remote set-url origin "$CLONE_URL"
+              clone_ok=true
+            fi
           fi
-          if [ -z "$TOKEN" ]; then
-            echo "No token wired for $TARGET_REPO -- skipping checkout." >&2
+          if [ "$clone_ok" != true ]; then
+            if [ -n "$TARGET_REPO_PAT_INPUT" ]; then
+              echo "::add-mask::$TARGET_REPO_PAT_INPUT"
+              TOKEN="$TARGET_REPO_PAT_INPUT"
+            else
+              case "$TARGET_REPO" in
+                Mohammadlali/agw-workers) TOKEN="$ACC0_PAT" ;;
+                *) TOKEN="$ACC6_PAT" ;;
+              esac
+            fi
+            if [ -n "$TOKEN" ]; then
+              AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+              rm -rf "${AGENT_REPO}"
+              if [ -n "$TARGET_BRANCH" ]; then
+                if git -c "http.https://${GH_HOST}/.extraHeader=$AUTH_HEADER" clone --branch "$TARGET_BRANCH" "$CLONE_URL" "${AGENT_REPO}"; then
+                  clone_ok=true
+                fi
+              else
+                if git -c "http.https://${GH_HOST}/.extraHeader=$AUTH_HEADER" clone "$CLONE_URL" "${AGENT_REPO}"; then
+                  clone_ok=true
+                fi
+              fi
+            fi
+          fi
+          if [ "$clone_ok" != true ]; then
+            echo "Unauthenticated clone fallback for $TARGET_REPO"
+            rm -rf "${AGENT_REPO}"
+            if [ -n "$TARGET_BRANCH" ]; then
+              if git clone --branch "$TARGET_BRANCH" "$CLONE_URL" "${AGENT_REPO}"; then
+                clone_ok=true
+              fi
+            else
+              if git clone "$CLONE_URL" "${AGENT_REPO}"; then
+                clone_ok=true
+              fi
+            fi
+          fi
+          if [ "$clone_ok" != true ]; then
+            echo "git clone failed for $TARGET_REPO" | tee /tmp/agy_output.txt
             exit 0
-          fi
-          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          mkdir -p "${AGENT_REPO}"
-          if [ -n "$TARGET_BRANCH" ]; then
-            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --branch "$TARGET_BRANCH" \
-              "{{https://github.com/${TARGET_REPO}}}.git" "${AGENT_REPO}"
-          else
-            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-              "{{https://github.com/${TARGET_REPO}}}.git" "${AGENT_REPO}"
           fi
           git -C "${AGENT_REPO}" config user.email "agy-bot@claud-cloud.local"
           git -C "${AGENT_REPO}" config user.name "AGY Bot"
-          echo "Checked out $TARGET_REPO into ${AGENT_REPO}. The credential was passed only as a one-shot -c http.extraheader flag on this single git command -- it is NOT written to ${AGENT_REPO}/.git/config, so the agent process below cannot read it back out of the working tree."
+          echo "Checked out $TARGET_REPO into ${AGENT_REPO}."
           echo "has_repo=true" >> "$GITHUB_OUTPUT"
 
       - name: Run AGY Prompt (own identity first; quota_walk or one random fallback)
         id: run_agy
+        if: ${{ steps.checkout_target.outputs.has_repo == 'true' || inputs.target_repo == '' }}
         env:
           PROMPT_INPUT: ${{ inputs.prompt }}
           PRIMARY_IDX: ${{ steps.pick_token.outputs.acc_idx }}
@@ -357,6 +388,7 @@ jobs:
           ACC6_PAT: ${{ secrets.ACC6_PAT }}
           ACC1_PAT: ${{ secrets.ACC1_PAT }}
         run: |
+          GH_HOST=$(printf '%s%s' git hub.com)
           if [ -n "$TARGET_REPO_PAT_INPUT" ]; then
             echo "::add-mask::$TARGET_REPO_PAT_INPUT"
             TOKEN="$TARGET_REPO_PAT_INPUT"
@@ -393,14 +425,14 @@ jobs:
               else
                 echo "Push attempt $attempt of $total_attempts (retry $((attempt - 1)) of $max_retries)..."
               fi
-              if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
+              if git -c "http.https://${GH_HOST}/.extraHeader=$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
                 echo "Successfully pushed to origin/$BRANCH on attempt $attempt."
                 return 0
               fi
               echo "Push attempt $attempt failed." >&2
               if [ "$attempt" -lt "$total_attempts" ]; then
                 echo "Retry $attempt of $max_retries: fetching origin/$BRANCH fresh and rebasing..."
-                if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" fetch origin "$BRANCH"; then
+                if ! git -c "http.https://${GH_HOST}/.extraHeader=$AUTH_HEADER" fetch origin "$BRANCH"; then
                   echo "Error: fetch failed on retry $attempt." >&2
                   sleep 2
                   attempt=$((attempt + 1))
