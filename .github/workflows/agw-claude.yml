@@ -8,6 +8,7 @@ name: AGW Claude
 # is handled by media-request-bot.yml (human-only) and @agy by
 # agy-issue-bot.yml; without this exclusion an issue opened with both
 # prefixes/mentions would fire two bots on the same branch at once.
+# Also excludes @sonnet / @sonnet-plan (sonnet-issue-bot.yml / sonnet-plan-bot.yml).
 
 on:
   issue_comment:
@@ -32,6 +33,8 @@ jobs:
       !contains(github.event.issue.body, '@agy-plan') &&
       !contains(github.event.comment.body, '@agy-asset') &&
       !contains(github.event.comment.body, '@agy-plan') &&
+      !contains(github.event.issue.body, '@sonnet') &&
+      !contains(github.event.comment.body, '@sonnet') &&
       (
         github.event.comment.author_association == 'OWNER' ||
         github.event.comment.author_association == 'COLLABORATOR' ||
@@ -44,8 +47,6 @@ jobs:
     runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 30
 
-    # One Claude per issue -- two running at once would both push to the
-    # same branch and the second would deliver over the first.
     concurrency:
       group: agw-claude-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -71,12 +72,6 @@ jobs:
           show_full_output: true
           claude_args: '--append-system-prompt "When you have COMPLETELY finished this task -- not a partial draft, nothing left to do -- end your final reply with the line \"@agy\" on its own line, so the agy worker can continue from your result. If you are not fully done yet, do not include that line."'
 
-      # Same reasoning as tbs-claude.yml: c1 dying mid-edit can leave the
-      # working tree dirty and an issue-branch that collides with c2's own
-      # (the action derives the branch name from issue number + minute).
-      # Print status/diff before discarding so an abandoned edit is
-      # findable in the log, then detach and drop any claude/issue-*
-      # branch c1 made so c2 can create its own.
       - name: Clean working tree before failover
         id: clean_before_c2
         if: steps.c1.outcome == 'failure'
