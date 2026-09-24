@@ -1,0 +1,9 @@
+{
+  "asset_id": "0009",
+  "url": "https://github.com/user-attachments/assets/31f9112f-8efb-4be5-ab1c-e18ae5ecf48b",
+  "source": "owner-comment",
+  "issue": 62,
+  "requested_at": "2026-09-24T19:11:48Z",
+  "status": "ack",
+  "note": "Ingested via AGY worker on agw-workers (public repo). CCP Actions is billing-blocked so ingest runs here and writes into mohammadlali0707-stack/Claud-Cloud-Project game/ via ACC6_PAT."
+}
