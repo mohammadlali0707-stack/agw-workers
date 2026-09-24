@@ -2,9 +2,10 @@ name: AGY Project Planning Bot -- Sonnet 4.6 (propose, then auto-dispatch after 
 
 # Trailing @sonnet-plan (distinct from @sonnet and from @agy-plan). Same
 # planner as agy-plan-bot.yml but pins Claude Sonnet 4.6 (Thinking), round-robins
-# ACC0-ACC8 by this workflow's run_number, and on quota/rate-limit walks the
-# next token instead of failing. Lead dispatch after the proposal is unchanged
-# (agy-plan-dispatch.yml).
+# AGW_TOKEN_ACC0-ACC8 by this workflow's run_number, and on quota/rate-limit
+# walks the next agy token instead of failing. Checkout, work, and comments
+# stay in THIS repo (agw-workers). Do not redirect to Control-Room / CCP / etc.
+# Lead dispatch after the proposal is unchanged (agy-plan-dispatch.yml).
 
 on:
   issues:
@@ -61,7 +62,7 @@ jobs:
             *"@sonnet-plan")
               echo "match=true" >> "$GITHUB_OUTPUT"
               PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@sonnet-plan$' | awk '{print $1}')
-              echo "project_tag=${PROJECT:-ccp}" >> "$GITHUB_OUTPUT"
+              echo "project_tag=${PROJECT:-}" >> "$GITHUB_OUTPUT"
               ACC_IDX=$(( GITHUB_RUN_NUMBER % 9 ))
               echo "acc_index=$ACC_IDX" >> "$GITHUB_OUTPUT"
               ;;
@@ -102,16 +103,10 @@ jobs:
         run: |
           echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-propose" >> "$GITHUB_ENV"
 
-      - name: Resolve the project tag to a target repo
+      - name: Stay in this repo (no Control-Room / CCP redirect)
         id: resolve
         run: |
-          case "$PROJECT_TAG" in
-            ccp) echo "target_repo=mohammadlali0707-stack/Claud-Cloud-Project" >> "$GITHUB_OUTPUT" ;;
-            cr) echo "target_repo=mohammadlali0707-stack/Control-Room" >> "$GITHUB_OUTPUT" ;;
-            coffeenet) echo "target_repo=mohammadlali0707-stack/AirboxVIP_Coffeenet" >> "$GITHUB_OUTPUT" ;;
-            status) echo "target_repo=mohammadlali0707-stack/status-dashboard" >> "$GITHUB_OUTPUT" ;;
-            *) echo "target_repo=mohammadlali0707-stack/Claud-Cloud-Project" >> "$GITHUB_OUTPUT" ;;
-          esac
+          echo "target_repo=${GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
 
       - name: Post the work checklist before doing any of it
         env:
@@ -126,7 +121,7 @@ jobs:
           printf '%s\t%s\t%s\n' \
             "plan-checkout" "خواندن مخزن هدف" "$TARGET_REPO" \
             "plan-thread" "خواندن کل گفتگوی این ایشو" "sonnet-planner" \
-            "plan-draft" "تدوین پروپوزال با Sonnet 4.6" "acc${ACC_IDX}" \
+            "plan-draft" "تدوین پروپوزال با Sonnet 4.6" "agy-token-acc${ACC_IDX}" \
             "plan-post" "ارسال پروپوزال به‌عنوان کامنت" "sonnet-planner" \
             "plan-dispatch" "شروع اعزام لیدها بعد از تیک Plan" "sonnet-planner" \
             > /tmp/plan_bot_tasks.tsv
@@ -134,7 +129,7 @@ jobs:
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --marker "$CHECKLIST_MARKER" \
-            --title "Project Manager — نقشه Sonnet 4.6 برای $TARGET_REPO (ACC${ACC_IDX})" \
+            --title "Project Manager — نقشه Sonnet 4.6 در $TARGET_REPO (agy token ACC${ACC_IDX})" \
             --tasks /tmp/plan_bot_tasks.tsv
 
       - name: Checkout target repo
