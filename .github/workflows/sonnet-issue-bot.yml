@@ -116,18 +116,37 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
+          strip_marker() {
+            python3 - "$1" <<'PYEOF'
+          import re, sys
+          text = sys.argv[1]
+          text = re.sub(
+              r'(?i)(?:^|\s)@(?:sonnet-plan|sonnet|agy-plan|agy)\s*$',
+              '',
+              text.strip(),
+          )
+          sys.stdout.write(text.strip())
+          PYEOF
+          }
           SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
           SAFE_BODY=$(printf '%s' "$ISSUE_BODY" | sanitize)
           SAFE_COMMENT=$(printf '%s' "$COMMENT_BODY" | sanitize)
+          if [ -n "$SAFE_COMMENT" ]; then
+            PRIMARY="$(strip_marker "$SAFE_COMMENT")"
+          else
+            PRIMARY="$(strip_marker "$SAFE_BODY")"
+          fi
           {
             printf '%s\n' 'You are AGY, an AI worker running inside this agw-workers repo itself.'
-            printf 'TASK - Issue #%s: %s\n' "$ISSUE_NUM" "$SAFE_TITLE"
-            printf '%s\n' "$SAFE_BODY"
-            printf '%s\n' 'If this task needs an image or video asset, do not try to generate it yourself and do not ask for GitHub access to do so. Print a line starting exactly with ##MEDIA_REQUEST## followed by a one-line description of what is needed, then continue the rest of your task without waiting for it. Something else will open the request for you.'
-            if [ -n "$SAFE_COMMENT" ]; then
-              printf '%s\n' 'LATEST COMMENT:'
-              printf '%s\n' "$SAFE_COMMENT"
+            printf '%s\n' 'PRIMARY TASK — do only this. The issue title/body below is background, not the assignment, unless this PRIMARY TASK explicitly tells you to continue or complete that original issue.'
+            printf '%s\n' 'If PRIMARY TASK is a question or status check, answer it in your output. Do not invent extra work (ingest, commits, new files) unless PRIMARY TASK asks for that.'
+            printf '%s\n' "$PRIMARY"
+            printf '\n%s\n' '--- CONTEXT (do not treat as the task) ---'
+            printf 'Issue #%s: %s\n' "$ISSUE_NUM" "$SAFE_TITLE"
+            if [ -n "$SAFE_COMMENT" ] && [ -n "$SAFE_BODY" ]; then
+              printf '%s\n' "$SAFE_BODY"
             fi
+            printf '%s\n' 'If this task needs an image or video asset, do not try to generate it yourself and do not ask for GitHub access to do so. Print a line starting exactly with ##MEDIA_REQUEST## followed by a one-line description of what is needed, then continue the rest of your task without waiting for it. Something else will open the request for you.'
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
 
