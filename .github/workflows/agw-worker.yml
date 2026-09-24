@@ -57,6 +57,16 @@ on:
         required: false
         default: ''
         type: string
+      model:
+        description: 'Optional agy --model value (e.g. "Claude Sonnet 4.6 (Thinking)"). Empty = CLI default (Gemini).'
+        required: false
+        default: ''
+        type: string
+      quota_walk:
+        description: 'If true, on quota/rate-limit errors try the next AGW token (ACC0-ACC8) until one works, instead of a single random fallback. ACC9 is never used.'
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: read
@@ -64,57 +74,16 @@ permissions:
 
 jobs:
   run-agy:
-    # AGENT_REPO is set by the first step below, and this job has no other
-    # job-level env, so there is deliberately no `env:` key here at all. An
-    # `env:` with nothing but comments under it parses as null, and GitHub
-    # rejects that exactly like the bug it replaced: zero jobs, no log. That
-    # is what kept this file unparseable on every fork AFTER the runner-context
-    # fix landed. check_job_env_contexts.py now fails on a null/empty env too.
-    #
-    # Why a unique path at all: /tmp/agent-repo was a single shared path. It
-    # survived between jobs (which is why a `rm -rf` was added on 2026-09-17),
-    # and `rm -rf` on a SHARED path is only safe when jobs run one at a time.
-    # They do not -- agy-lead-plan dispatches 10 agw-worker runs 5s apart, so
-    # two on one host would delete each other's checkout mid-clone. That
-    # failure is silent, unlike the dir-exists error it replaced. RUNNER_TEMP
-    # is per-runner and the run/attempt/job triple makes it unique even if the
-    # temp dir is ever shared.
-    #
-    # runner_type input: historically set by agy-issue-bot after a billing
-    # check, honored so a caller could route ACC0 to the self-hosted Arvan
-    # pool while everyone else used ubuntu-latest (owner instruction
-    # 2026-09-17, after one shared runner pool for nine accounts left jobs
-    # sat Queued).
-    #
-    # DISABLED, owner instruction 2026-09-19: self-hosted is not to be
-    # configured on ANY repo until further notice -- the runner-api.py
-    # fleet was found to have no free capacity/API for the repos that
-    # actually needed relief (Claud-Cloud-Project etc.), and even
-    # agw-workers' own slots were full. `runner_type` is deliberately
-    # IGNORED here now, not just defaulted -- a caller passing
-    # `runner_type=self-hosted` must not be able to route around this.
-    # Restore the input's effect (`inputs.runner_type != '' &&
-    # inputs.runner_type ||`) once told to.
     runs-on: ubuntu-latest
-    # 30 was enough for one attempt; a same-run retry needs headroom too. A
-    # quota/rate-limit rejection surfaces near-instantly, so this only bites
-    # in the rare case where attempt 1 burns real time before failing.
     timeout-minutes: 45
 
     steps:
-      # Needed for Tools/agy_checklist.py. This job did not check out its own
-      # repo before, because everything it used lived in the workflow file.
       - uses: actions/checkout@v4
 
       - name: Set unique AGENT_REPO path
         run: |
           echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-run-agy" >> "$GITHUB_ENV"
 
-      # This file is byte-identical across all 8 accounts (deployed by
-      # relay-deploy-file.yml from mohammadlali0707-stack), so it cannot
-      # hardcode which account it is. GITHUB_REPOSITORY_OWNER is filled in
-      # by GitHub itself at run time; this table is the same
-      # owner<->index mapping relay-open-issue.yml uses, inverted.
       - name: Determine this repo's own account index
         id: own_identity
         run: |
@@ -132,18 +101,6 @@ jobs:
           echo "own_idx=$OWN" >> "$GITHUB_OUTPUT"
           echo "Repo owner: $GITHUB_REPOSITORY_OWNER -> account index: $OWN"
 
-      # ACC9 is retired ("should not be in any cycle") -- an explicit
-      # request for it falls back to this repo's own identity instead of
-      # doing nothing useful.
-      #
-      # Fixed 2026-09-14: acc_index="0" used to be treated as the SAME
-      # sentinel as "no preference given" -- both fell through to OWN_IDX.
-      # That silently redirected any caller asking for the real, distinct
-      # ACC0 (org.json's account 0, e.g. agw-ACC0-w11) to whichever account
-      # hosts this copy of the repo instead. Confirmed live: a task
-      # assigned to ACC0 by agy-plan-dispatch.yml actually ran under ACC6's
-      # identity (run 34882500945). Empty string is now the only "no
-      # preference" sentinel; "0" is a real account index like any other.
       - name: Select AGY Account Token
         id: pick_token
         env:
@@ -172,28 +129,18 @@ jobs:
           curl -L \
             "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
             -o /tmp/cli.tar.gz
-
           echo "Extracting..."
           mkdir -p /tmp/agx
           tar -xzf /tmp/cli.tar.gz -C /tmp/agx
-
           echo "Installing..."
           CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
           if [ -z "$CLI_BIN" ]; then
             CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
           fi
           echo "Found binary: $CLI_BIN"
-          # Install without sudo. Ephemeral runners are fresh containers and do
-          # not inherit /etc/sudoers.d/runner from the Arvan host, so
-          # `sudo install` dies with "sudo: a password is required" -- measured
-          # 2026-09-17T09:58:21Z in job 105158016308, after the sudoers fix was
-          # believed to be in place. A user-writable dir added to $GITHUB_PATH
-          # needs no privilege and behaves identically on self-hosted and on
-          # ubuntu-latest, so this no longer depends on the runner image.
           AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
           mkdir -p "$AGY_BIN_DIR"
           install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
-          # $GITHUB_PATH only affects LATER steps, so export for this one too.
           echo "$AGY_BIN_DIR" >> "$GITHUB_PATH"
           export PATH="$AGY_BIN_DIR:$PATH"
           agy --version 2>/dev/null || echo "agy ready"
@@ -230,43 +177,26 @@ jobs:
           mkdir -p "${AGENT_REPO}"
           if [ -n "$TARGET_BRANCH" ]; then
             git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --branch "$TARGET_BRANCH" \
-              "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
+              "{{https://github.com/${TARGET_REPO}}}.git" "${AGENT_REPO}"
           else
             git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-              "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
+              "{{https://github.com/${TARGET_REPO}}}.git" "${AGENT_REPO}"
           fi
           git -C "${AGENT_REPO}" config user.email "agy-bot@claud-cloud.local"
           git -C "${AGENT_REPO}" config user.name "AGY Bot"
           echo "Checked out $TARGET_REPO into ${AGENT_REPO}. The credential was passed only as a one-shot -c http.extraheader flag on this single git command -- it is NOT written to ${AGENT_REPO}/.git/config, so the agent process below cannot read it back out of the working tree."
           echo "has_repo=true" >> "$GITHUB_OUTPUT"
 
-      # Restore+run are one step because a quota/rate-limit error needs to
-      # restore a DIFFERENT identity and run again -- two separate steps
-      # would need a third to glue them, for no benefit.
-      - name: Run AGY Prompt (own identity first, one random fallback on quota error)
+      - name: Run AGY Prompt (own identity first; quota_walk or one random fallback)
         id: run_agy
         env:
           PROMPT_INPUT: ${{ inputs.prompt }}
           PRIMARY_IDX: ${{ steps.pick_token.outputs.acc_idx }}
           AGY_TOKEN_INPUT: ${{ inputs.agy_token_b64 }}
+          MODEL_INPUT: ${{ inputs.model }}
+          QUOTA_WALK: ${{ inputs.quota_walk }}
         run: |
           set +e
-
-          # ACC9 is retired ("should not be in any cycle") -- no case for it
-          # here at all, deliberately. If it's ever passed in anyway,
-          # token_b64 stays empty and the run fails loudly on auth rather
-          # than silently using a stale/wrong credential.
-          #
-          # CROSS-ACCOUNT MODE: when this job runs inside a DIFFERENT
-          # account's own copy of this repo (cross-dispatched so its
-          # Actions minutes/concurrency are that account's own, not
-          # ACC6's -- see agy-plan-dispatch.yml/agy-lead-plan.yml), the
-          # local secrets.AGW_TOKEN_ACC* below don't exist there at all.
-          # The caller supplies the PRIMARY identity's own token as an
-          # input instead; only the primary call uses it -- a quota-error
-          # RETRY still needs a genuinely different identity chosen at
-          # random, which this job cannot supply itself, so retries keep
-          # using the local (same-repo) lookup as before.
           restore_token() {
             local idx="$1"
             local override_b64="${2:-}"
@@ -293,22 +223,9 @@ jobs:
             echo '{"userSettings":{}}' > ~/.gemini/config/config.json
             echo "Restored acc${idx}: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes"
           }
-
           is_quota_error() {
             grep -qiE 'too many requests|rate limit|rate-limit|429|quota' "$1"
           }
-
-          # WHERE THE AGENT MUST WRITE, stated to the agent rather than
-          # assumed. Measured on CCP-307 (report Claud-Cloud-Project#44):
-          # account 4's and account 5's agents built gui.rpy, screens.rpy and
-          # 31 GUI assets in their CLI's OWN scratch directory
-          # (/home/runner/.gemini/antigravity-cli/scratch/renpy_project/) --
-          # the report's own file links say so -- and the repo ended the task
-          # with ZERO .rpy files. The jobs were green. `cd "${AGENT_REPO}"`
-          # below set the working directory correctly, but nothing ever told
-          # the agent that the directory mattered, and the push step only ever
-          # pushes what is COMMITTED in that checkout. Work written anywhere
-          # else was discarded by a pipeline that reported success.
           {
             printf '%s\n' "You are running inside a git checkout at ${AGENT_REPO}, which is your working directory."
             printf '\n%s\n' "WHERE TO PUT FILES -- this is not advice:"
@@ -333,42 +250,33 @@ jobs:
           PROMPT=$(cat /tmp/agy_prompt.txt)
           USED_IDX="$PRIMARY_IDX"
           restore_token "$USED_IDX" "$AGY_TOKEN_INPUT"
-
           echo "Running agy prompt with acc${USED_IDX}..."
-          # NOT `|| true`. A failed cd used to be swallowed, and agy then ran
-          # in whatever directory the step happened to be in -- the same class
-          # of silent misplacement this step's prompt now warns the agent
-          # about, one layer down.
           cd "${AGENT_REPO}"
-          # Baseline for the "did this worker actually change anything?" check
-          # in the push step. Recorded BEFORE agy runs, so it cannot be
-          # confused by the agent's own commits.
           echo "AGY_BASE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-
-          # --print-timeout is agy's OWN internal wait-for-a-response ceiling,
-          # separate from the outer shell `timeout` below. The old local-docker
-          # gateway (Gateway/gateway_win.py in Claud-Cloud-Project) always
-          # passed it, defaulting to 200s when the caller did not ask for
-          # longer. This step dropped the flag entirely when it was ported to
-          # GitHub Actions, so agy fell back to whatever its own default is
-          # (short) instead of getting anywhere near the outer 1700s budget --
-          # measured live 2026-09-09 (Claud-Cloud-Project issue #87): agy's own
-          # output was the literal string "Error: timeout waiting for
-          # response", well before the 1700s wrapper or the dispatcher's own
-          # ~20-minute poll loop could have been the cause. 1680s here, just
-          # under the outer wrapper, so the outer `timeout` stays a real
-          # backstop rather than firing at the same instant.
-          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          agy_invoke() {
+            if [ -n "$MODEL_INPUT" ]; then
+              timeout 1700 agy --model "$MODEL_INPUT" --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1
+            else
+              timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1
+            fi
+          }
+          OUTPUT=$(agy_invoke)
           echo "$OUTPUT" > /tmp/agy_output.txt
-
-          if is_quota_error /tmp/agy_output.txt; then
+          if [ "$QUOTA_WALK" = "true" ]; then
+            TRIED=1
+            while is_quota_error /tmp/agy_output.txt && [ "$TRIED" -lt 9 ]; do
+              NEXT_IDX=$(( (USED_IDX + 1) % 9 ))
+              echo "::warning::acc${USED_IDX} hit a quota/rate-limit error, trying next identity acc${NEXT_IDX}"
+              USED_IDX="$NEXT_IDX"
+              restore_token "$USED_IDX"
+              echo "Retrying with acc${USED_IDX}..."
+              cd "${AGENT_REPO}"
+              OUTPUT=$(agy_invoke)
+              echo "$OUTPUT" > /tmp/agy_output.txt
+              TRIED=$((TRIED + 1))
+            done
+          elif is_quota_error /tmp/agy_output.txt; then
             echo "::warning::acc${USED_IDX} hit a quota/rate-limit error, retrying once with a random other identity"
-            # No override for the fallback -- a quota retry needs a genuinely
-            # different identity chosen at random, which only the local
-            # (same-repo) secrets lookup can supply. In cross-account mode
-            # (AGY_TOKEN_INPUT was used above) this local lookup has nothing
-            # to find and the retry will fail loudly on auth -- acceptable:
-            # rare, and silent wrong-identity reuse would be worse.
             FALLBACK_IDX="$USED_IDX"
             while [ "$FALLBACK_IDX" = "$USED_IDX" ]; do
               FALLBACK_IDX=$(( (RANDOM % 8) + 1 ))
@@ -377,28 +285,12 @@ jobs:
             restore_token "$USED_IDX"
             echo "Retrying with acc${USED_IDX}..."
             cd "${AGENT_REPO}"
-            OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+            OUTPUT=$(agy_invoke)
             echo "$OUTPUT" > /tmp/agy_output.txt
           fi
-
           echo "used_idx=$USED_IDX" >> "$GITHUB_OUTPUT"
           echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
-          # Deliberately not printed here (not even a head/tail slice): this
-          # repo is public (unlimited Actions minutes), so console output is
-          # a public log, and agy's own prompt can make it quote real
-          # project source. The full output goes into the private target
-          # repo's Reports/agy/ (see the push step) and, when an
-          # issue_number is given, as an issue comment -- never printed or
-          # artifact-uploaded from here when either of those captured it.
 
-      # agy never receives a GitHub token -- it only ever prints plain text.
-      # This step, running OUTSIDE agy's own process, is what actually opens
-      # the @media issue. It uses the default GITHUB_TOKEN (scoped to this
-      # repo's own issues:write above), never a PAT keyed by which AGY
-      # identity happened to run: that identity is unrelated to which of the
-      # 8 GitHub accounts is hosting this copy of the workflow. media-
-      # request-bot.yml accepts issues opened by the github-actions[bot]
-      # identity this produces.
       - name: Relay any media request from agy's output
         if: always()
         env:
@@ -420,14 +312,6 @@ jobs:
             --title "Media request from agy (${{ inputs.callback_id }})" \
             --body "@media $DESC"
 
-      # Same reasoning as the media relay above: agy never gets a token, this
-      # step (using the default GITHUB_TOKEN) posts its final output back to
-      # the triggering issue as a real comment -- this is what lets @claude
-      # (agw-claude.yml) pick up from where agy left off. Truncated from the
-      # START (keeping the tail) because the @claude handoff line, when agy
-      # is fully done, is the LAST line it printed. The push step below also
-      # commits the FULL, untruncated output into the target repo, so
-      # nothing is lost even when this comment has to be cut down.
       - name: Post agy's output as a comment
         if: always()
         env:
@@ -453,12 +337,6 @@ jobs:
             cp /tmp/agy_output.txt /tmp/agy_comment.txt
           fi
           TARGET_REPO="${CALLBACK_REPO:-$GITHUB_REPOSITORY}"
-          # Machine-readable footer, kept because it costs nothing and is the
-          # right signal IF a subordinate ever gains a route to the control
-          # repo's issue. It does not today: agy-lead-plan.yml passes no
-          # issue_number, and a fork's own GITHUB_TOKEN cannot comment on
-          # another account's repo anyway. The live checklist is therefore
-          # driven by the LEAD's poll, which sees the report land in the repo.
           if [ -n "$CALLBACK_ID" ]; then
             STATE=done
             [ "${AGY_STEP_OUTCOME}" = "failure" ] && STATE=failed
@@ -474,11 +352,6 @@ jobs:
           TARGET_REPO: ${{ inputs.target_repo }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
           TARGET_REPO_PAT_INPUT: ${{ inputs.target_repo_pat }}
-          # Through env, never interpolated into the shell body: callback_id is
-          # caller-supplied, and check_run_injection.py flagged my first draft
-          # for putting `${{ inputs.callback_id }}` straight into a
-          # `git commit -m` string. The gate was right -- a tag containing
-          # $(...) would have executed.
           CALLBACK_ID: ${{ inputs.callback_id }}
           ACC0_PAT: ${{ secrets.ACC0_PAT }}
           ACC6_PAT: ${{ secrets.ACC6_PAT }}
@@ -496,29 +369,12 @@ jobs:
           cd "${AGENT_REPO}"
           BRANCH="${TARGET_BRANCH:-$(git symbolic-ref --short HEAD)}"
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-
-          # RESCUE WHAT THE AGENT WROTE BUT DID NOT COMMIT.
-          # This step has only ever pushed what was already committed inside
-          # the checkout. An agent that edited files and forgot `git commit`
-          # produced the same green job as one that did nothing -- the push
-          # said "Everything up-to-date" and exited 0.
           if [ -n "$(git status --porcelain)" ]; then
             echo "::warning::the agent left uncommitted changes in the checkout -- committing them rather than dropping them"
             git status --porcelain | head -40
             git add -A
             git commit -m "agy: work left uncommitted by ${CALLBACK_ID:-run-${GITHUB_RUN_ID}}" || true
           fi
-
-          # DID THIS WORKER CHANGE ANYTHING AT ALL?
-          # Measured on CCP-307 (report Claud-Cloud-Project#44): accounts 4 and
-          # 5 reported building gui.rpy, screens.rpy and 31 GUI assets, and the
-          # repository finished the task with ZERO .rpy files -- the work was
-          # written into the CLI's own scratch directory. Every one of those
-          # jobs was green, because nothing here ever asked the question.
-          # A worker that changed no file is not necessarily wrong (an audit
-          # task legitimately changes nothing), so this is RECORDED, not
-          # failed -- but it is recorded where the lead and the fleet report
-          # can see it, instead of being indistinguishable from real work.
           AGENT_COMMITS=$(git rev-list --count "${AGY_BASE_COMMIT:-HEAD}..HEAD" 2>/dev/null || echo 0)
           AGENT_FILES=$(git diff --name-only "${AGY_BASE_COMMIT:-HEAD}..HEAD" 2>/dev/null | wc -l | tr -d ' ')
           echo "AGENT_COMMITS=${AGENT_COMMITS}" >> "$GITHUB_ENV"
@@ -527,17 +383,6 @@ jobs:
           if [ "${AGENT_COMMITS}" -eq 0 ]; then
             echo "::warning::this worker committed NOTHING to the checkout. If its output describes files it created, they were written outside ${AGENT_REPO} and are gone."
           fi
-
-          # Shared by BOTH pushes below -- the agent's own commits (if any)
-          # and the raw-output commit. Needed for real once agy-lead-plan.yml
-          # started dispatching up to 10 of these in a tight stagger: several
-          # workers finishing near-simultaneously all push to the SAME branch,
-          # and a single un-retried push loses the race and the report with
-          # it. Measured live 2026-09-14 (run 34894884199, leadtest-12-acc1-w05):
-          # the FIRST push here already retried and succeeded, but the SECOND
-          # (the raw-output commit) had no retry loop at all and died on its
-          # first "fetch first" rejection -- a real report silently lost, not
-          # a hypothetical race.
           push_with_retry() {
             local max_retries=3
             local total_attempts=$((max_retries + 1))
@@ -562,13 +407,6 @@ jobs:
                   continue
                 fi
                 if ! git rebase "origin/$BRANCH"; then
-                  # FIX-9: Rebase hit content conflicts. Resolve by keeping OUR
-                  # version of every conflicted file (the agent's work wins over
-                  # whatever another concurrent worker wrote to the same path).
-                  # This is safe for agent output files: two workers in the same
-                  # plan package rarely touch the exact same line, and losing a
-                  # concurrent commit's content is preferable to losing this
-                  # worker's work entirely. The conflict is logged for auditing.
                   CONFLICTED=$(git diff --name-only --diff-filter=U 2>/dev/null)
                   if [ -z "$CONFLICTED" ]; then
                     echo "Error: rebase failed (non-conflict reason) on retry $attempt. Aborting." >&2
@@ -593,14 +431,10 @@ jobs:
             done
             return 1
           }
-
           if ! push_with_retry; then
             echo "Error: Failed to push agent commits to origin/$BRANCH." >&2
             exit 1
           fi
-
-          # Record the agent's raw output as a file inside this same repo,
-          # using the same credential already used for the push above.
           RUN_TAG="${{ inputs.callback_id }}"
           if [ -z "$RUN_TAG" ]; then RUN_TAG="${{ github.run_id }}"; fi
           REPORT_DIR="${{ inputs.report_dir }}"
@@ -609,16 +443,6 @@ jobs:
           else
             OUT_PATH="Reports/agy/${RUN_TAG}.txt"
           fi
-          # A missing or empty agy output used to vanish silently here. This
-          # step has no `set -e`, so `cp` failed, `git add` failed,
-          # `git diff --cached --quiet` was then TRUE because nothing was
-          # staged, and the whole commit-and-push block was skipped: no report,
-          # no error, job green. The lead then polled for a report that would
-          # never arrive until its 40-minute deadline.
-          #
-          # Measured: plan-34-acc3-w08 on issue #34. All ten workers green,
-          # nine reports on disk, the lead stuck at 9/10 for over half an hour.
-          # A failure to produce output is a result and gets recorded as one.
           if [ ! -s /tmp/agy_output.txt ]; then
             echo "::warning::no agy output for ${RUN_TAG} -- recording a placeholder so the lead does not wait for a report that will never come"
             {
@@ -630,13 +454,8 @@ jobs:
               echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             } > /tmp/agy_output.txt
           fi
-          # The header the fleet report could not have written itself. Report
-          # Claud-Cloud-Project#44 had to infer "the .rpy files are stranded"
-          # from a file link pointing at a scratch path; with this line the
-          # answer is stated by the run, per worker, in the report file the
-          # aggregator already reads.
           {
-            echo "##TBS##{\"v\":1,\"probe\":\"agw_worker_effect\",\"status\":\"$([ "${AGENT_COMMITS:-0}" -gt 0 ] && echo pass || echo empty)\",\"data\":{\"tag\":\"${RUN_TAG}\",\"commits\":${AGENT_COMMITS:-0},\"files_changed\":${AGENT_FILES:-0},\"checkout\":\"${AGENT_REPO}\"}}"
+            echo "##TBS##{\"v\":1,\"probe\":\"agw_worker_effect\",\"status\":\"$([ \"${AGENT_COMMITS:-0}\" -gt 0 ] && echo pass || echo empty)\",\"data\":{\"tag\":\"${RUN_TAG}\",\"commits\":${AGENT_COMMITS:-0},\"files_changed\":${AGENT_FILES:-0},\"checkout\":\"${AGENT_REPO}\"}}"
             if [ "${AGENT_COMMITS:-0}" -eq 0 ]; then
               echo "WORKER CHANGED NO FILE IN THE REPOSITORY."
               echo "Anything this output claims to have created was written"
@@ -691,5 +510,3 @@ jobs:
           if [ -n "${{ inputs.issue_number }}" ]; then
             echo "- **Issue comment:** posted to issue #${{ inputs.issue_number }} in this repo" >> $GITHUB_STEP_SUMMARY
           fi
-
-
