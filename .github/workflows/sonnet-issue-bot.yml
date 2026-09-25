@@ -3,10 +3,16 @@ name: AGW Worker Sonnet Issue Bot (same-repo, no relay)
 # Trailing @sonnet (not @sonnet-plan). Same routing as agy-issue-bot.yml but
 # pins Claude Sonnet 4.6 (Thinking) instead of the Gemini default, round-robins
 # AGW_TOKEN_ACC0-ACC8 by this workflow's run_number, and quota-walks the next
-# agy token rather than failing. Work and comments stay in THIS repo
-# (agw-workers). Do not redirect to Control-Room or other project repos.
-# GitHub clone/push/comment uses this repo + ACC6_PAT; acc_index only selects
-# the agy OAuth token (AGW_TOKEN_ACCx), not a GitHub account.
+# agy token rather than failing. GitHub clone/push/comment uses this repo +
+# ACC6_PAT; acc_index only selects the agy OAuth token (AGW_TOKEN_ACCx), not a
+# GitHub account. Project tags route the worker clone / report destination:
+#   ccp        mohammadlali0707-stack/Claud-Cloud-Project
+#   cr         mohammadlali0707-stack/Control-Room
+#   status     mohammadlali0707-stack/status-dashboard
+#   agw        mohammadlali0707-stack/agw-workers
+#   coffeenet  mohammadlali0707-stack/AirboxVIP_Coffeenet
+#   n8n        mohammadlali0707-stack/n8n-studio
+# No tag means this repo (agw-workers).
 
 on:
   issues:
@@ -35,7 +41,7 @@ jobs:
       target_repo: ${{ steps.check.outputs.target_repo }}
       acc_index: ${{ steps.check.outputs.acc_index }}
     steps:
-      - name: Check for a trailing @sonnet marker
+      - name: Check for a trailing @sonnet marker and extract project tag
         id: check
         env:
           BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
@@ -60,9 +66,21 @@ jobs:
           case "$LOWER" in
             *"@sonnet")
               echo "match=true" >> "$GITHUB_OUTPUT"
-              # Always this repo. A missing project tag used to default to
-              # Control-Room and the worker then failed on that clone.
-              echo "target_repo=${GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT"
+
+              PROJECT=$(echo "$LOWER" | grep -oE '(coffeenet|status|ccp|agw|n8n|cr)[[:space:]]+@sonnet$' | awk '{print $1}')
+              TARGET_REPO=""
+
+              case "$PROJECT" in
+                ccp) TARGET_REPO="mohammadlali0707-stack/Claud-Cloud-Project" ;;
+                cr) TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
+                coffeenet) TARGET_REPO="mohammadlali0707-stack/AirboxVIP_Coffeenet" ;;
+                status) TARGET_REPO="mohammadlali0707-stack/status-dashboard" ;;
+                agw) TARGET_REPO="mohammadlali0707-stack/agw-workers" ;;
+                n8n) TARGET_REPO="mohammadlali0707-stack/n8n-studio" ;;
+                *) TARGET_REPO="${GITHUB_REPOSITORY}" ;;
+              esac
+
+              echo "target_repo=$TARGET_REPO" >> "$GITHUB_OUTPUT"
               # Round-robin AGW_TOKEN_ACC0-ACC8. run_number 1 -> ACC1, 8 -> ACC8, 9 -> ACC0.
               ACC_IDX=$(( GITHUB_RUN_NUMBER % 9 ))
               echo "acc_index=$ACC_IDX" >> "$GITHUB_OUTPUT"
@@ -105,7 +123,7 @@ jobs:
         run: |
           gh issue comment "$ISSUE_NUMBER" \
             --repo "$REPO" \
-            --body "Project Manager: Running in **$REPO** (agy token AGW_TOKEN_ACC${ACC_IDX}, GitHub stays this repo / ACC6). Claude Sonnet 4.6, quota-walk."
+            --body "Project Manager: Routing to **$TARGET_REPO** (agy token AGW_TOKEN_ACC${ACC_IDX}, GitHub stays this repo / ACC6). Claude Sonnet 4.6, quota-walk."
 
       - name: Build prompt
         id: prompt
