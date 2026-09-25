@@ -1,16 +1,12 @@
 name: AGY Plan Dispatch (read the last tbs_account_plan, dispatch one lead per account)
 
 # Triggered by a trailing @agy-plan-approved (Gemini) or @sonnet-plan-approved
-# (Claude Sonnet 4.6) comment on a plan from either @agy-plan or @sonnet-plan.
-# Approval chooses the EXECUTION model; it does not care which planner wrote
-# the JSON. Also workflow_dispatch for recovery (optional model input).
-# Finds the most recent comment containing a fenced json block of kind
-# tbs_account_plan, then for each package dispatches agy-lead-plan.yml to
-# that account's OWN copy of this repo, as that account, with its own token.
-# agy-lead-plan.yml and agw-worker.yml must already be deployed to that
-# account's repo (relay-deploy-file.yml). Pass --field model= only when
-# Sonnet is selected so older remote copies without the input still work
-# for Gemini.
+# (Claude Sonnet 4.6) comment, or by workflow_dispatch from a combined tag
+# (@agy-plan-agy / @agy-plan-sonnet / @sonnet-plan-agy / @sonnet-plan-sonnet).
+# ALL workflow runs stay on this public repo (agw-workers) -- never on an
+# account fork -- so Actions minutes are not consumed elsewhere. Each lead
+# still uses that account's AGW_TOKEN_ACC* identity. Pass --field model=
+# only when Sonnet execution is selected.
 
 on:
   issue_comment:
@@ -170,10 +166,6 @@ jobs:
           if not target or '/' not in target:
               print('::error::Proposal missing target_repo')
               raise SystemExit(1)
-          # Fingerprint the dispatch, not the proposal text. Two runs on the
-          # SAME issue (CCP-307 then CCP-308 were both #38) must not share a
-          # key, or the later run's team-report freshness check accepts the
-          # earlier run's files. github.run_id is unique per workflow run.
           plan_fp = hashlib.sha1(
               '{}:{}:{}'.format(
                   os.environ.get('GITHUB_RUN_ID', ''),
@@ -205,7 +197,7 @@ jobs:
             MODEL_LABEL="Sonnet 4.6"
           fi
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
-            --body "Project Manager: Lead dispatch started for accounts ${ACCOUNTS} on ${TARGET} (model=${MODEL_LABEL}). [plan:${PLAN_FP}]"
+            --body "Project Manager: Lead dispatch started for accounts ${ACCOUNTS} on ${TARGET} (model=${MODEL_LABEL}, workflows on ${REPO}). [plan:${PLAN_FP}]"
 
   dispatch:
     needs: [parse-proposal]
@@ -218,38 +210,30 @@ jobs:
         include:
           - account: 0
             owner: Mohammadlali
-            token_secret: ACC0_PAT
             agy_secret: AGW_TOKEN_ACC0
           - account: 1
             owner: momonakikugava-pixel
-            token_secret: ACC1_PAT
             agy_secret: AGW_TOKEN_ACC1
           - account: 2
             owner: lali94m-max
-            token_secret: ACC2_PAT
             agy_secret: AGW_TOKEN_ACC2
           - account: 3
             owner: ngocgminh5-debug
-            token_secret: ACC3_PAT
             agy_secret: AGW_TOKEN_ACC3
           - account: 4
             owner: hmmletssee7-design
-            token_secret: ACC4_PAT
             agy_secret: AGW_TOKEN_ACC4
           - account: 5
             owner: kidding602
-            token_secret: ACC5_PAT
             agy_secret: AGW_TOKEN_ACC5
           - account: 7
             owner: mohammad97okk
-            token_secret: ACC7_PAT
             agy_secret: AGW_TOKEN_ACC7
           - account: 8
             owner: moradzahra85-png
-            token_secret: ACC8_PAT
             agy_secret: AGW_TOKEN_ACC8
     env:
-      GH_TOKEN: ${{ secrets[matrix.token_secret] }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       AGY_TOKEN_B64: ${{ secrets[matrix.agy_secret] }}
       TARGET_REPO_PAT: ${{ secrets.ACC6_PAT }}
       CONTROL_REPO_PAT: ${{ secrets.ACC6_PAT }}
@@ -258,6 +242,7 @@ jobs:
       ISSUE_NUMBER: ${{ needs.parse-proposal.outputs.issue_number }}
       PLAN_FP: ${{ needs.parse-proposal.outputs.plan_fp }}
       MODEL_INPUT: ${{ needs.parse-proposal.outputs.model }}
+      ACCOUNTS_CSV: ${{ needs.parse-proposal.outputs.accounts_csv }}
       ACCOUNT: ${{ matrix.account }}
       DISPATCH_OWNER: ${{ matrix.owner }}
       CONTROL_REPO: ${{ github.repository }}
@@ -274,13 +259,13 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Dispatch agy-lead-plan.yml on this account's own repo
+      - name: Dispatch agy-lead-plan.yml on this public repo
         if: steps.skip.outputs.has == 'yes'
         env:
           PACKAGE_GOAL: ${{ steps.skip.outputs.goal }}
         run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::No PAT for acc${ACCOUNT} (${DISPATCH_OWNER}) -- skipping"
+          if [ -z "$AGY_TOKEN_B64" ]; then
+            echo "::warning::No AGW_TOKEN for acc${ACCOUNT} (${DISPATCH_OWNER}) -- skipping"
             exit 0
           fi
           EXTRA=()
@@ -288,19 +273,19 @@ jobs:
             EXTRA+=(--field "model=$MODEL_INPUT")
           fi
           gh workflow run agy-lead-plan.yml \
-            --repo "${DISPATCH_OWNER}/agw-workers" \
+            --repo "$CONTROL_REPO" \
             --field "account=${ACCOUNT}" \
             --field "package_goal=${PACKAGE_GOAL}" \
             --field "target_repo=${TARGET_REPO}" \
             --field "issue_number=${ISSUE_NUMBER}" \
             --field "plan_fp=${PLAN_FP}" \
-            --field "all_accounts=${{ needs.parse-proposal.outputs.accounts_csv }}" \
+            --field "all_accounts=${ACCOUNTS_CSV}" \
             --field "agy_token_b64=${AGY_TOKEN_B64}" \
             --field "target_repo_pat=${TARGET_REPO_PAT}" \
             --field "control_repo=${CONTROL_REPO}" \
             --field "control_repo_pat=${CONTROL_REPO_PAT}" \
             "${EXTRA[@]}" || {
-              echo "::error::Failed to dispatch agy-lead-plan.yml to ${DISPATCH_OWNER}/agw-workers for acc${ACCOUNT}"
+              echo "::error::Failed to dispatch agy-lead-plan.yml on ${CONTROL_REPO} for acc${ACCOUNT}"
               exit 1
             }
-          echo "Dispatched acc${ACCOUNT} -> ${DISPATCH_OWNER}/agw-workers"
+          echo "Dispatched acc${ACCOUNT} lead on ${CONTROL_REPO} (agy identity ${DISPATCH_OWNER})"
