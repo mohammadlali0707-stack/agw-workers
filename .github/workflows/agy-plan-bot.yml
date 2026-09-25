@@ -1,20 +1,15 @@
-name: AGY Project Planning Bot (propose, then auto-dispatch after Notion HITL)
+name: AGY Project Planning Bot (propose, wait for approved comment)
 
-# Triggered by a message ending in "@agy-plan" (distinct from the existing
-# "@agy" single-task marker in agy-issue-bot.yml, so this does not collide
-# with that actively-evolving pipeline). Reads the target project's own
-# Team/org.json roster + Team/MAP.md state, then asks agy to PROPOSE an
-# ACCOUNT-LEVEL breakdown -- up to 8 packages, one per relevant account,
-# each a self-contained scope for that account's own lead to break down
-# further among its 10 subordinates (see agy-lead-plan.yml).
-# Posted as a comment containing a fenced ```json block. HITL is the Notion
-# Task Board Plan checkbox, not a GitHub approval comment. After posting,
-# this workflow starts agy-plan-dispatch.yml via workflow_dispatch. See
-# agy-lead-plan.yml for what each lead then does.
-#
-# 2026-09-24: a trailing @agy-plan with no project tag used to default to
-# ccp / Claud-Cloud-Project. No tag now means this repo (agw-workers).
-# Explicit ccp/cr/coffeenet/status tags still route to those project repos.
+# Triggered by a message ending in "@agy-plan" (distinct from @agy).
+# Reads the target project's Team/org.json + Team/MAP.md, then asks agy to
+# PROPOSE an ACCOUNT-LEVEL breakdown. Posted as a comment with a fenced
+# json block. Do not auto-dispatch. HITL is a GitHub comment:
+#   @agy-plan-approved     -> execute with Gemini (agy default)
+#   @sonnet-plan-approved  -> execute with Claude Sonnet 4.6
+# either marker works on a plan from @agy-plan or @sonnet-plan.
+# Project tag (ccp/cr/coffeenet/status) selects the target repo to READ;
+# Actions still run on this repo. No tag = this repo.
+# See agy-plan-dispatch.yml and agy-lead-plan.yml for execution.
 
 on:
   issues:
@@ -133,7 +128,7 @@ jobs:
             "plan-thread" "خواندن کل گفتگوی این ایشو" "planner" \
             "plan-draft" "تدوین پروپوزال با agy" "planner" \
             "plan-post" "ارسال پروپوزال به‌عنوان کامنت" "planner" \
-            "plan-dispatch" "شروع اعزام لیدها بعد از تیک Plan" "planner" \
+            "plan-wait" "منتظر @agy-plan-approved یا @sonnet-plan-approved" "HITL" \
             > /tmp/plan_bot_tasks.tsv
           python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" post \
             --repo "$REPO" \
@@ -250,7 +245,7 @@ jobs:
             printf '%s\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
             printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
             printf '%s\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
-            printf '%s\n' 'Do not include a trailing @agy or @agy-plan marker anywhere in your response -- this response is a proposal, not a new request.'
+            printf '%s\n' 'Do not include a trailing @agy, @agy-plan, @sonnet, @sonnet-plan, @agy-plan-approved or @sonnet-plan-approved marker anywhere in your response -- this response is a proposal, not a new request.'
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
 
@@ -299,32 +294,22 @@ jobs:
             --marker "$CHECKLIST_MARKER" \
             --done-file "$CHECKLIST_DONE" --tag "plan-post" || true
 
-      - name: Start lead dispatch (Notion Plan tick was HITL)
-        id: auto_dispatch
+      - name: Ask for Gemini vs Sonnet approval
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
         run: |
           if [ ! -s /tmp/agy_output.txt ]; then
-            echo "empty proposal -- not dispatching"
-            echo "started=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! grep -q 'tbs_account_plan' /tmp/agy_output.txt; then
-            echo "no tbs_account_plan in proposal -- not dispatching"
-            echo "started=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           gh issue comment "$ISSUE_NUMBER" \
             --repo "$REPO" \
-            --body "Project Manager: تیک Plan در Notion تأیید انسانی بود. اعزام لیدها الان شروع می‌شود."
-          gh workflow run agy-plan-dispatch.yml \
-            --repo "$REPO" \
-            --field "issue_number=$ISSUE_NUMBER"
-          echo "started=true" >> "$GITHUB_OUTPUT"
+            --body "Project Manager: پروپوزال آماده است. اجرا با Gemini: \`@agy-plan-approved\` — اجرا با Sonnet 4.6: \`@sonnet-plan-approved\`"
 
-      - name: Tick "plan-dispatch"
-        if: steps.auto_dispatch.outputs.started == 'true'
+      - name: Tick "plan-wait"
         env:
           REPO: ${{ github.repository }}
         run: |
@@ -332,4 +317,4 @@ jobs:
             --repo "$REPO" \
             --issue "$CHECKLIST_ISSUE" \
             --marker "$CHECKLIST_MARKER" \
-            --done-file "$CHECKLIST_DONE" --tag "plan-dispatch" || true
+            --done-file "$CHECKLIST_DONE" --tag "plan-wait" || true
