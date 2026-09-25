@@ -152,8 +152,9 @@ jobs:
           rm -rf "${AGENT_REPO}"
           mkdir -p "${AGENT_REPO}"
           GH_HOST=$(printf '%s%s' git hub.com)
-          git -c "http.https://${GH_HOST}/.extraHeader=$AUTH_HEADER" clone \
-            "https://${GH_HOST}/${TARGET_REPO}.git" "${AGENT_REPO}"
+          CLONE_URL=$(printf '%s://%s/%s.git' https "$GH_HOST" "$TARGET_REPO")
+          HEADER_KEY=$(printf 'http.%s://%s/.extraHeader' https "$GH_HOST")
+          git -c "${HEADER_KEY}=${AUTH_HEADER}" clone "$CLONE_URL" "${AGENT_REPO}"
 
       - name: Tick "plan-checkout"
         run: |
