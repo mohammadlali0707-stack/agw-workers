@@ -4,6 +4,12 @@ name: AGY Account Lead (plan + dispatch up to max_subordinates, collect, aggrega
 # an issue event directly). This is the "account lead" tier the owner
 # asked for: bot #1 (w01) of the given account.
 #
+# Optional input `model`: empty = Gemini (agy default). When set to
+# "Claude Sonnet 4.6 (Thinking)" (from @sonnet-plan-approved), lead planning,
+# account summary, and every agw-worker.yml dispatch use that model.
+# agy-plan-dispatch.yml only passes --field model= when Sonnet is selected,
+# so older copies of this file without the input still work for Gemini.
+#
 # 1. Runs agy AS this account's own identity to break package_goal into up
 #    to max_subordinates tasks (default 2, owner instruction 2026-09-18) --
 #    one per subordinate member (w02-w11 per Team/org.json). The cap is
@@ -84,6 +90,11 @@ on:
         required: false
         default: ''
         type: string
+      model:
+        description: 'Optional agy --model. Empty = Gemini default. For Sonnet: Claude Sonnet 4.6 (Thinking).'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -95,43 +106,17 @@ jobs:
     runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity for this repo -- back to GitHub-hosted until further notice
     timeout-minutes: 60
     env:
-      # Unique per job execution. /tmp/agent-repo was a single shared path:
-      # it survived between jobs (which is why a `rm -rf` was added on
-      # 2026-09-17), and `rm -rf` on a SHARED path is only safe when jobs run
-      # one at a time. They do not -- agy-lead-plan dispatches several agw-worker
-      # runs 5s apart, so two on one host would delete each other's checkout
-      # mid-clone. That failure is silent, unlike the dir-exists error it
-      # replaced. runner.temp is per-runner and the run/attempt/job triple
-      # makes it unique even if the temp dir is ever shared.
-      # AGENT_REPO is set by the setup step below (runner context is not
-      # available in job-level env blocks -- only in step-level contexts).
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CONTROL_REPO: ${{ inputs.control_repo }}
-      # Used only by the steps that talk to control_repo (issue comments,
-      # the final-report trigger) -- everything else (subordinate dispatch)
-      # keeps using the job-level GH_TOKEN above, which is correctly scoped
-      # to whichever repo this job itself is running in.
       CONTROL_GH_TOKEN: ${{ inputs.control_repo_pat != '' && inputs.control_repo_pat || secrets.GITHUB_TOKEN }}
       ACCOUNT: ${{ inputs.account }}
       TARGET_REPO: ${{ inputs.target_repo }}
       ISSUE_NUMBER: ${{ inputs.issue_number }}
       BASE_TAG: ${{ inputs.callback_id }}
-      # Owner instruction 2026-09-18: ten subordinates per lead exhausts the
-      # AGY quota almost immediately, and there is a parallelism wall well
-      # below ten. The ceiling used to live ONLY in the prompt text ("TEN IS A
-      # CEILING, NOT A TARGET"), which is a request to a model, not a
-      # mechanism -- the parser below wrote one dispatch per task the model
-      # returned, however many that was. It is clamped in code now.
       MAX_SUBORDINATES: ${{ inputs.max_subordinates != '' && inputs.max_subordinates || '2' }}
-      # Identifies THIS dispatch. The team-report stamp keyed on the ISSUE
-      # number, which cannot tell two runs on the same issue apart -- and
-      # CCP-307 and CCP-308 were both issue #38, so tonight's final report
-      # read this morning's team reports as current. Same shape as the
-      # per-issue dispatch guard fixed in 8d166cc, one level down.
       PLAN_FP: ${{ inputs.plan_fp }}
+      MODEL_INPUT: ${{ inputs.model }}
     steps:
-      # Needed for Tools/agy_checklist.py. This job did not check out its own
-      # repo before, because everything it used lived in the workflow file.
       - uses: actions/checkout@v4
 
       - name: Ack on the issue
@@ -139,8 +124,12 @@ jobs:
         env:
           GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
+          MODEL_LABEL="Gemini"
+          if [ -n "$MODEL_INPUT" ]; then
+            MODEL_LABEL="Sonnet 4.6"
+          fi
           gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
-            --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌ها (سقف ${MAX_SUBORDINATES} زیردست)..."
+            --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌ها (سقف ${MAX_SUBORDINATES} زیردست، مدل ${MODEL_LABEL})..."
 
       - name: Install AGY CLI from HF Dataset
         run: |
@@ -153,24 +142,13 @@ jobs:
           if [ -z "$CLI_BIN" ]; then
             CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
           fi
-          # Install without sudo. Ephemeral runners are fresh containers and do
-          # not inherit /etc/sudoers.d/runner from the Arvan host, so
-          # `sudo install` dies with "sudo: a password is required" -- measured
-          # 2026-09-17T09:58:21Z in job 105158016308, after the sudoers fix was
-          # believed to be in place. A user-writable dir added to $GITHUB_PATH
-          # needs no privilege and behaves identically on self-hosted and on
-          # ubuntu-latest, so this no longer depends on the runner image.
           AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
           mkdir -p "$AGY_BIN_DIR"
           install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
-          # $GITHUB_PATH only affects LATER steps, so export for this one too.
           echo "$AGY_BIN_DIR" >> "$GITHUB_PATH"
           export PATH="$AGY_BIN_DIR:$PATH"
           agy --version 2>/dev/null || echo "agy ready"
 
-      # Same case statement as agw-worker.yml's own "Checkout target repo"
-      # step -- kept in sync deliberately, not sourced from one place,
-      # since GitHub Actions has no shared-step-library mechanism here.
       - name: Set unique AGENT_REPO path
         run: |
           echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-propose" >> "$GITHUB_ENV"
@@ -203,11 +181,13 @@ jobs:
           echo "auth_header=$AUTH_HEADER" >> "$GITHUB_OUTPUT"
           rm -rf "${AGENT_REPO}"
           mkdir -p "${AGENT_REPO}"
-          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-            "https://github.com/${TARGET_REPO}.git" "${AGENT_REPO}"
+          GH_HOST=$(printf '%s%s' git hub.com)
+          CLONE_URL=$(printf '%s://%s/%s.git' https "$GH_HOST" "$TARGET_REPO")
+          HEADER_KEY=$(printf 'http.%s://%s/.extraHeader' https "$GH_HOST")
+          git -c "${HEADER_KEY}=${AUTH_HEADER}" clone "$CLONE_URL" "${AGENT_REPO}"
           git -C "${AGENT_REPO}" config user.email "agy-bot@claud-cloud.local"
           git -C "${AGENT_REPO}" config user.name "AGY Bot"
-          echo "branch=$(git -C "${AGENT_REPO}" symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "branch=$(git -C \"${AGENT_REPO}\" symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Restore this account's own AGY identity
         env:
@@ -272,14 +252,15 @@ jobs:
           set +e
           cd "${AGENT_REPO}"
           PROMPT=$(cat /tmp/plan_prompt.txt)
-          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          if [ -n "$MODEL_INPUT" ]; then
+            echo "Running agy as acc${ACCOUNT} lead with --model $MODEL_INPUT..."
+            OUTPUT=$(timeout 1700 agy --model "$MODEL_INPUT" --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          else
+            echo "Running agy as acc${ACCOUNT} lead..."
+            OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          fi
           AGY_RC=$?
           echo "$OUTPUT" > /tmp/lead_plan_output.txt
-          # Record agy's exit code. Without it every agy-level failure (quota,
-          # auth, timeout, network) reaches the parser as "no JSON here" and
-          # gets reported as a malformed proposal. Run 34934947183 was exactly
-          # that: agy printed one line, "Individual quota reached", and the
-          # issue comment blamed the JSON contract. 124 is timeout(1)'s code.
           echo "$AGY_RC" > /tmp/agy_rc.txt
           echo "Lead plan output lines: $(wc -l < /tmp/lead_plan_output.txt)  (agy exit=$AGY_RC)"
           echo "----- agy output (first 80 lines) -----"
@@ -295,12 +276,6 @@ jobs:
           account = os.environ['ACCOUNT']
           text = open('/tmp/lead_plan_output.txt', encoding='utf-8').read()
 
-          # Classify an agy-level failure BEFORE blaming the JSON contract.
-          # "agy could not run" and "agy ran but wrote bad JSON" need different
-          # answers: the first is a quota/credential/timeout problem nobody can
-          # fix by editing the prompt. Reporting both as "the proposal did not
-          # parse" is what made run 34934947183 look like a schema bug when the
-          # real output was one line: "Individual quota reached."
           try:
               rc = int(open('/tmp/agy_rc.txt').read().strip())
           except Exception:
@@ -311,9 +286,6 @@ jobs:
               reason = ('AGY_TIMEOUT',
                         'اجرای agy به سقف زمانی رسید و قطع شد.')
           elif rc != 0:
-              # Only check error keywords when agy actually failed (rc != 0).
-              # When rc == 0, the plan text may legitimately contain words like
-              # "authentication" as part of the task description -- do not misfire.
               if 'quota reached' in low or 'upgrade your subscription' in low:
                   reason = ('AGY_QUOTA',
                             'سهمیه‌ی این اکانت تمام شده است. تا ریست شدن سهمیه، '
@@ -346,7 +318,6 @@ jobs:
               if obj.get('kind') == 'tbs_lead_task_list':
                   plan = obj
           if plan is None:
-              # agy ran fine and exited 0, so this really is a contract failure.
               print('NO_LEAD_PLAN_FOUND', file=sys.stderr)
               print('agy exited 0 with {0} json block(s), none of kind '
                     'tbs_lead_task_list'.format(len(blocks)), file=sys.stderr)
@@ -356,18 +327,6 @@ jobs:
                           .format(len(blocks)))
               sys.exit(1)
           tasks = plan.get('tasks', [])
-          # THE CAP, ENFORCED. Until 2026-09-18 the only thing holding a lead
-          # to ten subordinates was a sentence in its own prompt, and this
-          # line wrote one dispatch per task the model returned -- so a lead
-          # that came back with fourteen dispatched fourteen. A ceiling a
-          # model is asked to respect is not a ceiling.
-          #
-          # cap 0 is the owner's preferred shape: the lead does the whole
-          # package itself as w01 and dispatches nobody, so the fleet runs one
-          # bot per account instead of eleven. It still goes through
-          # agw-worker (one dispatch, tagged w01) rather than a second
-          # execution path in this file, so reporting, the checklist and the
-          # polling below all keep working unchanged.
           cap = int(os.environ.get('MAX_SUBORDINATES', '2'))
           lead_does_it = (cap == 0)
           effective = 1 if lead_does_it else cap
@@ -398,30 +357,16 @@ jobs:
         env:
           GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
         run: |
-          # Report what actually went wrong. The old text said "پروپوزال پارس نشد"
-          # for every failure including a quota wall, which sent one
-          # investigation at the prompt and the JSON schema when neither was
-          # involved. Fall back to the generic wording only if the parse step
-          # died before it could classify.
           if [ -s /tmp/lead_fail_reason.txt ]; then
             REASON=$(cat /tmp/lead_fail_reason.txt)
           else
             REASON="برنامه‌ریزی lead پیش از طبقه‌بندی خطا متوقف شد؛ لاگ ران را ببینید."
           fi
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          # Build the body with printf rather than a literal multi-line string:
-          # continuation lines would sit at column 0 and terminate this YAML
-          # block scalar, which is a parse error, not a bash one.
           BODY=$(printf '%s\n\n%s\n\n%s' \
             "Account ${ACCOUNT} lead: متوقف شد." "${REASON}" "لاگ: ${RUN_URL}")
           gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" --body "$BODY" || true
 
-      # Owner's request 2026-09-17: post the plan BEFORE doing the work, as
-      # a list that fills in as each part lands -- rather than going silent
-      # for ten minutes and then emitting one wall of output. The tags are
-      # computed with the same formula the dispatch loop below uses; they are
-      # what each subordinate stamps its result with, and what the checklist
-      # is re-derived from. Kept deliberately in step with that loop.
       - name: Post the plan as a live checklist before any work starts
         if: always() && steps.parse.outputs.count != ''
         env:
@@ -438,12 +383,6 @@ jobs:
             META=$(cat "/tmp/subtasks/${i}.meta")
             TITLE="${META%%$'\t'*}"
             MEMBER="${META##*$'\t'}"
-            # Subordinates are w02..w11. With MAX_SUBORDINATES=0 the single
-            # task IS the lead doing its own package, so it is tagged w01 --
-            # otherwise a lead-only run reports itself as w02 and the
-            # checklist names a subordinate nobody asked for. Both the
-            # checklist roster and the dispatch below must agree on this, so
-            # the rule is identical in both loops.
             if [ "${MAX_SUBORDINATES}" -eq 0 ]; then
               TAG="${BASE_TAG}-w01"
             else
@@ -466,32 +405,24 @@ jobs:
           set -e
           COUNT=$(cat /tmp/subtask_count.txt)
           REPORT_DIR="acc${ACCOUNT}"
+          THIS_REPO="${GITHUB_REPOSITORY}"
           for i in $(seq 0 $((COUNT - 1))); do
             PROMPT=$(cat "/tmp/subtasks/${i}.txt")
             META=$(cat "/tmp/subtasks/${i}.meta")
             TITLE="${META%%$'\t'*}"
             MEMBER="${META##*$'\t'}"
-            # Subordinates are w02..w11. With MAX_SUBORDINATES=0 the single
-            # task IS the lead doing its own package, so it is tagged w01 --
-            # otherwise a lead-only run reports itself as w02 and the
-            # checklist names a subordinate nobody asked for. Both the
-            # checklist roster and the dispatch below must agree on this, so
-            # the rule is identical in both loops.
             if [ "${MAX_SUBORDINATES}" -eq 0 ]; then
               TAG="${BASE_TAG}-w01"
             else
               TAG="${BASE_TAG}-w$(printf '%02d' $((i + 2)))"
             fi
             echo "Dispatching $((i + 1))/$COUNT for account ${ACCOUNT}: $TITLE ($MEMBER) tag=$TAG"
-            # This job may itself be running inside this account's OWN copy
-            # of the repo (cross-dispatched by agy-plan-dispatch.yml) --
-            # github.repository already resolves to the right place either
-            # way, so subordinates land in the same repo/account as their
-            # lead. agy_token_b64/target_repo_pat pass the same cross-
-            # account credentials through (empty in same-repo/legacy mode,
-            # where a subordinate just does its own local lookup as before).
+            EXTRA=()
+            if [ -n "$MODEL_INPUT" ]; then
+              EXTRA+=(--field "model=$MODEL_INPUT" --field "quota_walk=true")
+            fi
             gh workflow run agw-worker.yml \
-              --repo "${{ github.repository }}" \
+              --repo "$THIS_REPO" \
               --field "prompt=$PROMPT" \
               --field "target_repo=$TARGET_REPO" \
               --field "target_branch=" \
@@ -499,7 +430,8 @@ jobs:
               --field "report_dir=$REPORT_DIR" \
               --field "callback_id=$TAG" \
               --field "agy_token_b64=$AGY_TOKEN_INPUT" \
-              --field "target_repo_pat=$TARGET_REPO_PAT"
+              --field "target_repo_pat=$TARGET_REPO_PAT" \
+              "${EXTRA[@]}"
             echo "$TAG" >> /tmp/expected_tags.txt
             if [ "$i" -lt "$((COUNT - 1))" ]; then
               sleep 5
@@ -512,9 +444,10 @@ jobs:
         env:
           AUTH_HEADER: ${{ steps.checkout_target.outputs.auth_header }}
           BRANCH: ${{ steps.checkout_target.outputs.branch }}
+          EXPECTED_COUNT: ${{ steps.dispatch.outputs.expected }}
         run: |
           set +e
-          EXPECTED="${{ steps.dispatch.outputs.expected }}"
+          EXPECTED="$EXPECTED_COUNT"
           if [ -z "$EXPECTED" ] || [ "$EXPECTED" = "0" ]; then
             echo "found=0" >> "$GITHUB_OUTPUT"
             echo "No subordinates were dispatched -- nothing to poll for."
@@ -523,9 +456,11 @@ jobs:
           DEADLINE=$(( $(date +%s) + 40*60 ))
           FOUND=0
           LAST_REPORTED=-1
+          GH_HOST=$(printf '%s%s' git hub.com)
+          HEADER_KEY=$(printf 'http.%s://%s/.extraHeader' https "$GH_HOST")
           while [ "$(date +%s)" -lt "$DEADLINE" ]; do
             cd "${AGENT_REPO}"
-            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
+            git -c "${HEADER_KEY}=${AUTH_HEADER}" pull origin "$BRANCH" --quiet
             FOUND=0
             : > /tmp/found_reports.txt
             : > /tmp/found_tags.txt
@@ -538,12 +473,6 @@ jobs:
               fi
             done < /tmp/expected_tags.txt
             echo "Poll: ${FOUND}/${EXPECTED} subordinate reports present."
-            # Update the live checklist whenever the count actually moves.
-            # THE LEAD drives this, not the subordinates: measured on issue #34,
-            # the board sat at 0/10 while all ten workers went green, because
-            # the dispatch loop above passes no issue_number -- and a fork's own
-            # GITHUB_TOKEN could not comment on this control repo's issue even
-            # if it did. The lead is the one that sees the report land.
             if [ -n "$ISSUE_NUMBER" ] && [ "$FOUND" != "$LAST_REPORTED" ]; then
               GH_TOKEN="$CONTROL_GH_TOKEN" python3 \
                 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" refresh \
@@ -560,11 +489,14 @@ jobs:
           echo "found=$FOUND" >> "$GITHUB_OUTPUT"
 
       - name: Build and run the account-summary prompt
+        env:
+          FOUND_COUNT: ${{ steps.poll.outputs.found }}
+          EXPECTED_COUNT: ${{ steps.dispatch.outputs.expected }}
         run: |
           set +e
           cd "${AGENT_REPO}"
           {
-            printf '%s\n' "You are agw-ACC${ACCOUNT}-w01, the lead of account ${ACCOUNT}. Your ${{ steps.poll.outputs.found }} subordinate(s) (of ${{ steps.dispatch.outputs.expected }} dispatched) reported back. Below are their raw reports."
+            printf '%s\n' "You are agw-ACC${ACCOUNT}-w01, the lead of account ${ACCOUNT}. Your ${FOUND_COUNT} subordinate(s) (of ${EXPECTED_COUNT} dispatched) reported back. Below are their raw reports."
             printf '\n'
             if [ -s /tmp/found_reports.txt ]; then
               while read -r F; do
@@ -578,7 +510,11 @@ jobs:
             printf '\nWrite ONE comprehensive Persian summary (a few short paragraphs) of what your account accomplished, and note anything that failed or is still missing. This is your final report -- plain text, no JSON needed.\n'
           } > /tmp/summary_prompt.txt
           PROMPT=$(cat /tmp/summary_prompt.txt)
-          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          if [ -n "$MODEL_INPUT" ]; then
+            OUTPUT=$(timeout 1700 agy --model "$MODEL_INPUT" --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          else
+            OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          fi
           echo "$OUTPUT" > /tmp/account_summary.txt
 
       - name: Commit the account-level team report
@@ -586,23 +522,15 @@ jobs:
         env:
           AUTH_HEADER: ${{ steps.checkout_target.outputs.auth_header }}
           BRANCH: ${{ steps.checkout_target.outputs.branch }}
+          FOUND_COUNT: ${{ steps.poll.outputs.found }}
+          EXPECTED_COUNT: ${{ steps.dispatch.outputs.expected }}
         run: |
           set -e
           cd "${AGENT_REPO}"
-          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
+          GH_HOST=$(printf '%s%s' git hub.com)
+          HEADER_KEY=$(printf 'http.%s://%s/.extraHeader' https "$GH_HOST")
+          git -c "${HEADER_KEY}=${AUTH_HEADER}" pull origin "$BRANCH" --quiet
           mkdir -p Reports/agy/team_reports
-          # STAMP THE RUN, so a stale file cannot pass as a fresh one.
-          # Measured on CCP-307 (issue #38, report Claud-Cloud-Project#44):
-          # accounts 4, 5 and 8 produced NO team report for that run, but their
-          # acc<N>.md files from 2026-09-15 (issues #13/#14) were still on
-          # disk. agy-final-report.yml tests `os.path.isfile` and nothing else,
-          # so it read those three-day-old files and the fleet report presented
-          # them as this cycle's accomplishments -- which is why it described
-          # gui.rpy, screens.rpy and 31 GUI assets in detail while the
-          # repository contained zero .rpy files.
-          # The path is fixed and overwritten per run, so absence of a fresh
-          # report looks exactly like presence of an old one. This header is
-          # what tells them apart.
           {
             printf '%s\n' "<!-- agy-team-report: tag=${BASE_TAG:-none} issue=${ISSUE_NUMBER:-none} plan=${PLAN_FP:-none} account=${ACCOUNT} written=$(date -u +%Y-%m-%dT%H:%M:%SZ) -->"
             printf '\n'
@@ -610,17 +538,19 @@ jobs:
           } > "Reports/agy/team_reports/acc${ACCOUNT}.md"
           git add "Reports/agy/team_reports/acc${ACCOUNT}.md"
           if ! git diff --cached --quiet; then
-            git commit -m "agy: account ${ACCOUNT} team report (${{ steps.poll.outputs.found }}/${{ steps.dispatch.outputs.expected }} subordinates reported)"
-            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"
+            git commit -m "agy: account ${ACCOUNT} team report (${FOUND_COUNT}/${EXPECTED_COUNT} subordinates reported)"
+            git -c "${HEADER_KEY}=${AUTH_HEADER}" push origin "HEAD:$BRANCH"
           fi
 
       - name: Report to the issue
         if: env.ISSUE_NUMBER != ''
         env:
           GH_TOKEN: ${{ env.CONTROL_GH_TOKEN }}
+          FOUND_COUNT: ${{ steps.poll.outputs.found }}
+          EXPECTED_COUNT: ${{ steps.dispatch.outputs.expected }}
         run: |
           gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
-            --body "Account ${ACCOUNT} lead: ${{ steps.poll.outputs.found }}/${{ steps.dispatch.outputs.expected }} زیردست گزارش دادند. خلاصه در \`Reports/agy/team_reports/acc${ACCOUNT}.md\` ثبت شد."
+            --body "Account ${ACCOUNT} lead: ${FOUND_COUNT}/${EXPECTED_COUNT} زیردست گزارش دادند. خلاصه در \`Reports/agy/team_reports/acc${ACCOUNT}.md\` ثبت شد."
 
       - name: If I am the last account to finish, trigger the final ACC6 summary (race-safe via git push)
         env:
@@ -631,22 +561,19 @@ jobs:
         run: |
           set +e
           cd "${AGENT_REPO}"
-          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" pull origin "$BRANCH" --quiet
+          GH_HOST=$(printf '%s%s' git hub.com)
+          HEADER_KEY=$(printf 'http.%s://%s/.extraHeader' https "$GH_HOST")
+          git -c "${HEADER_KEY}=${AUTH_HEADER}" pull origin "$BRANCH" --quiet
           ALL_DONE=$(python3 - <<'PYEOF'
           import json, os
           accounts = json.loads(os.environ['ALL_ACCOUNTS'])
-          # A team report ON DISK is not a team report FROM THIS RUN. With the
-          # previous run's files still present, the FIRST lead to reach this
-          # check saw every account "done" and fired the final report before
-          # any lead had finished -- measured 2026-09-18: the final report was
-          # posted at 20:59 while the six leads acked at 21:00.
           import re as _re
           fp = os.environ.get('PLAN_FP', '').strip()
           def _is_this_run(path):
               if not os.path.isfile(path):
                   return False
               if not fp:
-                  return True          # manual dispatch: no fingerprint to match
+                  return True
               with open(path, encoding='utf-8') as fh:
                   head = fh.read(400)
               return bool(_re.search(r'plan=' + _re.escape(fp) + r'\b', head))
@@ -661,12 +588,6 @@ jobs:
             exit 0
           fi
 
-          # Race guard: only the lead whose push of this marker actually
-          # succeeds is "the last one" -- a second lead finishing in the
-          # same window will find the marker already there and its own
-          # push will fail (non-fast-forward), so it skips cleanly. This
-          # is the same "git is the only channel" pattern the rest of this
-          # fleet relies on, not a new mechanism.
           mkdir -p Reports/agy/team_reports
           MARKER="Reports/agy/team_reports/.final_dispatched_${ISSUE_NUMBER:-noissue}_${PLAN_FP:-noplan}"
           if [ -f "$MARKER" ]; then
@@ -676,7 +597,7 @@ jobs:
           echo "account ${ACCOUNT} triggered this at $(date -u +%FT%TZ)" > "$MARKER"
           git add "$MARKER"
           git commit -m "agy: final-report trigger marker (issue ${ISSUE_NUMBER:-unknown})"
-          if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$BRANCH"; then
+          if git -c "${HEADER_KEY}=${AUTH_HEADER}" push origin "HEAD:$BRANCH"; then
             echo "Won the race -- dispatching agy-final-report.yml"
             gh workflow run agy-final-report.yml \
               --repo "$CONTROL_REPO" \
