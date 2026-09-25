@@ -26,8 +26,14 @@ name: AGW Worker AGY Issue Bot (same-repo, no relay)
 #
 # 2026-09-24: a trailing @agy with no project tag used to fall back to
 # Control-Room. That clone then failed when the work was meant to stay in
-# agw-workers. No tag now means this repo. Explicit ccp/cr/coffeenet/status
-# tags still route to those project repos.
+# agw-workers. No tag now means this repo. Explicit project tags still
+# route the worker clone / report destination:
+#   ccp        mohammadlali0707-stack/Claud-Cloud-Project
+#   cr         mohammadlali0707-stack/Control-Room
+#   status     mohammadlali0707-stack/status-dashboard
+#   agw        mohammadlali0707-stack/agw-workers
+#   coffeenet  mohammadlali0707-stack/AirboxVIP_Coffeenet
+#   n8n        mohammadlali0707-stack/n8n-studio
 
 on:
   issues:
@@ -84,7 +90,7 @@ jobs:
             *"@agy")
               echo "match=true" >> "$GITHUB_OUTPUT"
 
-              PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy$' | awk '{print $1}')
+              PROJECT=$(echo "$LOWER" | grep -oE '(coffeenet|status|ccp|agw|n8n|cr)[[:space:]]+@agy$' | awk '{print $1}')
               TARGET_REPO=""
 
               case "$PROJECT" in
@@ -92,6 +98,8 @@ jobs:
                 cr) TARGET_REPO="mohammadlali0707-stack/Control-Room" ;;
                 coffeenet) TARGET_REPO="mohammadlali0707-stack/AirboxVIP_Coffeenet" ;;
                 status) TARGET_REPO="mohammadlali0707-stack/status-dashboard" ;;
+                agw) TARGET_REPO="mohammadlali0707-stack/agw-workers" ;;
+                n8n) TARGET_REPO="mohammadlali0707-stack/n8n-studio" ;;
                 *) TARGET_REPO="${GITHUB_REPOSITORY}" ;;
               esac
 
