@@ -1,15 +1,13 @@
-name: AGY Project Planning Bot (propose, wait for approved comment)
+name: AGY Project Planning Bot (propose, then auto-dispatch)
 
-# Triggered by a message ending in "@agy-plan" (distinct from @agy).
-# Reads the target project's Team/org.json + Team/MAP.md, then asks agy to
-# PROPOSE an ACCOUNT-LEVEL breakdown. Posted as a comment with a fenced
-# json block. Do not auto-dispatch. HITL is a GitHub comment:
-#   @agy-plan-approved     -> execute with Gemini (agy default)
-#   @sonnet-plan-approved  -> execute with Claude Sonnet 4.6
-# either marker works on a plan from @agy-plan or @sonnet-plan.
-# Project tag (ccp/cr/coffeenet/status) selects the target repo to READ;
-# Actions still run on this repo. No tag = this repo.
-# See agy-plan-dispatch.yml and agy-lead-plan.yml for execution.
+# Combined trailing markers (no separate approve needed):
+#   @agy-plan-agy      plan with Gemini, execute with Gemini
+#   @agy-plan-sonnet   plan with Gemini, execute with Sonnet 4.6
+#   @agy-plan          alias of @agy-plan-agy
+# Project tag (ccp/cr/coffeenet/status) before the marker selects the
+# destination repo for the final report. Actions always run on this public
+# repo. After a valid tbs_account_plan, dispatch agy-plan-dispatch.yml here.
+# HITL @agy-plan-approved / @sonnet-plan-approved still work on a later comment.
 
 on:
   issues:
@@ -38,8 +36,9 @@ jobs:
     outputs:
       match: ${{ steps.check.outputs.match }}
       project_tag: ${{ steps.check.outputs.project_tag }}
+      exec_model: ${{ steps.check.outputs.exec_model }}
     steps:
-      - name: Check for a trailing @agy-plan marker and extract the project tag
+      - name: Check for a trailing combined @agy-plan marker and extract the project tag
         id: check
         env:
           BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
@@ -61,14 +60,22 @@ jobs:
           TRIMMED="$(printf '%s\n%s' "$TITLE" "$BODY" | sed -e 's/[[:space:]]*$//')"
           TRIMMED="$(strip_footer "$TRIMMED")"
           LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
+          PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy-plan(-agy|-sonnet)?$' | awk '{print $1}')
           case "$LOWER" in
-            *"@agy-plan")
+            *"@agy-plan-sonnet")
               echo "match=true" >> "$GITHUB_OUTPUT"
-              PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy-plan$' | awk '{print $1}')
+              echo "exec_model=Claude Sonnet 4.6 (Thinking)" >> "$GITHUB_OUTPUT"
+              echo "project_tag=${PROJECT:-}" >> "$GITHUB_OUTPUT"
+              ;;
+            *"@agy-plan-agy"|*"@agy-plan")
+              echo "match=true" >> "$GITHUB_OUTPUT"
+              echo "exec_model=" >> "$GITHUB_OUTPUT"
               echo "project_tag=${PROJECT:-}" >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "match=false" >> "$GITHUB_OUTPUT"
+              echo "exec_model=" >> "$GITHUB_OUTPUT"
+              echo "project_tag=" >> "$GITHUB_OUTPUT"
               ;;
           esac
 
@@ -94,6 +101,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ACC6_PAT: ${{ secrets.ACC6_PAT }}
       PROJECT_TAG: ${{ needs.check-marker.outputs.project_tag }}
+      EXEC_MODEL: ${{ needs.check-marker.outputs.exec_model }}
     steps:
       - uses: actions/checkout@v4
 
@@ -128,7 +136,7 @@ jobs:
             "plan-thread" "خواندن کل گفتگوی این ایشو" "planner" \
             "plan-draft" "تدوین پروپوزال با agy" "planner" \
             "plan-post" "ارسال پروپوزال به‌عنوان کامنت" "planner" \
-            "plan-wait" "منتظر @agy-plan-approved یا @sonnet-plan-approved" "HITL" \
+            "plan-dispatch" "اعزام اجرا روی agw-workers" "auto" \
             > /tmp/plan_bot_tasks.tsv
           python3 "$GITHUB_WORKSPACE/Tools/agy_checklist.py" post \
             --repo "$REPO" \
@@ -149,8 +157,10 @@ jobs:
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
           rm -rf "${AGENT_REPO}"
           mkdir -p "${AGENT_REPO}"
-          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone \
-            "{{https://github.com/${TARGET_REPO}}}.git" "${AGENT_REPO}"
+          GH_HOST=$(printf '%s%s' git hub.com)
+          CLONE_URL=$(printf '%s://%s/%s.git' https "$GH_HOST" "$TARGET_REPO")
+          HEADER_KEY=$(printf 'http.%s://%s/.extraHeader' https "$GH_HOST")
+          git -c "${HEADER_KEY}=${AUTH_HEADER}" clone "$CLONE_URL" "${AGENT_REPO}"
 
       - name: Tick "plan-checkout"
         env:
@@ -169,7 +179,7 @@ jobs:
             -o /tmp/cli.tar.gz
           mkdir -p /tmp/agx
           tar -xzf /tmp/cli.tar.gz -C /tmp/agx
-          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          CLI_BIN=$(find /tmp/agx -type f \\( -name "antigravity" -o -name "agy" \\) | head -1)
           if [ -z "$CLI_BIN" ]; then
             CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
           fi
@@ -197,7 +207,7 @@ jobs:
           gh issue view "$ISSUE_NUMBER" \
             --repo "$REPO" \
             --json title,body,comments \
-            --jq '"ISSUE: " + .title + "\n" + .body + "\n\n" + ([.comments[] | "--- COMMENT by " + .author.login + " ---\n" + .body] | join("\n\n"))' \
+            --jq '"ISSUE: " + .title + "\\n" + .body + "\\n\\n" + ([.comments[] | "--- COMMENT by " + .author.login + " ---\\n" + .body] | join("\\n\\n"))' \
             > /tmp/thread.txt || echo "(could not fetch thread)" > /tmp/thread.txt
 
       - name: Tick "plan-thread"
@@ -218,34 +228,34 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           TARGET_REPO: ${{ steps.resolve.outputs.target_repo }}
         run: |
-          sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
-          SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
+          sanitize() { sed "s/\\`/'/g; s/\\"/'/g; s/\\$(/DOLLAR(/g; s/\\${/DOLLAR{/g"; }
+          SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\\\$')
           SAFE_BODY=$(printf '%s' "$ISSUE_BODY" | sanitize)
           SAFE_COMMENT=$(printf '%s' "$COMMENT_BODY" | sanitize)
           GOAL="$SAFE_BODY"
           IS_REVISION=false
           if [ -n "$SAFE_COMMENT" ]; then GOAL="$SAFE_COMMENT"; IS_REVISION=true; fi
           {
-            printf '%s\n' 'You are the Project Manager AI for this fleet. This is a PLANNING request only.'
-            printf '%s\n' 'Do NOT write, edit, or commit any files. Do NOT perform any of the tasks yourself. Do NOT run any dispatch command. Only read and propose.'
+            printf '%s\\n' 'You are the Project Manager AI for this fleet. This is a PLANNING request only.'
+            printf '%s\\n' 'Do NOT write, edit, or commit any files. Do NOT perform any of the tasks yourself. Do NOT run any dispatch command. Only read and propose.'
             if [ "$IS_REVISION" = "true" ]; then
-              printf '\n%s\n' 'This is a REVISION round. Below is the full conversation so far, including your own earlier proposal(s) and any leftover GitHub approval marker (ignore that marker, it is not addressed to you). Read it, understand what was already proposed and why the requester wants it changed (their newest message is the actual revision instruction), then produce a NEW, complete, corrected proposal -- not a diff or a partial patch to the old one.'
-              printf '\n--- CONVERSATION SO FAR ---\n'
+              printf '\\n%s\\n' 'This is a REVISION round. Below is the full conversation so far, including your own earlier proposal(s) and any leftover GitHub approval marker (ignore that marker, it is not addressed to you). Read it, understand what was already proposed and why the requester wants it changed (their newest message is the actual revision instruction), then produce a NEW, complete, corrected proposal -- not a diff or a partial patch to the old one.'
+              printf '\\n--- CONVERSATION SO FAR ---\\n'
               cat /tmp/thread.txt | sanitize
-              printf '\n--- END CONVERSATION ---\n'
+              printf '\\n--- END CONVERSATION ---\\n'
             fi
-            printf '\nGOAL / LATEST INSTRUCTION (may include a leading project tag and a trailing marker -- ignore both, they are routing metadata, not part of the goal):\n'
-            printf '%s\n' "$GOAL"
-            printf '\nDo this, in order:\n'
-            printf '%s\n' '1. Read Team/org.json in this checked-out repo (if present) for the full member roster: each entry has id, account (ACC0-ACC8; ACC6 and ACC9 never appear here), role, guild, domain_is, title. If Team/org.json does not exist in this repo, say so plainly in your prose summary and propose a flat task list instead (no member_id/account fields) rather than inventing IDs.'
-            printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block (top of file) for what is already done, blocked, or in progress, so you do not propose duplicate or already-finished work.'
-            printf '%s\n' '3. Read the repo'"'"'s README and the most recent entries of Team/CHANGELOG.md (if present) for scope and recent history.'
-            printf '%s\n' '4. Break the GOAL into up to 8 ACCOUNT-LEVEL packages -- NOT per-member tasks. Team/org.json has an "accounts" map with entries ACC0..ACC8 (ACC6 and ACC9 never appear as work targets); each has a "lead" (its w01 member) plus a primary/secondary domain. For each account whose domain is actually relevant to this GOAL, write ONE package: a self-contained scope of work for that account'"'"'s TEAM (its lead plus 10 subordinates) to plan and execute on its own -- not individual task instructions. Skip an account entirely if this GOAL genuinely has no work for its domain; do not force all 8 to have a package.'
-            printf '\n%s\n' '5. Output your ENTIRE response as exactly two parts, nothing else:'
-            printf '%s\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
-            printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
-            printf '%s\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
-            printf '%s\n' 'Do not include a trailing @agy, @agy-plan, @sonnet, @sonnet-plan, @agy-plan-approved or @sonnet-plan-approved marker anywhere in your response -- this response is a proposal, not a new request.'
+            printf '\\nGOAL / LATEST INSTRUCTION (may include a leading project tag and a trailing marker -- ignore both, they are routing metadata, not part of the goal):\\n'
+            printf '%s\\n' "$GOAL"
+            printf '\\nDo this, in order:\\n'
+            printf '%s\\n' '1. Read Team/org.json in this checked-out repo (if present) for the full member roster: each entry has id, account (ACC0-ACC8; ACC6 and ACC9 never appear here), role, guild, domain_is, title. If Team/org.json does not exist in this repo, say so plainly in your prose summary and propose a flat task list instead (no member_id/account fields) rather than inventing IDs.'
+            printf '%s\\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block (top of file) for what is already done, blocked, or in progress, so you do not propose duplicate or already-finished work.'
+            printf '%s\\n' '3. Read the repo'"'"'s README and the most recent entries of Team/CHANGELOG.md (if present) for scope and recent history.'
+            printf '%s\\n' '4. Break the GOAL into up to 8 ACCOUNT-LEVEL packages -- NOT per-member tasks. Team/org.json has an "accounts" map with entries ACC0..ACC8 (ACC6 and ACC9 never appear as work targets); each has a "lead" (its w01 member) plus a primary/secondary domain. For each account whose domain is actually relevant to this GOAL, write ONE package: a self-contained scope of work for that account'"'"'s TEAM (its lead plus 10 subordinates) to plan and execute on its own -- not individual task instructions. Skip an account entirely if this GOAL genuinely has no work for its domain; do not force all 8 to have a package.'
+            printf '\\n%s\\n' '5. Output your ENTIRE response as exactly two parts, nothing else:'
+            printf '%s\\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
+            printf '%s\\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
+            printf '%s\\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
+            printf '%s\\n' 'Do not include a trailing @agy, @agy-plan, @sonnet, @sonnet-plan, @agy-plan-approved or @sonnet-plan-approved marker anywhere in your response -- this response is a proposal, not a new request.'
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
 
@@ -294,7 +304,7 @@ jobs:
             --marker "$CHECKLIST_MARKER" \
             --done-file "$CHECKLIST_DONE" --tag "plan-post" || true
 
-      - name: Ask for Gemini vs Sonnet approval
+      - name: Auto-dispatch execution (combined tag = already approved)
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
@@ -305,11 +315,20 @@ jobs:
           if ! grep -q 'tbs_account_plan' /tmp/agy_output.txt; then
             exit 0
           fi
-          gh issue comment "$ISSUE_NUMBER" \
+          EXTRA=()
+          if [ -n "$EXEC_MODEL" ]; then
+            EXTRA+=(--field "model=$EXEC_MODEL")
+          fi
+          gh workflow run agy-plan-dispatch.yml \
             --repo "$REPO" \
-            --body "Project Manager: پروپوزال آماده است. اجرا با Gemini: \`@agy-plan-approved\` — اجرا با Sonnet 4.6: \`@sonnet-plan-approved\`"
+            --field "issue_number=$ISSUE_NUMBER" \
+            "${EXTRA[@]}"
+          MODEL_LABEL="Gemini"
+          if [ -n "$EXEC_MODEL" ]; then MODEL_LABEL="Sonnet 4.6"; fi
+          gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+            --body "Project Manager: پروپوزال آماده است. اعزام اجرا ($MODEL_LABEL) روی همین ریپوی عمومی شروع شد."
 
-      - name: Tick "plan-wait"
+      - name: Tick "plan-dispatch"
         env:
           REPO: ${{ github.repository }}
         run: |
@@ -317,4 +336,4 @@ jobs:
             --repo "$REPO" \
             --issue "$CHECKLIST_ISSUE" \
             --marker "$CHECKLIST_MARKER" \
-            --done-file "$CHECKLIST_DONE" --tag "plan-wait" || true
+            --done-file "$CHECKLIST_DONE" --tag "plan-dispatch" || true
