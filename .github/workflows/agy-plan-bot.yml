@@ -179,7 +179,7 @@ jobs:
             -o /tmp/cli.tar.gz
           mkdir -p /tmp/agx
           tar -xzf /tmp/cli.tar.gz -C /tmp/agx
-          CLI_BIN=$(find /tmp/agx -type f \\( -name "antigravity" -o -name "agy" \\) | head -1)
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
           if [ -z "$CLI_BIN" ]; then
             CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
           fi
@@ -207,7 +207,7 @@ jobs:
           gh issue view "$ISSUE_NUMBER" \
             --repo "$REPO" \
             --json title,body,comments \
-            --jq '"ISSUE: " + .title + "\\n" + .body + "\\n\\n" + ([.comments[] | "--- COMMENT by " + .author.login + " ---\\n" + .body] | join("\\n\\n"))' \
+            --jq '"ISSUE: " + .title + "\n" + .body + "\n\n" + ([.comments[] | "--- COMMENT by " + .author.login + " ---\n" + .body] | join("\n\n"))' \
             > /tmp/thread.txt || echo "(could not fetch thread)" > /tmp/thread.txt
 
       - name: Tick "plan-thread"
@@ -228,34 +228,34 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           TARGET_REPO: ${{ steps.resolve.outputs.target_repo }}
         run: |
-          sanitize() { sed "s/\\`/'/g; s/\\"/'/g; s/\\$(/DOLLAR(/g; s/\\${/DOLLAR{/g"; }
-          SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\\\$')
+          sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
+          SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
           SAFE_BODY=$(printf '%s' "$ISSUE_BODY" | sanitize)
           SAFE_COMMENT=$(printf '%s' "$COMMENT_BODY" | sanitize)
           GOAL="$SAFE_BODY"
           IS_REVISION=false
           if [ -n "$SAFE_COMMENT" ]; then GOAL="$SAFE_COMMENT"; IS_REVISION=true; fi
           {
-            printf '%s\\n' 'You are the Project Manager AI for this fleet. This is a PLANNING request only.'
-            printf '%s\\n' 'Do NOT write, edit, or commit any files. Do NOT perform any of the tasks yourself. Do NOT run any dispatch command. Only read and propose.'
+            printf '%s\n' 'You are the Project Manager AI for this fleet. This is a PLANNING request only.'
+            printf '%s\n' 'Do NOT write, edit, or commit any files. Do NOT perform any of the tasks yourself. Do NOT run any dispatch command. Only read and propose.'
             if [ "$IS_REVISION" = "true" ]; then
-              printf '\\n%s\\n' 'This is a REVISION round. Below is the full conversation so far, including your own earlier proposal(s) and any leftover GitHub approval marker (ignore that marker, it is not addressed to you). Read it, understand what was already proposed and why the requester wants it changed (their newest message is the actual revision instruction), then produce a NEW, complete, corrected proposal -- not a diff or a partial patch to the old one.'
-              printf '\\n--- CONVERSATION SO FAR ---\\n'
+              printf '\n%s\n' 'This is a REVISION round. Below is the full conversation so far, including your own earlier proposal(s) and any leftover GitHub approval marker (ignore that marker, it is not addressed to you). Read it, understand what was already proposed and why the requester wants it changed (their newest message is the actual revision instruction), then produce a NEW, complete, corrected proposal -- not a diff or a partial patch to the old one.'
+              printf '\n--- CONVERSATION SO FAR ---\n'
               cat /tmp/thread.txt | sanitize
-              printf '\\n--- END CONVERSATION ---\\n'
+              printf '\n--- END CONVERSATION ---\n'
             fi
-            printf '\\nGOAL / LATEST INSTRUCTION (may include a leading project tag and a trailing marker -- ignore both, they are routing metadata, not part of the goal):\\n'
-            printf '%s\\n' "$GOAL"
-            printf '\\nDo this, in order:\\n'
-            printf '%s\\n' '1. Read Team/org.json in this checked-out repo (if present) for the full member roster: each entry has id, account (ACC0-ACC8; ACC6 and ACC9 never appear here), role, guild, domain_is, title. If Team/org.json does not exist in this repo, say so plainly in your prose summary and propose a flat task list instead (no member_id/account fields) rather than inventing IDs.'
-            printf '%s\\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block (top of file) for what is already done, blocked, or in progress, so you do not propose duplicate or already-finished work.'
-            printf '%s\\n' '3. Read the repo'"'"'s README and the most recent entries of Team/CHANGELOG.md (if present) for scope and recent history.'
-            printf '%s\\n' '4. Break the GOAL into up to 8 ACCOUNT-LEVEL packages -- NOT per-member tasks. Team/org.json has an "accounts" map with entries ACC0..ACC8 (ACC6 and ACC9 never appear as work targets); each has a "lead" (its w01 member) plus a primary/secondary domain. For each account whose domain is actually relevant to this GOAL, write ONE package: a self-contained scope of work for that account'"'"'s TEAM (its lead plus 10 subordinates) to plan and execute on its own -- not individual task instructions. Skip an account entirely if this GOAL genuinely has no work for its domain; do not force all 8 to have a package.'
-            printf '\\n%s\\n' '5. Output your ENTIRE response as exactly two parts, nothing else:'
-            printf '%s\\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
-            printf '%s\\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
-            printf '%s\\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
-            printf '%s\\n' 'Do not include a trailing @agy, @agy-plan, @sonnet, @sonnet-plan, @agy-plan-approved or @sonnet-plan-approved marker anywhere in your response -- this response is a proposal, not a new request.'
+            printf '\nGOAL / LATEST INSTRUCTION (may include a leading project tag and a trailing marker -- ignore both, they are routing metadata, not part of the goal):\n'
+            printf '%s\n' "$GOAL"
+            printf '\nDo this, in order:\n'
+            printf '%s\n' '1. Read Team/org.json in this checked-out repo (if present) for the full member roster: each entry has id, account (ACC0-ACC8; ACC6 and ACC9 never appear here), role, guild, domain_is, title. If Team/org.json does not exist in this repo, say so plainly in your prose summary and propose a flat task list instead (no member_id/account fields) rather than inventing IDs.'
+            printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block (top of file) for what is already done, blocked, or in progress, so you do not propose duplicate or already-finished work.'
+            printf '%s\n' '3. Read the repo'"'"'s README and the most recent entries of Team/CHANGELOG.md (if present) for scope and recent history.'
+            printf '%s\n' '4. Break the GOAL into up to 8 ACCOUNT-LEVEL packages -- NOT per-member tasks. Team/org.json has an "accounts" map with entries ACC0..ACC8 (ACC6 and ACC9 never appear as work targets); each has a "lead" (its w01 member) plus a primary/secondary domain. For each account whose domain is actually relevant to this GOAL, write ONE package: a self-contained scope of work for that account'"'"'s TEAM (its lead plus 10 subordinates) to plan and execute on its own -- not individual task instructions. Skip an account entirely if this GOAL genuinely has no work for its domain; do not force all 8 to have a package.'
+            printf '\n%s\n' '5. Output your ENTIRE response as exactly two parts, nothing else:'
+            printf '%s\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
+            printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
+            printf '%s\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
+            printf '%s\n' 'Do not include a trailing @agy, @agy-plan, @sonnet, @sonnet-plan, @agy-plan-approved or @sonnet-plan-approved marker anywhere in your response -- this response is a proposal, not a new request.'
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
 
