@@ -4,10 +4,12 @@ name: AGY Project Planning Bot (propose, then auto-dispatch)
 #   @agy-plan-agy      plan with Gemini, execute with Gemini
 #   @agy-plan-sonnet   plan with Gemini, execute with Sonnet 4.6
 #   @agy-plan          alias of @agy-plan-agy
-# Project tag (ccp/cr/coffeenet/status) before the marker selects the
-# destination repo for the final report. Actions always run on this public
-# repo. After a valid tbs_account_plan, dispatch agy-plan-dispatch.yml here.
-# HITL @agy-plan-approved / @sonnet-plan-approved still work on a later comment.
+# Project tag (ccp/cr/coffeenet/status/agw/n8n) before the marker selects the
+# destination repo for the final report. If omitted, the planner infers from
+# the GOAL; if still unclear, reports go to agw-workers. Actions always run
+# on this public repo. After a valid tbs_account_plan, dispatch
+# agy-plan-dispatch.yml here. HITL @agy-plan-approved / @sonnet-plan-approved
+# still work on a later comment.
 
 on:
   issues:
@@ -60,7 +62,7 @@ jobs:
           TRIMMED="$(printf '%s\n%s' "$TITLE" "$BODY" | sed -e 's/[[:space:]]*$//')"
           TRIMMED="$(strip_footer "$TRIMMED")"
           LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
-          PROJECT=$(echo "$LOWER" | grep -oE '(ccp|cr|coffeenet|status)[[:space:]]+@agy-plan(-agy|-sonnet)?$' | awk '{print $1}')
+          PROJECT=$(echo "$LOWER" | grep -oE '(coffeenet|status|ccp|agw|n8n|cr)[[:space:]]+@agy-plan(-agy|-sonnet)?$' | awk '{print $1}')
           case "$LOWER" in
             *"@agy-plan-sonnet")
               echo "match=true" >> "$GITHUB_OUTPUT"
@@ -117,8 +119,15 @@ jobs:
             cr) echo "target_repo=mohammadlali0707-stack/Control-Room" >> "$GITHUB_OUTPUT" ;;
             coffeenet) echo "target_repo=mohammadlali0707-stack/AirboxVIP_Coffeenet" >> "$GITHUB_OUTPUT" ;;
             status) echo "target_repo=mohammadlali0707-stack/status-dashboard" >> "$GITHUB_OUTPUT" ;;
+            agw) echo "target_repo=mohammadlali0707-stack/agw-workers" >> "$GITHUB_OUTPUT" ;;
+            n8n) echo "target_repo=mohammadlali0707-stack/n8n-studio" >> "$GITHUB_OUTPUT" ;;
             *) echo "target_repo=${GITHUB_REPOSITORY}" >> "$GITHUB_OUTPUT" ;;
           esac
+          if [ -z "$PROJECT_TAG" ]; then
+            echo "infer_target=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "infer_target=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Post the work checklist before doing any of it
         env:
@@ -227,6 +236,7 @@ jobs:
           ISSUE_BODY: ${{ github.event.issue.body }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           TARGET_REPO: ${{ steps.resolve.outputs.target_repo }}
+          INFER_TARGET: ${{ steps.resolve.outputs.infer_target }}
         run: |
           sanitize() { sed "s/\`/'/g; s/\"/'/g; s/\$(/DOLLAR(/g; s/\${/DOLLAR{/g"; }
           SAFE_TITLE=$(printf '%s' "$ISSUE_TITLE" | tr -d '`\\$')
@@ -246,6 +256,16 @@ jobs:
             fi
             printf '\nGOAL / LATEST INSTRUCTION (may include a leading project tag and a trailing marker -- ignore both, they are routing metadata, not part of the goal):\n'
             printf '%s\n' "$GOAL"
+            if [ "$INFER_TARGET" = "true" ]; then
+              printf '\n%s\n' 'No project tag was given. From the GOAL, choose exactly one destination for the final report from this map (do not invent other repos):'
+              printf '%s\n' 'ccp = mohammadlali0707-stack/Claud-Cloud-Project (Claud Cloud / game / Valiasr / CCP)'
+              printf '%s\n' 'cr = mohammadlali0707-stack/Control-Room (company rules / Control Room)'
+              printf '%s\n' 'status = mohammadlali0707-stack/status-dashboard (status dashboard / fleet status)'
+              printf '%s\n' 'agw = mohammadlali0707-stack/agw-workers (this workers fleet, GitHub Actions, @agy bots)'
+              printf '%s\n' 'coffeenet = mohammadlali0707-stack/AirboxVIP_Coffeenet (coffeenet / cafe site)'
+              printf '%s\n' 'n8n = mohammadlali0707-stack/n8n-studio (n8n workflows / automations, not CCP)'
+              printf '%s\n' 'If it is not clear which repo the task belongs to, choose agw / mohammadlali0707-stack/agw-workers.'
+            fi
             printf '\nDo this, in order:\n'
             printf '%s\n' '1. Read Team/org.json in this checked-out repo (if present) for the full member roster: each entry has id, account (ACC0-ACC8; ACC6 and ACC9 never appear here), role, guild, domain_is, title. If Team/org.json does not exist in this repo, say so plainly in your prose summary and propose a flat task list instead (no member_id/account fields) rather than inventing IDs.'
             printf '%s\n' '2. Read Team/MAP.md'"'"'s CURRENT STATE block (top of file) for what is already done, blocked, or in progress, so you do not propose duplicate or already-finished work.'
@@ -254,7 +274,11 @@ jobs:
             printf '\n%s\n' '5. Output your ENTIRE response as exactly two parts, nothing else:'
             printf '%s\n' '   a) A short Persian paragraph (3-6 sentences) summarizing the plan in plain language, for a human to read.'
             printf '%s\n' '   b) Then ONE fenced code block, language json, containing ONLY valid JSON with exactly this shape (no comments, no trailing text inside the fence):'
-            printf '%s\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
+            if [ "$INFER_TARGET" = "true" ]; then
+              printf '%s\n' '{"kind":"tbs_account_plan","project_tag":"<one of ccp,cr,status,agw,coffeenet,n8n>","target_repo":"<matching owner/repo from the map>","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
+            else
+              printf '%s\n' '{"kind":"tbs_account_plan","project_tag":"'"$PROJECT_TAG"'","target_repo":"'"$TARGET_REPO"'","goal":"<short restatement>","packages":[{"account":<int 0-8, never 6 or 9>,"package_goal":"<a full, self-contained scope of work for this account'"'"'s lead to break down further among its own 10 subordinates -- concrete enough to act on, not vague>"}]}'
+            fi
             printf '%s\n' 'Do not include a trailing @agy, @agy-plan, @sonnet, @sonnet-plan, @agy-plan-approved or @sonnet-plan-approved marker anywhere in your response -- this response is a proposal, not a new request.'
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
