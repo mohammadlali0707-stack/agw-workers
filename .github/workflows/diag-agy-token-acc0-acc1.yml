@@ -1,0 +1,218 @@
+name: Diag ACC0/ACC1 Antigravity token
+
+# Trailing @agw-token-check (owner only) or workflow_dispatch.
+# Probes AGW_TOKEN_ACC1 (Momona) then AGW_TOKEN_ACC0 (1997) with a tiny agy ping.
+# Quota is treated as healthy. Eligibility/auth failure of exactly one slot
+# copies the healthy secret onto the broken slot (ACC6_PAT).
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+concurrency:
+  group: diag-agy-token-acc0-acc1
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-marker:
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
+    timeout-minutes: 5
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+        github.event.comment.user.type != 'Bot' &&
+        contains(github.event.comment.body, '@agw-token-check')) ||
+      (github.event_name == 'issues' &&
+        contains(github.event.issue.body, '@agw-token-check'))
+    outputs:
+      match: ${{ steps.check.outputs.match }}
+    steps:
+      - name: Confirm trailing marker
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TRIMMED="$(printf '%s' "$BODY" | sed -e 's/[[:space:]]*$//')"
+          LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
+          case "$LOWER" in
+            *"@agw-token-check") echo "match=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "match=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  probe:
+    needs: [check-marker]
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
+    timeout-minutes: 20
+    if: >
+      needs.check-marker.outputs.match == 'true' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'issues' &&
+          (github.event.issue.author_association == 'OWNER' ||
+            github.event.issue.author_association == 'COLLABORATOR' ||
+            github.event.issue.user.login == 'Mohammadlali')
+        ) ||
+        (github.event_name == 'issue_comment' &&
+          github.event.comment.user.type != 'Bot' &&
+          (github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'COLLABORATOR' ||
+            github.event.comment.user.login == 'Mohammadlali')
+        )
+      )
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Ack
+        run: |
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body "شروع تست توکن: اول ACC1 (Momona)، بعد ACC0 (1997). کوتا = سالم. اگر فقط یکی eligibility/auth بدهد، سکرت خراب با توکن سالم جایگزین می‌شود."
+          fi
+
+      - name: Install AGY CLI from HF Dataset
+        run: |
+          curl -L \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
+          mkdir -p "$AGY_BIN_DIR"
+          install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
+          echo "$AGY_BIN_DIR" >> "$GITHUB_PATH"
+          export PATH="$AGY_BIN_DIR:$PATH"
+          agy --version 2>/dev/null || echo "agy ready"
+
+      - name: Probe ACC1 then ACC0; copy healthy secret onto ineligible slot
+        id: probe
+        env:
+          AGW_TOKEN_ACC0: ${{ secrets.AGW_TOKEN_ACC0 }}
+          AGW_TOKEN_ACC1: ${{ secrets.AGW_TOKEN_ACC1 }}
+        run: |
+          set +e
+          echo "::add-mask::$AGW_TOKEN_ACC0"
+          echo "::add-mask::$AGW_TOKEN_ACC1"
+          echo "::add-mask::$ACC6_PAT"
+          restore_token() {
+            local idx="$1"
+            mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+            local token_b64=""
+            case "$idx" in
+              0) token_b64="$AGW_TOKEN_ACC0" ;;
+              1) token_b64="$AGW_TOKEN_ACC1" ;;
+            esac
+            if [ -z "$token_b64" ]; then
+              echo "secret AGW_TOKEN_ACC${idx} is empty" > ~/.gemini/antigravity-cli/antigravity-oauth-token
+              echo 0
+              return 1
+            fi
+            echo "$token_b64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+            chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+            cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+            echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+            echo "Restored acc${idx}: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes"
+          }
+          classify() {
+            local f="$1"
+            if [ ! -s "$f" ]; then
+              echo fail_empty
+              return
+            fi
+            if grep -qiE 'eligibility|not eligible|verify your account|unauthenticated|invalid.?token|sign in with another|please verify your account' "$f"; then
+              echo fail_auth
+              return
+            fi
+            if grep -qiE 'too many requests|rate limit|rate-limit|429|quota' "$f"; then
+              echo ok_quota
+              return
+            fi
+            echo ok
+          }
+          probe_acc() {
+            local idx="$1"
+            local label="$2"
+            restore_token "$idx"
+            printf '%s\n' "Reply with exactly one line and nothing else: ACC${idx} ${label} token health OK" > /tmp/prompt.txt
+            PROMPT=$(cat /tmp/prompt.txt)
+            echo "Probing acc${idx} (${label})..."
+            timeout 180 agy --dangerously-skip-permissions --print-timeout 150s -p "$PROMPT" > "/tmp/agy_acc${idx}.txt" 2>&1
+            classify "/tmp/agy_acc${idx}.txt"
+          }
+          S1=$(probe_acc 1 Momona)
+          echo "ACC1_STATUS=$S1"
+          S0=$(probe_acc 0 1997)
+          echo "ACC0_STATUS=$S0"
+          echo "acc1=$S1" >> "$GITHUB_OUTPUT"
+          echo "acc0=$S0" >> "$GITHUB_OUTPUT"
+          REPLACED="none"
+          if [ "$S1" = "fail_auth" ] || [ "$S1" = "fail_empty" ]; then
+            if [ "$S0" = "ok" ] || [ "$S0" = "ok_quota" ]; then
+              printf '%s' "$AGW_TOKEN_ACC0" | GH_TOKEN="$ACC6_PAT" gh secret set AGW_TOKEN_ACC1 --repo "$REPO" --body -
+              REPLACED="ACC1 <- ACC0 (1997 copied onto Momona slot)"
+            fi
+          elif [ "$S0" = "fail_auth" ] || [ "$S0" = "fail_empty" ]; then
+            if [ "$S1" = "ok" ] || [ "$S1" = "ok_quota" ]; then
+              printf '%s' "$AGW_TOKEN_ACC1" | GH_TOKEN="$ACC6_PAT" gh secret set AGW_TOKEN_ACC0 --repo "$REPO" --body -
+              REPLACED="ACC0 <- ACC1 (Momona copied onto 1997 slot)"
+            fi
+          fi
+          echo "replaced=$REPLACED" >> "$GITHUB_OUTPUT"
+          {
+            echo "ACC1_STATUS=$S1"
+            echo "ACC0_STATUS=$S0"
+            echo "REPLACED=$REPLACED"
+          } > /tmp/probe_summary.txt
+
+      - name: Post results
+        if: always()
+        env:
+          ACC1_STATUS: ${{ steps.probe.outputs.acc1 }}
+          ACC0_STATUS: ${{ steps.probe.outputs.acc0 }}
+          REPLACED: ${{ steps.probe.outputs.replaced }}
+        run: |
+          redact() {
+            sed -E 's#https://accounts\.google\.com[^[:space:]]*#[google-auth-url-redacted]#g' "$1" | head -n 16
+          }
+          {
+            echo "## نتیجه تست توکن آنتی‌گراویتی"
+            echo ""
+            echo "- ACC1 (Momona / AGW_TOKEN_ACC1): ${ACC1_STATUS:-unknown}"
+            echo "- ACC0 (1997 / AGW_TOKEN_ACC0): ${ACC0_STATUS:-unknown}"
+            echo "- جایگزینی سکرت: ${REPLACED:-none}"
+            echo ""
+            echo "ok / ok_quota = سالم. fail_auth = eligibility. fail_empty = سکرت خالی/خراب."
+            echo "جایگزینی فقط وقتی انجام می‌شود که دقیقاً یکی fail_auth/fail_empty باشد و آن یکی سالم باشد."
+            echo ""
+            echo "### خروجی کوتاه ACC1"
+            echo '```'
+            if [ -f /tmp/agy_acc1.txt ]; then redact /tmp/agy_acc1.txt; else echo "(no output)"; fi
+            echo '```'
+            echo ""
+            echo "### خروجی کوتاه ACC0"
+            echo '```'
+            if [ -f /tmp/agy_acc0.txt ]; then redact /tmp/agy_acc0.txt; else echo "(no output)"; fi
+            echo '```'
+          } > /tmp/comment.md
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+          fi
+          cat /tmp/comment.md >> "$GITHUB_STEP_SUMMARY"
