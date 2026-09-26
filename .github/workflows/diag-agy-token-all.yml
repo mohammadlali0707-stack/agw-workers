@@ -1,0 +1,253 @@
+name: Diag ACC0-ACC8 Antigravity tokens
+
+# Trailing @agw-token-check-all (owner only) or workflow_dispatch.
+# Probes AGW_TOKEN_ACC0 through AGW_TOKEN_ACC8 with a tiny agy ping.
+# Does not copy secrets. Quota counts as healthy; eligibility is fail_auth.
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+concurrency:
+  group: diag-agy-token-all
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-marker:
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
+    timeout-minutes: 5
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+        github.event.comment.user.type != 'Bot' &&
+        contains(github.event.comment.body, '@agw-token-check-all')) ||
+      (github.event_name == 'issues' &&
+        contains(github.event.issue.body, '@agw-token-check-all'))
+    outputs:
+      match: ${{ steps.check.outputs.match }}
+    steps:
+      - name: Confirm trailing marker
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          TRIMMED="$(printf '%s' "$BODY" | sed -e 's/[[:space:]]*$//')"
+          LOWER="$(printf '%s' "$TRIMMED" | tr '[:upper:]' '[:lower:]')"
+          case "$LOWER" in
+            *"@agw-token-check-all") echo "match=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "match=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  probe:
+    needs: [check-marker]
+    runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
+    timeout-minutes: 45
+    if: >
+      needs.check-marker.outputs.match == 'true' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'issues' &&
+          (github.event.issue.author_association == 'OWNER' ||
+            github.event.issue.author_association == 'COLLABORATOR' ||
+            github.event.issue.user.login == 'Mohammadlali')
+        ) ||
+        (github.event_name == 'issue_comment' &&
+          github.event.comment.user.type != 'Bot' &&
+          (github.event.comment.author_association == 'OWNER' ||
+            github.event.comment.author_association == 'COLLABORATOR' ||
+            github.event.comment.user.login == 'Mohammadlali')
+        )
+      )
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Ack
+        run: |
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+              --body "شروع تست توکن آنتی‌گراویتی ACC0 تا ACC8. کوتا = سالم. جایگزینی سکرت انجام نمی‌شود."
+          fi
+
+      - name: Install AGY CLI from HF Dataset
+        run: |
+          curl -L \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
+          mkdir -p "$AGY_BIN_DIR"
+          install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
+          echo "$AGY_BIN_DIR" >> "$GITHUB_PATH"
+          export PATH="$AGY_BIN_DIR:$PATH"
+          agy --version 2>/dev/null || echo "agy ready"
+
+      - name: Probe ACC0 through ACC8
+        id: probe
+        env:
+          AGW_TOKEN_ACC0: ${{ secrets.AGW_TOKEN_ACC0 }}
+          AGW_TOKEN_ACC1: ${{ secrets.AGW_TOKEN_ACC1 }}
+          AGW_TOKEN_ACC2: ${{ secrets.AGW_TOKEN_ACC2 }}
+          AGW_TOKEN_ACC3: ${{ secrets.AGW_TOKEN_ACC3 }}
+          AGW_TOKEN_ACC4: ${{ secrets.AGW_TOKEN_ACC4 }}
+          AGW_TOKEN_ACC5: ${{ secrets.AGW_TOKEN_ACC5 }}
+          AGW_TOKEN_ACC6: ${{ secrets.AGW_TOKEN_ACC6 }}
+          AGW_TOKEN_ACC7: ${{ secrets.AGW_TOKEN_ACC7 }}
+          AGW_TOKEN_ACC8: ${{ secrets.AGW_TOKEN_ACC8 }}
+        run: |
+          set +e
+          echo "::add-mask::$AGW_TOKEN_ACC0"
+          echo "::add-mask::$AGW_TOKEN_ACC1"
+          echo "::add-mask::$AGW_TOKEN_ACC2"
+          echo "::add-mask::$AGW_TOKEN_ACC3"
+          echo "::add-mask::$AGW_TOKEN_ACC4"
+          echo "::add-mask::$AGW_TOKEN_ACC5"
+          echo "::add-mask::$AGW_TOKEN_ACC6"
+          echo "::add-mask::$AGW_TOKEN_ACC7"
+          echo "::add-mask::$AGW_TOKEN_ACC8"
+          restore_token() {
+            local idx="$1"
+            mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+            local token_b64=""
+            case "$idx" in
+              0) token_b64="$AGW_TOKEN_ACC0" ;;
+              1) token_b64="$AGW_TOKEN_ACC1" ;;
+              2) token_b64="$AGW_TOKEN_ACC2" ;;
+              3) token_b64="$AGW_TOKEN_ACC3" ;;
+              4) token_b64="$AGW_TOKEN_ACC4" ;;
+              5) token_b64="$AGW_TOKEN_ACC5" ;;
+              6) token_b64="$AGW_TOKEN_ACC6" ;;
+              7) token_b64="$AGW_TOKEN_ACC7" ;;
+              8) token_b64="$AGW_TOKEN_ACC8" ;;
+            esac
+            if [ -z "$token_b64" ]; then
+              echo "secret AGW_TOKEN_ACC${idx} is empty" >&2
+              : > ~/.gemini/antigravity-cli/antigravity-oauth-token
+              return 1
+            fi
+            echo "$token_b64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+            chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+            cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+            echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+            echo "Restored acc${idx}: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes" >&2
+          }
+          classify() {
+            local f="$1"
+            if [ ! -s "$f" ]; then
+              echo fail_empty
+              return
+            fi
+            if grep -qiE 'secret AGW_TOKEN_ACC[0-8] is empty' "$f"; then
+              echo fail_empty
+              return
+            fi
+            if grep -qiE 'eligibility|not eligible|verify your account|unauthenticated|invalid.?token|sign in with another|please verify your account' "$f"; then
+              echo fail_auth
+              return
+            fi
+            if grep -qiE 'too many requests|rate limit|rate-limit|429|quota' "$f"; then
+              echo ok_quota
+              return
+            fi
+            echo ok
+          }
+          probe_acc() {
+            local idx="$1"
+            local label="$2"
+            restore_token "$idx"
+            local rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "secret AGW_TOKEN_ACC${idx} is empty" > "/tmp/agy_acc${idx}.txt"
+              classify "/tmp/agy_acc${idx}.txt"
+              return
+            fi
+            printf '%s\n' "Reply with exactly one line and nothing else: ACC${idx} ${label} token health OK" > /tmp/prompt.txt
+            PROMPT=$(cat /tmp/prompt.txt)
+            echo "Probing acc${idx} (${label})..." >&2
+            timeout 180 agy --dangerously-skip-permissions --print-timeout 150s -p "$PROMPT" > "/tmp/agy_acc${idx}.txt" 2>&1
+            classify "/tmp/agy_acc${idx}.txt"
+          }
+          : > /tmp/statuses.txt
+          S0=$(probe_acc 0 1997); echo "0=$S0" >> /tmp/statuses.txt
+          S1=$(probe_acc 1 Momona); echo "1=$S1" >> /tmp/statuses.txt
+          S2=$(probe_acc 2 94); echo "2=$S2" >> /tmp/statuses.txt
+          S3=$(probe_acc 3 ngocg); echo "3=$S3" >> /tmp/statuses.txt
+          S4=$(probe_acc 4 lets); echo "4=$S4" >> /tmp/statuses.txt
+          S5=$(probe_acc 5 kidding); echo "5=$S5" >> /tmp/statuses.txt
+          S6=$(probe_acc 6 stack); echo "6=$S6" >> /tmp/statuses.txt
+          S7=$(probe_acc 7 97okk); echo "7=$S7" >> /tmp/statuses.txt
+          S8=$(probe_acc 8 zahra); echo "8=$S8" >> /tmp/statuses.txt
+          echo "s0=$S0" >> "$GITHUB_OUTPUT"
+          echo "s1=$S1" >> "$GITHUB_OUTPUT"
+          echo "s2=$S2" >> "$GITHUB_OUTPUT"
+          echo "s3=$S3" >> "$GITHUB_OUTPUT"
+          echo "s4=$S4" >> "$GITHUB_OUTPUT"
+          echo "s5=$S5" >> "$GITHUB_OUTPUT"
+          echo "s6=$S6" >> "$GITHUB_OUTPUT"
+          echo "s7=$S7" >> "$GITHUB_OUTPUT"
+          echo "s8=$S8" >> "$GITHUB_OUTPUT"
+          cat /tmp/statuses.txt >&2
+
+      - name: Post results
+        if: always()
+        env:
+          S0: ${{ steps.probe.outputs.s0 }}
+          S1: ${{ steps.probe.outputs.s1 }}
+          S2: ${{ steps.probe.outputs.s2 }}
+          S3: ${{ steps.probe.outputs.s3 }}
+          S4: ${{ steps.probe.outputs.s4 }}
+          S5: ${{ steps.probe.outputs.s5 }}
+          S6: ${{ steps.probe.outputs.s6 }}
+          S7: ${{ steps.probe.outputs.s7 }}
+          S8: ${{ steps.probe.outputs.s8 }}
+        run: |
+          redact() {
+            sed -E 's#https://accounts\.google\.com[^[:space:]]*#[google-auth-url-redacted]#g' "$1" | head -n 8
+          }
+          {
+            echo "## نتیجه تست توکن آنتی‌گراویتی ACC0–ACC8"
+            echo ""
+            echo "| ACC | هویت | وضعیت |"
+            echo "|---|---|---|"
+            echo "| 0 | 1997 | ${S0:-unknown} |"
+            echo "| 1 | Momona | ${S1:-unknown} |"
+            echo "| 2 | 94 | ${S2:-unknown} |"
+            echo "| 3 | ngocg | ${S3:-unknown} |"
+            echo "| 4 | lets | ${S4:-unknown} |"
+            echo "| 5 | kidding | ${S5:-unknown} |"
+            echo "| 6 | stack | ${S6:-unknown} |"
+            echo "| 7 | 97okk | ${S7:-unknown} |"
+            echo "| 8 | zahra | ${S8:-unknown} |"
+            echo ""
+            echo "ok / ok_quota = سالم. fail_auth = eligibility. fail_empty = سکرت خالی/خراب."
+            echo ""
+            for i in 0 1 2 3 4 5 6 7 8; do
+              echo "### ACC${i}"
+              echo '```'
+              if [ -f "/tmp/agy_acc${i}.txt" ]; then redact "/tmp/agy_acc${i}.txt"; else echo "(no output)"; fi
+              echo '```'
+              echo ""
+            done
+          } > /tmp/comment.md
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body-file /tmp/comment.md
+          fi
+          cat /tmp/comment.md >> "$GITHUB_STEP_SUMMARY"
