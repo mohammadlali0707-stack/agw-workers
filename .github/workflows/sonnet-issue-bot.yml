@@ -1,11 +1,12 @@
 name: AGW Worker Sonnet Issue Bot (same-repo, no relay)
 
-# Trailing @sonnet (not @sonnet-plan). Same routing as agy-issue-bot.yml but
-# pins Claude Sonnet 4.6 (Thinking) instead of the Gemini default, round-robins
-# AGW_TOKEN_ACC0-ACC8 by this workflow's run_number, and quota-walks the next
-# agy token rather than failing. GitHub clone/push/comment uses this repo +
-# ACC6_PAT; acc_index only selects the agy OAuth token (AGW_TOKEN_ACCx), not a
-# GitHub account. Project tags route the worker clone / report destination:
+# Trailing @sonnet (not @sonnet-plan, not @sonnet-chat). Same routing as
+# agy-issue-bot.yml but pins Claude Sonnet 4.6 (Thinking) instead of the Gemini
+# default, round-robins AGW_TOKEN_ACC0-ACC8 by this workflow's run_number, and
+# quota-walks the next agy token rather than failing. GitHub clone/push/comment
+# uses this repo + ACC6_PAT; acc_index only selects the agy OAuth token
+# (AGW_TOKEN_ACCx), not a GitHub account. Project tags route the worker clone /
+# report destination:
 #   ccp        mohammadlali0707-stack/Claud-Cloud-Project
 #   cr         mohammadlali0707-stack/Control-Room
 #   status     mohammadlali0707-stack/status-dashboard
@@ -13,6 +14,7 @@ name: AGW Worker Sonnet Issue Bot (same-repo, no relay)
 #   coffeenet  mohammadlali0707-stack/AirboxVIP_Coffeenet
 #   n8n        mohammadlali0707-stack/n8n-studio
 # No tag means this repo (agw-workers).
+# Interactive chat is sonnet-chat-bot.yml (@sonnet-chat / @sonnet-chat-end).
 
 on:
   issues:
@@ -32,10 +34,12 @@ jobs:
     if: >
       (github.event_name == 'issue_comment' &&
         contains(github.event.comment.body, '@sonnet') &&
-        !contains(github.event.comment.body, '@sonnet-plan')) ||
+        !contains(github.event.comment.body, '@sonnet-plan') &&
+        !contains(github.event.comment.body, '@sonnet-chat')) ||
       (github.event_name == 'issues' &&
         contains(github.event.issue.body, '@sonnet') &&
-        !contains(github.event.issue.body, '@sonnet-plan'))
+        !contains(github.event.issue.body, '@sonnet-plan') &&
+        !contains(github.event.issue.body, '@sonnet-chat'))
     outputs:
       match: ${{ steps.check.outputs.match }}
       target_repo: ${{ steps.check.outputs.target_repo }}
