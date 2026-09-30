@@ -1,0 +1,181 @@
+name: TBS -- Ren'Py lint, headless playthrough, Android APK
+
+# Issue CCP#71 (focus until 2026-10-28): one playable Ren'Py slice plus a real
+# installable APK. CCP's own Actions are billing-blocked, so this runs on the
+# public agw-workers runner and clones CCP with ACC6_PAT (same as
+# agy-asset-ingest.yml). The APK is uploaded as a workflow ARTIFACT only --
+# never committed (no APK/media commits).
+#
+# Signing: if secret TBS_ANDROID_KEYSTORE_B64 (base64 of android.keystore,
+# alias "android", passwords "android" -- RAPT's fixed values) is set, it is
+# used so updates install over each other. Otherwise a throwaway key is made
+# for this run; that APK installs fine but a later build signed with another
+# key must be uninstalled first.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/tbs-renpy-apk.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tbs-renpy-apk
+  cancel-in-progress: false
+
+env:
+  RENPY_VERSION: "8.3.7"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Clone CCP with ACC6_PAT (with LFS)
+        env:
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ACC6_PAT:-}" ]; then
+            echo "ACC6_PAT missing -- cannot clone private CCP" >&2
+            exit 1
+          fi
+          echo "::add-mask::$ACC6_PAT"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$ACC6_PAT" | base64 -w0)"
+          git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --depth 1 \
+            "https://github.com/mohammadlali0707-stack/Claud-Cloud-Project.git" "$GITHUB_WORKSPACE/ccp"
+          cd "$GITHUB_WORKSPACE/ccp"
+          git lfs install --local
+          if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" lfs pull --include "game/**"; then
+            echo "LFS pull ok"
+          else
+            echo "::warning::git lfs pull failed -- LFS-tracked game files stay as pointer text"
+          fi
+          echo "CCP commit: $(git rev-parse --short HEAD)"
+
+      - name: Set up JDK 21 (RAPT requirement)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache Ren'Py SDK + RAPT + Android SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/renpy-sdk
+          key: renpy-${{ env.RENPY_VERSION }}-rapt-androidsdk-v1
+
+      - name: Download Ren'Py SDK and RAPT
+        run: |
+          set -euo pipefail
+          SDK="$HOME/renpy-sdk"
+          if [ ! -x "$SDK/renpy.sh" ]; then
+            mkdir -p "$SDK"
+            curl -fsSL "https://www.renpy.org/dl/${RENPY_VERSION}/renpy-${RENPY_VERSION}-sdk.tar.bz2" -o /tmp/sdk.tar.bz2
+            tar xjf /tmp/sdk.tar.bz2 -C "$SDK" --strip-components=1
+          fi
+          if [ ! -f "$SDK/rapt/android.py" ]; then
+            curl -fsSL "https://www.renpy.org/dl/${RENPY_VERSION}/renpy-${RENPY_VERSION}-rapt.zip" -o /tmp/rapt.zip
+            unzip -q -o /tmp/rapt.zip -d "$SDK"
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb libgl1 libegl1 > /dev/null
+
+      - name: Lint (fails on any finding except the two advisory lines)
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/ccp"
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy "$HOME/renpy-sdk/renpy.sh" . lint /tmp/lint.txt
+          cat /tmp/lint.txt
+          # Findings sit between the header line and "Statistics:".
+          FINDINGS=$(sed -n '2,/^Statistics:/p' /tmp/lint.txt | grep -v '^\s*$' | grep -v '^Statistics:' | grep -v 'check_conflicting_properties' || true)
+          if [ -n "$FINDINGS" ]; then
+            echo "::error::renpy lint reported findings"
+            echo "$FINDINGS"
+            exit 1
+          fi
+
+      - name: Headless playthrough (start -> opening_start -> scene_1 -> main menu)
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/ccp"
+          rm -f traceback.txt /tmp/labels.txt
+          TBS_SMOKE_OUT=/tmp/labels.txt SDL_AUDIODRIVER=dummy timeout 300 \
+            xvfb-run -a -s "-screen 0 1280x720x24" "$HOME/renpy-sdk/renpy.sh" . test
+          echo "labels reached:"; tr '\n' ' ' < /tmp/labels.txt; echo
+          if [ -f traceback.txt ]; then cat traceback.txt; exit 1; fi
+          python3 - <<'PY'
+          import json, sys
+          seen = open("/tmp/labels.txt").read().split()
+          need = ["start", "opening_start", "scene_1"]
+          missing = [n for n in need if n not in seen]
+          ended = "scene_1" in seen and "main_menu_screen" in seen[seen.index("scene_1"):]
+          ok = not missing and ended
+          print("##TBS##" + json.dumps({"v": 1, "probe": "renpy_playthrough", "status": "pass" if ok else "fail",
+                "data": {"missing": missing, "returned_to_menu": ended}}, sort_keys=True))
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: Install Android SDK via RAPT
+        run: |
+          set -euo pipefail
+          SDK="$HOME/renpy-sdk"
+          cat > /tmp/inst.py <<'PY'
+          import os, sys
+          R = os.path.expanduser("~/renpy-sdk")
+          sys.path[0:0] = [R, R + "/rapt/buildlib"]
+          os.chdir(R + "/rapt")
+          import rapt.interface as interface, rapt.install_sdk as install_sdk
+          install_sdk.install_sdk(interface.Interface())
+          PY
+          RAPT_NO_TERMS=1 "$SDK/lib/py3-linux-x86_64/python" /tmp/inst.py
+
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.TBS_ANDROID_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/ccp"
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > android.keystore
+            cp android.keystore bundle.keystore
+            echo "signing: owner keystore from secret"
+          else
+            for k in android bundle; do
+              keytool -genkey -keystore "$k.keystore" -alias android -keyalg RSA -keysize 2048 \
+                -keypass android -storepass android -dname "CN=TBS CI throwaway" -validity 20000
+            done
+            echo "::warning::signing: throwaway key (set TBS_ANDROID_KEYSTORE_B64 for upgradable builds)"
+          fi
+
+      - name: Build APK
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/ccp"
+          mkdir -p "$GITHUB_WORKSPACE/apk"
+          SDL_AUDIODRIVER=dummy xvfb-run -a "$HOME/renpy-sdk/renpy.sh" "$HOME/renpy-sdk/launcher" \
+            android_build "$GITHUB_WORKSPACE/ccp" --dest "$GITHUB_WORKSPACE/apk"
+          ls -la "$GITHUB_WORKSPACE/apk"
+
+      - name: Verify APK
+        run: |
+          set -euo pipefail
+          APK=$(ls "$GITHUB_WORKSPACE"/apk/*.apk | head -1)
+          BT=$(ls -d "$HOME"/renpy-sdk/rapt/Sdk/build-tools/* | tail -1)
+          "$BT/aapt2" dump badging "$APK" | head -3
+          "$BT/apksigner" verify --print-certs "$APK" | head -2
+          LEAK=$(unzip -l "$APK" | grep -E 'x-Team/|x-Tools/|x-Reports/|keystore' || true)
+          if [ -n "$LEAK" ]; then echo "::error::internal files inside the APK"; echo "$LEAK"; exit 1; fi
+          SIZE=$(stat -c %s "$APK")
+          echo "##TBS##{\"v\": 1, \"probe\": \"renpy_apk\", \"status\": \"pass\", \"data\": {\"bytes\": $SIZE}}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tehran-blind-spot-apk
+          path: apk/*.apk
+          retention-days: 14
+          if-no-files-found: error
