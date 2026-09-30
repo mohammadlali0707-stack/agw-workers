@@ -18,7 +18,7 @@ on:
         default: ''
         type: string
       acc_index:
-        description: 'Account index 0-8 to force a specific identity; empty = this repo''s own account, falling back to one random other on quota error. ACC9 is retired and never used.'
+        description: 'Deprecated compatibility input. Authentication is always pinned to this repo owner''s account.'
         required: false
         default: ''
         type: string
@@ -38,7 +38,7 @@ on:
         default: ''
         type: string
       agy_token_b64:
-        description: 'CROSS-ACCOUNT MODE: base64 Antigravity OAuth token for acc_index''s identity, supplied by a caller running in a DIFFERENT repo than this identity''s own secrets live in (e.g. a lead cross-dispatched to run inside its own account''s copy of this repo). Empty = look the token up locally by acc_index, the original same-repo behavior.'
+        description: 'Deprecated compatibility input. Ignored: the local AGW_TOKEN_ACCn secret matching this repo owner is always used.'
         required: false
         default: ''
         type: string
@@ -63,7 +63,7 @@ on:
         default: ''
         type: string
       quota_walk:
-        description: 'If true, on quota/rate-limit errors try the next AGW token (ACC0-ACC8) until one works, instead of a single random fallback. ACC9 is never used.'
+        description: 'Deprecated compatibility input. Cross-account quota fallback is disabled to preserve account pinning.'
         required: false
         default: 'false'
         type: string
@@ -88,6 +88,7 @@ jobs:
         id: own_identity
         run: |
           case "$GITHUB_REPOSITORY_OWNER" in
+            Mohammadlali) OWN=0 ;;
             momonakikugava-pixel) OWN=1 ;;
             lali94m-max) OWN=2 ;;
             ngocgminh5-debug) OWN=3 ;;
@@ -96,7 +97,7 @@ jobs:
             mohammadlali0707-stack) OWN=6 ;;
             mohammad97okk) OWN=7 ;;
             moradzahra85-png) OWN=8 ;;
-            *) OWN=0 ;;
+            *) OWN=unknown ;;
           esac
           echo "own_idx=$OWN" >> "$GITHUB_OUTPUT"
           echo "Repo owner: $GITHUB_REPOSITORY_OWNER -> account index: $OWN"
@@ -107,21 +108,16 @@ jobs:
           ACC_INDEX_INPUT: ${{ inputs.acc_index }}
           OWN_IDX: ${{ steps.own_identity.outputs.own_idx }}
         run: |
-          IDX="$ACC_INDEX_INPUT"
-          if [ "$IDX" = "9" ]; then
-            echo "::warning::acc_index=9 (ACC9) is retired and never valid -- using this repo's own account instead"
-            IDX=""
+          if [ "$OWN_IDX" = "unknown" ]; then
+            echo "::error::Unknown repository owner '$GITHUB_REPOSITORY_OWNER'; refusing to select an Antigravity identity"
+            exit 1
           fi
-          if [ -z "$IDX" ]; then
-            if [ "$OWN_IDX" != "0" ]; then
-              IDX="$OWN_IDX"
-            else
-              IDX=$(( (RANDOM % 8) + 1 ))
-              echo "::warning::could not map this repo's owner to an account index, falling back to random"
-            fi
+          IDX="$OWN_IDX"
+          if [ -n "$ACC_INDEX_INPUT" ] && [ "$ACC_INDEX_INPUT" != "$IDX" ]; then
+            echo "::warning::Ignoring acc_index=$ACC_INDEX_INPUT; this repo is ACC${IDX} and must use AGW_TOKEN_ACC${IDX}"
           fi
-          echo "acc_idx=$IDX" >> $GITHUB_OUTPUT
-          echo "Primary account for this run: acc${IDX}"
+          echo "acc_idx=$IDX" >> "$GITHUB_OUTPUT"
+          echo "Pinned account for this repo: acc${IDX} (AGW_TOKEN_ACC${IDX})"
 
       - name: Install AGY CLI from HF Dataset
         run: |
@@ -217,36 +213,33 @@ jobs:
           echo "Checked out $TARGET_REPO into ${AGENT_REPO}."
           echo "has_repo=true" >> "$GITHUB_OUTPUT"
 
-      - name: Run AGY Prompt (own identity first; quota_walk or one random fallback)
+      - name: Run AGY Prompt (pinned to this repo's account identity)
         id: run_agy
         if: ${{ steps.checkout_target.outputs.has_repo == 'true' || inputs.target_repo == '' }}
         env:
           PROMPT_INPUT: ${{ inputs.prompt }}
           PRIMARY_IDX: ${{ steps.pick_token.outputs.acc_idx }}
-          AGY_TOKEN_INPUT: ${{ inputs.agy_token_b64 }}
           MODEL_INPUT: ${{ inputs.model }}
-          QUOTA_WALK: ${{ inputs.quota_walk }}
         run: |
           set +e
           restore_token() {
             local idx="$1"
-            local override_b64="${2:-}"
             mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
             local token_b64=""
-            if [ -n "$override_b64" ]; then
-              token_b64="$override_b64"
-            else
-              case "$idx" in
-                0) token_b64="${{ secrets.AGW_TOKEN_ACC0 }}" ;;
-                1) token_b64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
-                2) token_b64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
-                3) token_b64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
-                4) token_b64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
-                5) token_b64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
-                6) token_b64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
-                7) token_b64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
-                8) token_b64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
-              esac
+            case "$idx" in
+              0) token_b64="${{ secrets.AGW_TOKEN_ACC0 }}" ;;
+              1) token_b64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
+              2) token_b64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
+              3) token_b64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
+              4) token_b64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
+              5) token_b64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
+              6) token_b64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
+              7) token_b64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
+              8) token_b64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
+            esac
+            if [ -z "$token_b64" ]; then
+              echo "::error::AGW_TOKEN_ACC${idx} is missing in ${GITHUB_REPOSITORY}"
+              exit 1
             fi
             echo "$token_b64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
             chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
@@ -280,7 +273,7 @@ jobs:
           } > /tmp/agy_prompt.txt
           PROMPT=$(cat /tmp/agy_prompt.txt)
           USED_IDX="$PRIMARY_IDX"
-          restore_token "$USED_IDX" "$AGY_TOKEN_INPUT"
+          restore_token "$USED_IDX" || exit 1
           echo "Running agy prompt with acc${USED_IDX}..."
           cd "${AGENT_REPO}"
           echo "AGY_BASE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
@@ -293,31 +286,8 @@ jobs:
           }
           OUTPUT=$(agy_invoke)
           echo "$OUTPUT" > /tmp/agy_output.txt
-          if [ "$QUOTA_WALK" = "true" ]; then
-            TRIED=1
-            while is_quota_error /tmp/agy_output.txt && [ "$TRIED" -lt 9 ]; do
-              NEXT_IDX=$(( (USED_IDX + 1) % 9 ))
-              echo "::warning::acc${USED_IDX} hit a quota/rate-limit error, trying next identity acc${NEXT_IDX}"
-              USED_IDX="$NEXT_IDX"
-              restore_token "$USED_IDX"
-              echo "Retrying with acc${USED_IDX}..."
-              cd "${AGENT_REPO}"
-              OUTPUT=$(agy_invoke)
-              echo "$OUTPUT" > /tmp/agy_output.txt
-              TRIED=$((TRIED + 1))
-            done
-          elif is_quota_error /tmp/agy_output.txt; then
-            echo "::warning::acc${USED_IDX} hit a quota/rate-limit error, retrying once with a random other identity"
-            FALLBACK_IDX="$USED_IDX"
-            while [ "$FALLBACK_IDX" = "$USED_IDX" ]; do
-              FALLBACK_IDX=$(( (RANDOM % 8) + 1 ))
-            done
-            USED_IDX="$FALLBACK_IDX"
-            restore_token "$USED_IDX"
-            echo "Retrying with acc${USED_IDX}..."
-            cd "${AGENT_REPO}"
-            OUTPUT=$(agy_invoke)
-            echo "$OUTPUT" > /tmp/agy_output.txt
+          if is_quota_error /tmp/agy_output.txt; then
+            echo "::error::acc${USED_IDX} hit a quota/rate-limit error; account pinning prevents fallback to another identity"
           fi
           echo "used_idx=$USED_IDX" >> "$GITHUB_OUTPUT"
           echo "Output lines: $(wc -l < /tmp/agy_output.txt)"

@@ -103,7 +103,18 @@ jobs:
                 *) TARGET_REPO="${GITHUB_REPOSITORY}" ;;
               esac
 
-              ACC_IDX=$(( (RANDOM % 8) + 1 ))
+              case "$GITHUB_REPOSITORY_OWNER" in
+                Mohammadlali) ACC_IDX=0 ;;
+                momonakikugava-pixel) ACC_IDX=1 ;;
+                lali94m-max) ACC_IDX=2 ;;
+                ngocgminh5-debug) ACC_IDX=3 ;;
+                hmmletssee7-design) ACC_IDX=4 ;;
+                kidding602) ACC_IDX=5 ;;
+                mohammadlali0707-stack) ACC_IDX=6 ;;
+                mohammad97okk) ACC_IDX=7 ;;
+                moradzahra85-png) ACC_IDX=8 ;;
+                *) echo "::error::Unknown repo owner: $GITHUB_REPOSITORY_OWNER"; exit 1 ;;
+              esac
 
               echo "target_repo=$TARGET_REPO" >> "$GITHUB_OUTPUT"
               echo "acc_index=$ACC_IDX" >> "$GITHUB_OUTPUT"
