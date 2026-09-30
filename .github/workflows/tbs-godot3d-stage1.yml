@@ -117,6 +117,8 @@ jobs:
           fi
           test -s "$template_dir/android_debug.apk"
           test -s "$template_dir/android_release.apk"
+          sed -i "s|custom_template/debug=\"\"|custom_template/debug=\"$template_dir/android_debug.apk\"|" godot3d/export_presets.cfg
+          sed -i "s|custom_template/release=\"\"|custom_template/release=\"$template_dir/android_release.apk\"|" godot3d/export_presets.cfg
           apk_path="$GITHUB_WORKSPACE/out/apk/TehranBlindSpot-3d-debug.apk"
           mkdir -p "$(dirname "$apk_path")"
           set +e
