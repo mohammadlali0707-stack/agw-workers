@@ -115,7 +115,8 @@ jobs:
           cp /tmp/godot-export.log "$GITHUB_WORKSPACE/out/"
           if [ "$rc" -ne 0 ] || [ ! -s "$apk_path" ]; then
             message=$(tail -80 /tmp/godot-export.log | tr '\n' ' ' | cut -c1-4000)
-            echo "::error title=Godot Android export failed::$message"
+            printf '### Godot Android export diagnostic\n\n%s\n' "$message" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Godot Android export failed::See the run summary for the sanitized export log."
             find "$GITHUB_WORKSPACE" -maxdepth 5 -type f -name '*.apk' -print
             exit 1
           fi
