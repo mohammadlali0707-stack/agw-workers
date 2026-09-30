@@ -44,12 +44,13 @@ jobs:
           DISPATCH_ID: ${{ github.event.inputs.asset_id || '' }}
           DISPATCH_URL: ${{ github.event.inputs.url || '' }}
           ISSUE_FROM_EVENT: ${{ github.event.issue.number || '' }}
+          ISSUE_FROM_INPUT: ${{ github.event.inputs.issue_number || '' }}
         run: |
           set -euo pipefail
           if [ -n "${ISSUE_FROM_EVENT:-}" ]; then
             echo "issue_number=$ISSUE_FROM_EVENT" >> "$GITHUB_OUTPUT"
           else
-            echo "issue_number=${{ github.event.inputs.issue_number || '' }}" >> "$GITHUB_OUTPUT"
+            echo "issue_number=${ISSUE_FROM_INPUT:-}" >> "$GITHUB_OUTPUT"
           fi
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "match=true" >> "$GITHUB_OUTPUT"
@@ -90,6 +91,7 @@ jobs:
           PARSE_OK: ${{ steps.parse.outputs.parse_ok }}
           ASSET_ID: ${{ steps.parse.outputs.asset_id }}
           REASON: ${{ steps.parse.outputs.reason }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
           if [ "$PARSE_OK" = "true" ]; then
@@ -97,7 +99,7 @@ jobs:
           else
             BODY="Saw an ingest command but it was not parseable ($REASON). One line: four-digit id, then an https file URL."
           fi
-          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "$BODY"
+          gh issue comment "$ISSUE_NUM" --repo "${{ github.repository }}" --body "$BODY"
 
       - name: Clone CCP with ACC6_PAT
         if: steps.parse.outputs.parse_ok == 'true'
@@ -202,9 +204,10 @@ jobs:
           INGEST_OUTCOME: ${{ steps.ingest.outcome }}
           COMMIT_SHA: ${{ steps.commit.outputs.sha || '' }}
           ASSET_ID: ${{ steps.parse.outputs.asset_id }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
-          ISSUE="${{ github.event.issue.number }}"
+          ISSUE="$ISSUE_NUM"
           if [ "$INGEST_OUTCOME" = "success" ]; then
             BODY=$(printf 'Ingested `%s` into Claud-Cloud-Project `game/` (commit `%s`). Ran on public agw-workers because CCP Actions is billing-blocked.' "$ASSET_ID" "${COMMIT_SHA:-none}")
           else

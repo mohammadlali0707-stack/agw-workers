@@ -51,8 +51,9 @@ jobs:
       - name: Ack
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
-          gh issue comment "${{ github.event.issue.number }}" \
+          gh issue comment "$ISSUE_NUM" \
             --repo "${{ github.repository }}" \
             --body "Notion AI is on it. Will reply when done."
 
