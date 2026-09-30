@@ -1,0 +1,46 @@
+name: TBS Kaggle authentication smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kaggle-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+    steps:
+      - name: Install Kaggle CLI
+        run: python3 -m pip install --disable-pip-version-check --quiet kaggle
+
+      - name: Verify authentication without exposing kernel data
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${KAGGLE_API_TOKEN:-}" ] && [ -z "${KAGGLE_KEY:-}" ]; then
+            echo "::error::No Kaggle token secret is available"
+            exit 1
+          fi
+          set +e
+          kaggle kernels list --mine --csv >/tmp/kaggle-kernels.csv 2>/tmp/kaggle-error.txt
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            python3 - <<'PYEOF'
+          import os
+          from pathlib import Path
+          text = Path('/tmp/kaggle-error.txt').read_text(errors='replace')
+          for name in ('KAGGLE_API_TOKEN', 'KAGGLE_KEY'):
+              value = os.environ.get(name, '')
+              if value:
+                  text = text.replace(value, '[REDACTED]')
+          print(text[-2000:])
+          PYEOF
+            exit "$rc"
+          fi
+          rows=$(awk 'END {print (NR > 0 ? NR - 1 : 0)}' /tmp/kaggle-kernels.csv)
+          echo "Kaggle authentication succeeded; private kernel rows visible: $rows"
