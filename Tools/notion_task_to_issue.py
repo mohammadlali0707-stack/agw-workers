@@ -39,6 +39,7 @@ retire one of the two paths rather than to add a second guess here.
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -48,6 +49,10 @@ NOTION_VERSION = "2022-06-28"
 NOTION_API = "https://api.notion.com/v1"
 GITHUB_API = "https://api.github.com"
 TWIN_PROP = "Twin page ID"
+
+MARKER_RE = re.compile(
+    r"(?:^|\n)\s*((?:ccp|cr|coffeenet|status|agw|n8n)[ \t]+@(?:agy-plan|sonnet-plan)(?:-agy|-sonnet)?)\s*$",
+    re.IGNORECASE)
 
 # Notion Project select value -> the tag agy-plan-bot's marker check expects.
 #
@@ -259,10 +264,19 @@ def main():
             continue
 
         desc = page_text(token, pid) if not dry else "(dry run: body not fetched)"
+        # Owner 2026-09-30: a page may pick its bot by ending its body with a
+        # trailing marker such as "ccp @sonnet-plan-agy". The bots only match a
+        # marker at the very end of the issue body, so move it there instead of
+        # appending the default "@agy-plan" after it.
+        marker = f"{tag} @agy-plan"
+        m = MARKER_RE.search(desc.rstrip())
+        if m:
+            marker = m.group(1).strip().lower()
+            desc = desc.rstrip()[:m.start()].rstrip()
         body = (
             f"{desc}\n\n"
             f"<!-- notion-page-id: {pid} -->\n\n"
-            f"{tag} @agy-plan"
+            f"{marker}"
         )
         print(f"  -> issue for '{name}' (board={label}, project={project}, tag={tag})")
         if dry:
