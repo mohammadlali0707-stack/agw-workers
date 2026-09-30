@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends blender curl
+          sudo apt-get install -y --no-install-recommends blender curl python3-numpy
           mkdir -p source out/kaveh
           curl --retry 4 --retry-all-errors -fsSL -o source/AnimationLibrary_Godot_Standard.gltf https://raw.githubusercontent.com/J-Ponzo/gltf-universal-animation-library/main/glTF/AnimationLibrary_Godot_Standard.gltf
           curl --retry 4 --retry-all-errors -fsSL -o source/AnimationLibrary_Godot_Standard.bin https://raw.githubusercontent.com/J-Ponzo/gltf-universal-animation-library/main/glTF/AnimationLibrary_Godot_Standard.bin
