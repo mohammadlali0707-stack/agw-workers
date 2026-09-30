@@ -64,16 +64,16 @@ jobs:
             TOKEN="${!PAT_NAME}"
             echo "== account $IDX: $OWNER/agw-workers =="
             if [ -z "$TOKEN" ]; then
-              echo "::warning::no PAT for account $IDX ($OWNER), skipping"
-              continue
+              echo "::error::no PAT for account $IDX ($OWNER)"
+              exit 1
             fi
             AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
             WORKDIR=$(mktemp -d)
             if ! git -c http.https://github.com/.extraHeader="$AUTH_HEADER" clone --depth 1 \
                 "https://github.com/${OWNER}/agw-workers.git" "$WORKDIR"; then
-              echo "::warning::clone failed for $OWNER/agw-workers, skipping"
+              echo "::error::clone failed for $OWNER/agw-workers"
               rm -rf "$WORKDIR"
-              continue
+              exit 1
             fi
             for F in "${FILES[@]}"; do
               mkdir -p "$WORKDIR/$(dirname "$F")"
