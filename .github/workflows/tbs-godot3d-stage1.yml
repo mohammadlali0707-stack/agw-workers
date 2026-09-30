@@ -105,13 +105,20 @@ jobs:
         shell: bash
         working-directory: ccp
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p build "$GITHUB_WORKSPACE/out/apk"
-          godot --headless --path godot3d --export-debug Android build/TehranBlindSpot-3d-debug.apk
+          godot --headless --path godot3d --export-debug Android build/TehranBlindSpot-3d-debug.apk 2>&1 | tee /tmp/godot-export.log
+          rc=${PIPESTATUS[0]}
+          cp /tmp/godot-export.log "$GITHUB_WORKSPACE/out/"
+          if [ "$rc" -ne 0 ]; then
+            message=$(tail -60 /tmp/godot-export.log | tr '\n' ' ' | cut -c1-4000)
+            echo "::error title=Godot Android export failed::$message"
+            exit "$rc"
+          fi
           test -s build/TehranBlindSpot-3d-debug.apk
           cp build/TehranBlindSpot-3d-debug.apk "$GITHUB_WORKSPACE/out/apk/"
 
-      - name: Upload screenshots and test log
+      - name: Upload screenshots and test logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -119,6 +126,7 @@ jobs:
           path: |
             out/screenshots/
             out/godot-autotest.log
+            out/godot-export.log
           if-no-files-found: warn
           retention-days: 14
 
