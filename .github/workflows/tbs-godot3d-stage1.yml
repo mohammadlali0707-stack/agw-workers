@@ -33,16 +33,18 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Install build dependencies and Android packages
+      - name: Install build dependencies and verify Android build tools 34
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends xvfb ffmpeg unzip curl
-          sdkmanager_bin=$(find "$ANDROID_SDK_ROOT" -type f -name sdkmanager -print -quit)
-          test -x "$sdkmanager_bin"
-          yes | "$sdkmanager_bin" --licenses >/dev/null || true
-          "$sdkmanager_bin" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          if [ ! -x "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" ]; then
+            sdkmanager_bin=$(find "$ANDROID_SDK_ROOT" -type f -name sdkmanager -print -quit)
+            test -x "$sdkmanager_bin"
+            "$sdkmanager_bin" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          fi
+          test -x "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
 
       - name: Install Godot 4.3 and Android export templates
         shell: bash
