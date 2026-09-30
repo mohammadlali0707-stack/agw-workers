@@ -2,10 +2,8 @@ name: TBS Kaggle authentication smoke test
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/tbs-kaggle-auth-smoke.yml'
+  repository_dispatch:
+    types: [notion-task]
 
 permissions:
   contents: read
