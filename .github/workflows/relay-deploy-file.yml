@@ -2,6 +2,12 @@ name: relay-deploy-file
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/agw-worker.yml'
+      - '.github/workflows/agy-issue-bot.yml'
+      - '.github/workflows/relay-deploy-file.yml'
 
 permissions:
   contents: read
