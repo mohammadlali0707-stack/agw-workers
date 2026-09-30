@@ -57,8 +57,8 @@ jobs:
           install -m 0755 /tmp/godot/Godot_v4.3-stable_linux.x86_64 "$HOME/.local/bin/godot"
           cd "$HOME/.local/share/godot/export_templates/$GODOT_VERSION"
           python3 "$GITHUB_WORKSPACE/ccp/godot3d/tools/rzip.py" "https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz" version.txt android_debug.apk android_release.apk
-          test -f android_debug.apk
-          test -f android_release.apk
+          test -s android_debug.apk
+          test -s android_release.apk
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Create debug keystore and Godot editor settings
@@ -107,10 +107,19 @@ jobs:
         shell: bash
         working-directory: ccp
         run: |
-          set +e
-          set -uo pipefail
+          set -euo pipefail
+          template_dir="$HOME/.local/share/godot/export_templates/$GODOT_VERSION"
+          if [ ! -s "$template_dir/android_debug.apk" ] || [ ! -s "$template_dir/android_release.apk" ]; then
+            mkdir -p "$template_dir"
+            cd "$template_dir"
+            python3 "$GITHUB_WORKSPACE/ccp/godot3d/tools/rzip.py" "https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_export_templates.tpz" version.txt android_debug.apk android_release.apk
+            cd "$GITHUB_WORKSPACE/ccp"
+          fi
+          test -s "$template_dir/android_debug.apk"
+          test -s "$template_dir/android_release.apk"
           apk_path="$GITHUB_WORKSPACE/out/apk/TehranBlindSpot-3d-debug.apk"
           mkdir -p "$(dirname "$apk_path")"
+          set +e
           godot --verbose --headless --path godot3d --export-debug Android "$apk_path" 2>&1 | tee /tmp/godot-export.log
           rc=${PIPESTATUS[0]}
           set -e
