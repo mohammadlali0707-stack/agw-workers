@@ -47,7 +47,7 @@ jobs:
           blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/Soldier.glb" 2>&1 | tee out/kaveh-build.log
           rc=${PIPESTATUS[0]}
           set -e
-          if [ "$rc" -ne 0 ]; then
+          if [ "$rc" -ne 0 ] || [ ! -s out/kaveh/Soldier.glb ] || ! grep -q 'KAVEH_OK' out/kaveh-build.log; then
             message=$(tail -35 out/kaveh-build.log | cut -c1-3200)
             message=${message//'%'/'%25'}
             message=${message//$'\r'/'%0D'}
@@ -55,8 +55,6 @@ jobs:
             echo "::error title=Kaveh Blender build failed::$message"
             exit 1
           fi
-          test -s out/kaveh/Soldier.glb
-          grep -q 'KAVEH_OK' out/kaveh-build.log
 
       - name: Fetch Sketchfab CC0 or CC-BY props and Freesound CC0 ambience
         shell: bash
