@@ -38,10 +38,11 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends xvfb libgl1 libegl1 libx11-6 libxcursor1 libxinerama1 libxrandr2 libxi6 libasound2t64 ffmpeg unzip curl
-          command -v sdkmanager
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          sudo apt-get install -y --no-install-recommends xvfb ffmpeg unzip curl
+          sdkmanager_bin=$(find "$ANDROID_SDK_ROOT" -type f -name sdkmanager -print -quit)
+          test -x "$sdkmanager_bin"
+          yes | "$sdkmanager_bin" --licenses >/dev/null || true
+          "$sdkmanager_bin" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Install Godot 4.3 and Android export templates
         shell: bash
