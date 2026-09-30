@@ -67,6 +67,11 @@ on:
         required: false
         default: 'false'
         type: string
+      failover_tried:
+        description: 'Comma-separated account indexes already attempted for this task. Managed by the ACC6 failover router.'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -285,15 +290,54 @@ jobs:
             fi
           }
           OUTPUT=$(agy_invoke)
+          AGY_RC=$?
           echo "$OUTPUT" > /tmp/agy_output.txt
-          if is_quota_error /tmp/agy_output.txt; then
-            echo "::error::acc${USED_IDX} hit a quota/rate-limit error; account pinning prevents fallback to another identity"
+          AGY_OK=true
+          FAILURE_REASON=""
+          if [ "$AGY_RC" -ne 0 ]; then
+            AGY_OK=false
+            FAILURE_REASON="exit-code-${AGY_RC}"
+          elif [ ! -s /tmp/agy_output.txt ]; then
+            AGY_OK=false
+            FAILURE_REASON="empty-output"
+          elif grep -qiE 'too many requests|rate limit|rate-limit|429|quota|unauthorized|authentication failed|invalid (api key|token)|not logged in|timeout waiting|timed out' /tmp/agy_output.txt; then
+            AGY_OK=false
+            FAILURE_REASON="technical-error-in-output"
+          fi
+          if [ "$AGY_OK" != "true" ]; then
+            echo "::error::AGY technical failure on acc${USED_IDX}: ${FAILURE_REASON}; requesting cross-account failover through ACC6"
           fi
           echo "used_idx=$USED_IDX" >> "$GITHUB_OUTPUT"
+          echo "agy_ok=$AGY_OK" >> "$GITHUB_OUTPUT"
+          echo "failure_reason=$FAILURE_REASON" >> "$GITHUB_OUTPUT"
           echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
 
+      - name: Route technical failure through ACC6
+        if: steps.run_agy.outputs.agy_ok != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          PROMPT_INPUT: ${{ inputs.prompt }}
+          FAILED_ACCOUNT: ${{ steps.pick_token.outputs.acc_idx }}
+          TRIED_ACCOUNTS: ${{ inputs.failover_tried }}
+          FAILURE_REASON: ${{ steps.run_agy.outputs.failure_reason }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          CALLBACK_ID: ${{ inputs.callback_id }}
+          REPORT_DIR: ${{ inputs.report_dir }}
+          CALLBACK_REPO: ${{ inputs.callback_repo }}
+          MODEL_INPUT: ${{ inputs.model }}
+        run: |
+          set -e
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::ACC6_PAT is missing; cannot contact the central failover router"
+            exit 1
+          fi
+          gh workflow run agw-failover-router.yml             --repo mohammadlali0707-stack/agw-workers             --field "prompt=$PROMPT_INPUT"             --field "failed_account=$FAILED_ACCOUNT"             --field "tried_accounts=$TRIED_ACCOUNTS"             --field "failure_reason=$FAILURE_REASON"             --field "target_repo=$TARGET_REPO"             --field "target_branch=$TARGET_BRANCH"             --field "issue_number=$ISSUE_NUMBER"             --field "callback_id=$CALLBACK_ID"             --field "report_dir=$REPORT_DIR"             --field "callback_repo=$CALLBACK_REPO"             --field "model=$MODEL_INPUT"
+          echo "Failover request sent to ACC6 router."
+
       - name: Relay any media request from agy's output
-        if: always()
+        if: always() && steps.run_agy.outputs.agy_ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -314,7 +358,7 @@ jobs:
             --body "@media $DESC"
 
       - name: Post agy's output as a comment
-        if: always()
+        if: always() && steps.run_agy.outputs.agy_ok == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ inputs.issue_number }}
@@ -348,7 +392,7 @@ jobs:
           gh issue comment "$ISSUE_NUMBER" --repo "$TARGET_REPO" --body-file /tmp/agy_comment.txt
 
       - name: Push changes made by the agent
-        if: steps.checkout_target.outputs.has_repo == 'true'
+        if: steps.checkout_target.outputs.has_repo == 'true' && steps.run_agy.outputs.agy_ok == 'true'
         env:
           TARGET_REPO: ${{ inputs.target_repo }}
           TARGET_BRANCH: ${{ inputs.target_branch }}

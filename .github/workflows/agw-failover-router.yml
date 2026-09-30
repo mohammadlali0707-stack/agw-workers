@@ -1,0 +1,139 @@
+name: AGW Failover Router (ACC6)
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        required: true
+        type: string
+      failed_account:
+        required: true
+        type: string
+      tried_accounts:
+        required: false
+        default: ''
+        type: string
+      failure_reason:
+        required: false
+        default: ''
+        type: string
+      target_repo:
+        required: false
+        default: ''
+        type: string
+      target_branch:
+        required: false
+        default: ''
+        type: string
+      issue_number:
+        required: false
+        default: ''
+        type: string
+      callback_id:
+        required: false
+        default: ''
+        type: string
+      report_dir:
+        required: false
+        default: ''
+        type: string
+      callback_repo:
+        required: false
+        default: ''
+        type: string
+      model:
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+jobs:
+  reroute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+      PROMPT_INPUT: ${{ inputs.prompt }}
+      FAILED_ACCOUNT: ${{ inputs.failed_account }}
+      TRIED_INPUT: ${{ inputs.tried_accounts }}
+      FAILURE_REASON: ${{ inputs.failure_reason }}
+      TARGET_REPO: ${{ inputs.target_repo }}
+      TARGET_BRANCH: ${{ inputs.target_branch }}
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+      CALLBACK_ID: ${{ inputs.callback_id }}
+      REPORT_DIR: ${{ inputs.report_dir }}
+      CALLBACK_REPO: ${{ inputs.callback_repo }}
+      MODEL_INPUT: ${{ inputs.model }}
+    steps:
+      - name: Select an untried account and dispatch its own worker repo
+        run: |
+          set -euo pipefail
+          normalize_tried() {
+            printf ',%s,' "$1" | tr -d ' ' | sed 's/,,*/,/g'
+          }
+          if [ -n "$TRIED_INPUT" ]; then
+            TRIED="${TRIED_INPUT},${FAILED_ACCOUNT}"
+          else
+            TRIED="$FAILED_ACCOUNT"
+          fi
+          TRIED_PADDED=$(normalize_tried "$TRIED")
+          NEXT=""
+          for OFFSET in 1 2 3 4 5 6 7 8; do
+            CANDIDATE=$(( (FAILED_ACCOUNT + OFFSET) % 9 ))
+            case "$TRIED_PADDED" in
+              *",${CANDIDATE},"*) ;;
+              *) NEXT="$CANDIDATE"; break ;;
+            esac
+          done
+          if [ -z "$NEXT" ]; then
+            echo "::error::All ACC0-ACC8 workers have already been attempted for callback ${CALLBACK_ID}"
+            if [ -n "$ISSUE_NUMBER" ]; then
+              GH_TOKEN="$ACC6_PAT" gh issue comment "$ISSUE_NUMBER" \
+                --repo "${CALLBACK_REPO:-mohammadlali0707-stack/agw-workers}" \
+                --body "همهٔ کارگرهای ACC0 تا ACC8 برای این تسک امتحان شدند و خطای فنی داشتند. آخرین خطا: ${FAILURE_REASON}" || true
+            fi
+            exit 1
+          fi
+          declare -A OWNERS=(
+            [0]=Mohammadlali
+            [1]=momonakikugava-pixel
+            [2]=lali94m-max
+            [3]=ngocgminh5-debug
+            [4]=hmmletssee7-design
+            [5]=kidding602
+            [6]=mohammadlali0707-stack
+            [7]=mohammad97okk
+            [8]=moradzahra85-png
+          )
+          OWNER="${OWNERS[$NEXT]}"
+          PAT_NAME="ACC${NEXT}_PAT"
+          TOKEN="${!PAT_NAME}"
+          if [ -z "$TOKEN" ]; then
+            echo "::error::$PAT_NAME is missing in ACC6; cannot dispatch $OWNER/agw-workers"
+            exit 1
+          fi
+          echo "Rerouting callback ${CALLBACK_ID}: ACC${FAILED_ACCOUNT} -> ACC${NEXT} ($OWNER), tried=${TRIED}"
+          export GH_TOKEN="$TOKEN"
+          gh workflow run agw-worker.yml \
+            --repo "$OWNER/agw-workers" \
+            --field "prompt=$PROMPT_INPUT" \
+            --field "target_repo=$TARGET_REPO" \
+            --field "target_branch=$TARGET_BRANCH" \
+            --field "issue_number=$ISSUE_NUMBER" \
+            --field "callback_id=$CALLBACK_ID" \
+            --field "report_dir=$REPORT_DIR" \
+            --field "callback_repo=$CALLBACK_REPO" \
+            --field "model=$MODEL_INPUT" \
+            --field "failover_tried=$TRIED"
