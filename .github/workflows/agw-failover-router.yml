@@ -92,17 +92,19 @@ jobs:
           NEXT=""
           for OFFSET in 1 2 3 4 5 6 7 8; do
             CANDIDATE=$(( (FAILED_ACCOUNT + OFFSET) % 9 ))
+            # ACC6 is untrusted: it routes failovers but never executes them.
+            [ "$CANDIDATE" = "6" ] && continue
             case "$TRIED_PADDED" in
               *",${CANDIDATE},"*) ;;
               *) NEXT="$CANDIDATE"; break ;;
             esac
           done
           if [ -z "$NEXT" ]; then
-            echo "::error::All ACC0-ACC8 workers have already been attempted for callback ${CALLBACK_ID}"
+            echo "::error::All eligible workers (ACC0-ACC8 except ACC6) have already been attempted for callback ${CALLBACK_ID}"
             if [ -n "$ISSUE_NUMBER" ]; then
               GH_TOKEN="$ACC6_PAT" gh issue comment "$ISSUE_NUMBER" \
                 --repo "${CALLBACK_REPO:-mohammadlali0707-stack/agw-workers}" \
-                --body "همهٔ کارگرهای ACC0 تا ACC8 برای این تسک امتحان شدند و خطای فنی داشتند. آخرین خطا: ${FAILURE_REASON}" || true
+                --body "همهٔ کارگرهای ACC0 تا ACC8 (به‌جز ACC6) برای این تسک امتحان شدند و خطای فنی داشتند. آخرین خطا: ${FAILURE_REASON}" || true
             fi
             exit 1
           fi

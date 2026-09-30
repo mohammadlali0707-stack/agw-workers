@@ -12,10 +12,10 @@ name: AGY Account Lead (plan + dispatch up to max_subordinates, collect, aggrega
 #
 # 1. Runs agy AS this account's own identity to break package_goal into up
 #    to max_subordinates tasks (default 2, owner instruction 2026-09-18) --
-#    one per subordinate member (w02-w11 per Team/org.json). The cap is
+#    one per subordinate member (w02-w03 per Team/org.json). The cap is
 #    ENFORCED in the parser, not merely requested in the prompt. With
 #    max_subordinates=0 the lead does the whole package itself as w01 and
-#    dispatches nobody, which is one bot per account instead of eleven.
+#    dispatches nobody, which is one bot per account instead of three.
 # 2. Dispatches agw-worker.yml once per surviving task, same identity,
 #    5 SECONDS APART (the owner's own anti-rate-limit design -- these
 #    calls share the lead's own Antigravity quota), each writing its
@@ -43,7 +43,7 @@ on:
         default: ''
         type: string
       max_subordinates:
-        description: 'Hard cap on subordinates this lead may dispatch. 0 = the lead does the whole package itself as w01 and dispatches nobody. Default 2.'
+        description: 'Hard cap on subordinates this lead may dispatch (max 2: the fleet is 3 bots per account). 0 = the lead does the whole package itself as w01 and dispatches nobody. Default 2.'
         required: false
         default: '2'
         type: string
@@ -234,7 +234,7 @@ jobs:
             printf '%s\n' "You are agw-ACC${ACCOUNT}-w01, the LEAD of account ${ACCOUNT} on this fleet. This is a PLANNING request only -- do not write, edit, commit or dispatch anything yourself."
             printf '\nYOUR PACKAGE (the scope your team owns):\n%s\n' "$SAFE_GOAL"
             printf '\nDo this, in order:\n'
-            printf '%s\n' "1. Read Team/org.json in this checked-out repo. Find the \"members\" entries whose \"account\" is your own account number and whose \"role\" is NOT 'lead' -- those are your subordinates (w02..w11). Note each one's id, title, and guild. You may use AT MOST ${MAX_SUBORDINATES} of them."
+            printf '%s\n' "1. Read Team/org.json in this checked-out repo. Find the \"members\" entries whose \"account\" is your own account number and whose \"role\" is NOT 'lead' and whose \"active\" is not false -- those are your subordinates (only w02 and w03 are active; w04..w11 are retired). Note each one's id, title, and guild. You may use AT MOST ${MAX_SUBORDINATES} of them."
             if [ "${MAX_SUBORDINATES}" -eq 0 ]; then
               printf '%s\n' '   THIS RUN HAS A CAP OF ZERO SUBORDINATES. You do the whole package YOURSELF as w01. Produce exactly ONE task, with member_id set to your own w01 id, whose task text is the complete work -- not a plan for someone else to do.'
             fi
@@ -328,6 +328,9 @@ jobs:
               sys.exit(1)
           tasks = plan.get('tasks', [])
           cap = int(os.environ.get('MAX_SUBORDINATES', '2'))
+          if cap > 2:
+              print('CAP: max_subordinates={0} exceeds the 3-bot fleet (w01 + 2); clamping to 2'.format(cap))
+              cap = 2
           lead_does_it = (cap == 0)
           effective = 1 if lead_does_it else cap
           if len(tasks) > effective:
@@ -337,6 +340,17 @@ jobs:
                             [t.get('title', '?') for t in tasks[effective:]]))
               tasks = tasks[:effective]
           os.makedirs('/tmp/subtasks', exist_ok=True)
+          # Fleet is 3 bots per account (w01 lead + w02, w03). The checklist and
+          # callback tags are w01 (cap 0) or w02.. by position, so pin member_id
+          # to the same slot: a lead naming a retired w04..w11 member must not
+          # produce a task whose identity disagrees with its tag.
+          for i, t in enumerate(tasks):
+              slot = 'w01' if lead_does_it else 'w{0:02d}'.format(i + 2)
+              want = 'agw-ACC{0}-{1}'.format(account, slot)
+              if t.get('member_id') != want:
+                  print('SLOT: task {0} named member {1!r}; pinned to {2} '
+                        '(active fleet is w01..w03)'.format(i, t.get('member_id'), want))
+                  t['member_id'] = want
           for i, t in enumerate(tasks):
               member = t.get('member_id') or 'unknown'
               title = t.get('title', 'task')
@@ -401,11 +415,39 @@ jobs:
         env:
           AGY_TOKEN_INPUT: ${{ inputs.agy_token_b64 }}
           TARGET_REPO_PAT: ${{ steps.checkout_target.outputs.token }}
+          ACC0_PAT: ${{ secrets.ACC0_PAT }}
+          ACC1_PAT: ${{ secrets.ACC1_PAT }}
+          ACC2_PAT: ${{ secrets.ACC2_PAT }}
+          ACC3_PAT: ${{ secrets.ACC3_PAT }}
+          ACC4_PAT: ${{ secrets.ACC4_PAT }}
+          ACC5_PAT: ${{ secrets.ACC5_PAT }}
+          ACC7_PAT: ${{ secrets.ACC7_PAT }}
+          ACC8_PAT: ${{ secrets.ACC8_PAT }}
         run: |
           set -e
           COUNT=$(cat /tmp/subtask_count.txt)
           REPORT_DIR="acc${ACCOUNT}"
-          THIS_REPO="${GITHUB_REPOSITORY}"
+          # Account pinning (agw-worker.yml) authenticates with the REPO OWNER's
+          # AGW token and ignores acc_index/agy_token_b64. Dispatching into this
+          # repo (ACC6) would therefore run every subordinate as ACC6. Send each
+          # subordinate to its own account's agw-workers repo instead.
+          case "$ACCOUNT" in
+            0) WORKER_OWNER="Mohammadlali";         DISPATCH_PAT="$ACC0_PAT" ;;
+            1) WORKER_OWNER="momonakikugava-pixel"; DISPATCH_PAT="$ACC1_PAT" ;;
+            2) WORKER_OWNER="lali94m-max";          DISPATCH_PAT="$ACC2_PAT" ;;
+            3) WORKER_OWNER="ngocgminh5-debug";     DISPATCH_PAT="$ACC3_PAT" ;;
+            4) WORKER_OWNER="hmmletssee7-design";   DISPATCH_PAT="$ACC4_PAT" ;;
+            5) WORKER_OWNER="kidding602";           DISPATCH_PAT="$ACC5_PAT" ;;
+            7) WORKER_OWNER="mohammad97okk";        DISPATCH_PAT="$ACC7_PAT" ;;
+            8) WORKER_OWNER="moradzahra85-png";     DISPATCH_PAT="$ACC8_PAT" ;;
+            *) echo "::error::account=$ACCOUNT has no worker repo (6 and 9 are never leads)"; exit 1 ;;
+          esac
+          if [ -z "$DISPATCH_PAT" ]; then
+            echo "::error::ACC${ACCOUNT}_PAT is missing; refusing to fall back to ACC6"
+            exit 1
+          fi
+          echo "::add-mask::$DISPATCH_PAT"
+          THIS_REPO="${WORKER_OWNER}/agw-workers"
           for i in $(seq 0 $((COUNT - 1))); do
             PROMPT=$(cat "/tmp/subtasks/${i}.txt")
             META=$(cat "/tmp/subtasks/${i}.meta")
@@ -421,7 +463,7 @@ jobs:
             if [ -n "$MODEL_INPUT" ]; then
               EXTRA+=(--field "model=$MODEL_INPUT" --field "quota_walk=true")
             fi
-            gh workflow run agw-worker.yml \
+            GH_TOKEN="$DISPATCH_PAT" gh workflow run agw-worker.yml \
               --repo "$THIS_REPO" \
               --field "prompt=$PROMPT" \
               --field "target_repo=$TARGET_REPO" \

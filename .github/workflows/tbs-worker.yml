@@ -1,4 +1,4 @@
-# One account's eleven workers, run on GitHub's machines instead of a laptop.
+# One account's three workers, run on GitHub's machines instead of a laptop.
 #
 # This file is the AUTHORITATIVE copy. It lives in the hub repository and is
 # synced out to `agw-workers` in each of the nine accounts. Editing a copy in
@@ -30,10 +30,10 @@ on:
     inputs:
       workers:
         description: 'slots to wake, space separated'
-        default: 'w01 w02 w03 w04 w05 w06 w07 w08 w09 w10 w11'
+        default: 'w01 w02 w03'
       max_parallel:
         description: 'how many may run at once (see STAGGER note)'
-        default: '11'
+        default: '3'
       stagger_seconds:
         description: 'seconds between starts, per account'
         default: '5'
@@ -55,8 +55,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SLOTS="${{ github.event.inputs.workers || github.event.client_payload.workers || 'w01 w02 w03 w04 w05 w06 w07 w08 w09 w10 w11' }}"
-          PAR="${{ github.event.inputs.max_parallel || github.event.client_payload.max_parallel || '11' }}"
+          SLOTS="${{ github.event.inputs.workers || github.event.client_payload.workers || 'w01 w02 w03' }}"
+          PAR="${{ github.event.inputs.max_parallel || github.event.client_payload.max_parallel || '3' }}"
           ACC="${{ vars.TBS_ACCOUNT }}"
           if [ -z "$ACC" ]; then
             echo "::error::vars.TBS_ACCOUNT is not set in this repository."
@@ -84,7 +84,7 @@ jobs:
     timeout-minutes: 45
     strategy:
       fail-fast: false          # one worker's failure is a finding, not a reason
-      max-parallel: 11          # see STAGGER note below before lowering this
+      max-parallel: 3           # see STAGGER note below before lowering this
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
       - name: Check out the hub repository
