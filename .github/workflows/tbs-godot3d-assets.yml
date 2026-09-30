@@ -42,8 +42,19 @@ jobs:
       - name: Build rigged Kaveh GLB with Idle Walk Run
         shell: bash
         run: |
-          set -euo pipefail
-          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/Soldier.glb"
+          set +e
+          set -uo pipefail
+          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/Soldier.glb" 2>&1 | tee /tmp/kaveh-build.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            message=$(tail -35 /tmp/kaveh-build.log | cut -c1-3200)
+            message=${message//'%'/'%25'}
+            message=${message//$'\r'/'%0D'}
+            message=${message//$'\n'/'%0A'}
+            echo "::error title=Kaveh Blender build failed::$message"
+            exit 1
+          fi
           test -s out/kaveh/Soldier.glb
           blender --background --factory-startup --python-expr "import bpy; bpy.ops.import_scene.gltf(filepath='$GITHUB_WORKSPACE/out/kaveh/Soldier.glb'); assert any(o.type == 'ARMATURE' for o in bpy.context.scene.objects); assert {'Idle','Walk','Run'}.issubset({a.name for a in bpy.data.actions}); print('KAVEH_VALID')"
 
@@ -55,9 +66,12 @@ jobs:
           test -s out/licensed-assets/CREDITS.md
 
       - name: Upload Kaveh and licensed asset pack
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tbs-godot3d-free-assets-${{ github.run_number }}
-          path: out/
+          path: |
+            out/
+            /tmp/kaveh-build.log
           if-no-files-found: error
           retention-days: 14
