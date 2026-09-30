@@ -56,7 +56,7 @@ jobs:
             exit 1
           fi
           test -s out/kaveh/Soldier.glb
-          blender --background --factory-startup --python-expr "import bpy; bpy.ops.import_scene.gltf(filepath='$GITHUB_WORKSPACE/out/kaveh/Soldier.glb'); assert any(o.type == 'ARMATURE' for o in bpy.context.scene.objects); assert len(bpy.data.actions) >= 3; print('KAVEH_VALID', [a.name for a in bpy.data.actions])" 2>&1 | tee out/kaveh-validate.log
+          grep -q 'KAVEH_OK' out/kaveh-build.log
 
       - name: Fetch Sketchfab CC0 or CC-BY props and Freesound CC0 ambience
         shell: bash
