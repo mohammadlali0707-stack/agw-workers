@@ -111,12 +111,12 @@ jobs:
           set -uo pipefail
           apk_path="$GITHUB_WORKSPACE/out/apk/TehranBlindSpot-3d-debug.apk"
           mkdir -p "$(dirname "$apk_path")"
-          godot --headless --path godot3d --export-debug Android "$apk_path" 2>&1 | tee /tmp/godot-export.log
+          godot --verbose --headless --path godot3d --export-debug Android "$apk_path" 2>&1 | tee /tmp/godot-export.log
           rc=${PIPESTATUS[0]}
           set -e
           cp /tmp/godot-export.log "$GITHUB_WORKSPACE/out/"
           if [ "$rc" -ne 0 ] || [ ! -s "$apk_path" ]; then
-            message=$(grep -Ei 'error|failed|invalid|missing|not found|unsupported' /tmp/godot-export.log | tail -8 | tr '\n' ' ' | cut -c1-1800 || true)
+            message=$(tail -50 /tmp/godot-export.log | cut -c1-3500)
             message=${message//'%'/'%25'}
             message=${message//$'\r'/'%0D'}
             message=${message//$'\n'/'%0A'}
