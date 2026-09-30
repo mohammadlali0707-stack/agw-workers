@@ -1,0 +1,63 @@
+name: TBS Godot 3D stages 2 and 3 assets
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [notion-task]
+
+permissions:
+  contents: read
+
+jobs:
+  build-assets:
+    if: github.event_name == 'workflow_dispatch' || github.event.client_payload.page_id == 'tbs-godot3d-assets'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SKETCHFAB_API_TOKEN: ${{ secrets.SKETCHFAB_API_TOKEN }}
+      FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
+      FREESOUND_CLIENT_ID: ${{ secrets.FREESOUND_CLIENT_ID }}
+      FREESOUND_CLIENT_SECRET: ${{ secrets.FREESOUND_CLIENT_SECRET }}
+      ASSET_OUT: ${{ github.workspace }}/out/licensed-assets
+    steps:
+      - name: Check out private game repository
+        uses: actions/checkout@v5
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+          ref: main
+          fetch-depth: 0
+          path: ccp
+
+      - name: Install Blender and download Quaternius CC0 library
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends blender curl
+          mkdir -p source out/kaveh
+          curl --retry 4 --retry-all-errors -fsSL -o source/AnimationLibrary_Godot_Standard.gltf https://raw.githubusercontent.com/J-Ponzo/gltf-universal-animation-library/main/glTF/AnimationLibrary_Godot_Standard.gltf
+          curl --retry 4 --retry-all-errors -fsSL -o source/AnimationLibrary_Godot_Standard.bin https://raw.githubusercontent.com/J-Ponzo/gltf-universal-animation-library/main/glTF/AnimationLibrary_Godot_Standard.bin
+
+      - name: Build rigged Kaveh GLB with Idle Walk Run
+        shell: bash
+        run: |
+          set -euo pipefail
+          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/Soldier.glb"
+          test -s out/kaveh/Soldier.glb
+          blender --background --factory-startup --python-expr "import bpy; bpy.ops.import_scene.gltf(filepath='$GITHUB_WORKSPACE/out/kaveh/Soldier.glb'); assert any(o.type == 'ARMATURE' for o in bpy.context.scene.objects); assert {'Idle','Walk','Run'}.issubset({a.name for a in bpy.data.actions}); print('KAVEH_VALID')"
+
+      - name: Fetch Sketchfab CC0 or CC-BY props and Freesound CC0 ambience
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ccp/godot3d/tools/fetch_cc_assets.py
+          test -s out/licensed-assets/CREDITS.md
+
+      - name: Upload Kaveh and licensed asset pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: tbs-godot3d-free-assets-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
