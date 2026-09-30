@@ -1,0 +1,51 @@
+{
+  "v": 1,
+  "note": "Machine-readable twin of Team/COMPANY_SCOPE.md. Tools/check_company_scope.py checks the two agree. Tools/route_topic.py reads this file, not the markdown, to decide where an issue goes.",
+  "accounts": {
+    "ACC0": {"login": "Mohammadlali", "nickname": "1997"},
+    "ACC1": {"login": "momonakikugava-pixel", "nickname": "Momona"},
+    "ACC2": {"login": "lali94m-max", "nickname": "94"},
+    "ACC3": {"login": "ngocgminh5-debug", "nickname": "ngocg"},
+    "ACC4": {"login": "hmmletssee7-design", "nickname": "lets"},
+    "ACC5": {"login": "kidding602", "nickname": "Just"},
+    "ACC6": {"login": "mohammadlali0707-stack", "nickname": "07"},
+    "ACC7": {"login": "mohammad97okk", "nickname": "M2"},
+    "ACC8": {"login": "moradzahra85-png", "nickname": "zahra"}
+  },
+  "projects": {
+    "control-room": {
+      "host_account": "ACC6",
+      "host_repo": "Control-Room",
+      "keywords": ["control-room", "control room", "org.json", "governance",
+        "collaborator", "account scope", "company scope", "topic router",
+        "routing table", "agy issue bot", "batch-dispatch", "9 accounts",
+        "nine accounts", "acc0-acc8", "fleet management"]
+    },
+    "tbs": {
+      "host_account": "ACC6",
+      "host_repo": "Claud-Cloud-Project",
+      "display_name": "TEHRAN: BLIND SPOT",
+      "keywords": ["tbs", "tehran", "blind spot", "valiasr", "district",
+        "unreal", "ren'py", "renpy", "narrative game", "narrative and audio",
+        "persian narrative", "persian text", "persian ui", "vn engine",
+        "android build", "lumen", "nanite", "rotator", "district_schema",
+        "gateway-auth-fix", "org.json domain", "tbs-manager", "tbs-gates"]
+    },
+    "airboxvip": {
+      "host_account": "ACC1",
+      "host_repo": "AirboxVIP_Coffeenet",
+      "display_name": "AirboxVIP Coffeenet",
+      "keywords": ["airbox", "airboxvip", "coffeenet", "coffee", "cafe",
+        "kiosk", "menu ordering"]
+    },
+    "status_dashboard": {
+      "host_account": "ACC6",
+      "host_repo": "status-dashboard",
+      "display_name": "Status Dashboard",
+      "keywords": ["status dashboard", "status-dashboard", "status feed",
+        "status.json", "collect_status_feed", "status.airboxvip.top",
+        "quiet green", "stuck items", "project card", "gate card",
+        "vercel deploy", "cron-job.org"]
+    }
+  }
+}
