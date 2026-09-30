@@ -63,6 +63,20 @@ jobs:
           python3 ccp/godot3d/tools/fetch_cc_assets.py
           test -s out/licensed-assets/CREDITS.md
 
+      - name: Commit attribution text only
+        shell: bash
+        working-directory: ccp
+        run: |
+          set -euo pipefail
+          cp "$GITHUB_WORKSPACE/out/licensed-assets/CREDITS.md" godot3d/CREDITS.md
+          git config user.name tbs-asset-ci
+          git config user.email tbs-asset-ci@users.noreply.github.com
+          if ! git diff --quiet -- godot3d/CREDITS.md; then
+            git add godot3d/CREDITS.md
+            git commit -m "docs(godot3d): record licensed prop and audio credits"
+            git push origin HEAD:main
+          fi
+
       - name: Upload Kaveh and licensed asset pack
         if: always()
         uses: actions/upload-artifact@v4
