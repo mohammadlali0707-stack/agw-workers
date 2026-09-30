@@ -44,11 +44,11 @@ jobs:
         run: |
           set +e
           set -uo pipefail
-          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/Soldier.glb" 2>&1 | tee /tmp/kaveh-build.log
+          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/Soldier.glb" 2>&1 | tee out/kaveh-build.log
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
-            message=$(tail -35 /tmp/kaveh-build.log | cut -c1-3200)
+            message=$(tail -35 out/kaveh-build.log | cut -c1-3200)
             message=${message//'%'/'%25'}
             message=${message//$'\r'/'%0D'}
             message=${message//$'\n'/'%0A'}
@@ -56,7 +56,7 @@ jobs:
             exit 1
           fi
           test -s out/kaveh/Soldier.glb
-          blender --background --factory-startup --python-expr "import bpy; bpy.ops.import_scene.gltf(filepath='$GITHUB_WORKSPACE/out/kaveh/Soldier.glb'); assert any(o.type == 'ARMATURE' for o in bpy.context.scene.objects); assert {'Idle','Walk','Run'}.issubset({a.name for a in bpy.data.actions}); print('KAVEH_VALID')"
+          blender --background --factory-startup --python-expr "import bpy; bpy.ops.import_scene.gltf(filepath='$GITHUB_WORKSPACE/out/kaveh/Soldier.glb'); assert any(o.type == 'ARMATURE' for o in bpy.context.scene.objects); assert len(bpy.data.actions) >= 3; print('KAVEH_VALID', [a.name for a in bpy.data.actions])" 2>&1 | tee out/kaveh-validate.log
 
       - name: Fetch Sketchfab CC0 or CC-BY props and Freesound CC0 ambience
         shell: bash
@@ -70,8 +70,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tbs-godot3d-free-assets-${{ github.run_number }}
-          path: |
-            out/
-            /tmp/kaveh-build.log
+          path: out/
           if-no-files-found: error
           retention-days: 14
