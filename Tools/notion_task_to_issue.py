@@ -224,7 +224,14 @@ def main():
              "failed": 0, "boards": [b[0] for b in boards]}
     work = []
     for label, token, db_id in boards:
-        rows = find_candidates(token, db_id)
+        try:
+            rows = find_candidates(token, db_id)
+        except RuntimeError as e:
+            # One unreachable board (e.g. not shared with the integration) must
+            # not stop the other board's ticked tasks from becoming issues.
+            print(f"::warning::board {label} unreachable, skipped: {str(e)[:200]}")
+            stats.setdefault("boards_failed", []).append(label)
+            continue
         print(f"{len(rows)} task(s) with Plan ticked and no issue yet "
               f"({label})")
         stats["found"] += len(rows)
