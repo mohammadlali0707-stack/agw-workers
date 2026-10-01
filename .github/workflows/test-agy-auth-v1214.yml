@@ -1,0 +1,101 @@
+name: "TEST: agy auth with fixed install_id + v1.2.14 (ACC3)"
+
+# Triggered manually to test if agy v1.2.14 + fixed installation_id
+# can auto-refresh an expired token without failing.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  test-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Install AGY CLI v1.2.14 from GitHub Release
+        run: |
+          curl -L \
+            "https://github.com/mohammadlali0707-stack/agw-workers/releases/download/agy-cli-v1.2.14/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          if [ -z "$CLI_BIN" ]; then
+            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          fi
+          AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
+          mkdir -p "$AGY_BIN_DIR"
+          install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
+          echo "$AGY_BIN_DIR" >> "$GITHUB_PATH"
+          export PATH="$AGY_BIN_DIR:$PATH"
+          echo "agy version: $(agy --version 2>/dev/null)"
+
+      - name: Restore ACC3 token with FIXED installation_id
+        env:
+          AGW_TOKEN_ACC3:      ${{ secrets.AGW_TOKEN_ACC3 }}
+          AGW_INSTALL_ID_ACC3: ${{ secrets.AGW_INSTALL_ID_ACC3 }}
+        run: |
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          # Write token (base64-encoded in secret)
+          echo "$AGW_TOKEN_ACC3" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          # Use FIXED installation_id from container (not random UUID)
+          echo "$AGW_INSTALL_ID_ACC3" > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+          # Show expiry without revealing token values
+          python3 - <<'PYEOF'
+          import json, sys
+          with open("/root/.gemini/antigravity-cli/antigravity-oauth-token") as f:
+              d = json.load(f)
+          tok = d.get("token", {})
+          print(f"Token expiry: {tok.get('expiry','?')}")
+          print(f"Has refresh_token: {bool(tok.get('refresh_token'))}")
+          print(f"Has access_token: {bool(tok.get('access_token'))}")
+          PYEOF
+          echo "installation_id bytes: $(wc -c < ~/.gemini/antigravity-cli/installation_id)"
+
+      - name: Run agy with a simple prompt (test auto-refresh)
+        id: agy_test
+        run: |
+          echo "Running agy..."
+          set +e
+          timeout 120 agy --dangerously-skip-permissions --print-timeout 90s \
+            -p "Reply with exactly one word: OK" \
+            > /tmp/agy_out.txt 2>&1
+          AGY_RC=$?
+          echo "Exit code: $AGY_RC"
+          echo "Output length: $(wc -c < /tmp/agy_out.txt)"
+          # Classify result (no raw output printed)
+          if grep -qiE 'authentication required|auth.*failed|sign in|log in' /tmp/agy_out.txt; then
+            echo "RESULT=fail_auth"
+            echo "result=fail_auth" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'quota|rate.?limit|429' /tmp/agy_out.txt; then
+            echo "RESULT=ok_quota"
+            echo "result=ok_quota" >> "$GITHUB_OUTPUT"
+          elif [ "$AGY_RC" -eq 0 ]; then
+            echo "RESULT=ok"
+            echo "result=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "RESULT=unknown (rc=$AGY_RC)"
+            echo "result=unknown" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report result as issue comment
+        if: always()
+        env:
+          RESULT: ${{ steps.agy_test.outputs.result }}
+        run: |
+          MSG="**AGY auth test (ACC3, v1.2.14 + fixed install_id):** \`${RESULT:-unknown}\`"
+          if [ "${RESULT}" = "ok" ] || [ "${RESULT}" = "ok_quota" ]; then
+            MSG="${MSG} ✅ — خودبه‌خود refresh کرد!"
+          else
+            MSG="${MSG} ❌ — هنوز auth fail"
+          fi
+          gh issue comment 70 \
+            --repo mohammadlali0707-stack/agw-workers \
+            --body "$MSG" || echo "Could not post comment"
