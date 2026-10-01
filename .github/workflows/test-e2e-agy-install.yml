@@ -1,0 +1,87 @@
+name: "TEST e2e: install agy v1.2.14 + run say-ok (ACC3)"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Install AGY CLI v1.2.14 from HF (private, with token)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          curl -fsSL \
+            -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            -o /tmp/cli.tar.gz
+          echo "Downloaded: $(wc -c < /tmp/cli.tar.gz) bytes"
+          mkdir -p /tmp/agx
+          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          [ -z "$CLI_BIN" ] && CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          AGY_DIR="${RUNNER_TEMP}/agy-bin"
+          mkdir -p "$AGY_DIR"
+          install -m 0755 "$CLI_BIN" "$AGY_DIR/agy"
+          echo "$AGY_DIR" >> "$GITHUB_PATH"
+          export PATH="$AGY_DIR:$PATH"
+          echo "agy version: $(agy --version 2>/dev/null)"
+
+      - name: Restore ACC3 token + fixed installation_id
+        env:
+          AGW_TOKEN_ACC3:      ${{ secrets.AGW_TOKEN_ACC3 }}
+          AGW_INSTALL_ID_ACC3: ${{ secrets.AGW_INSTALL_ID_ACC3 }}
+        run: |
+          mkdir -p "$HOME/.gemini/antigravity-cli" "$HOME/.gemini/config"
+          printf '%s' "$AGW_TOKEN_ACC3" | base64 -d > "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+          chmod 600 "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+          printf '%s' "$AGW_INSTALL_ID_ACC3" > "$HOME/.gemini/antigravity-cli/installation_id"
+          echo '{"userSettings":{}}' > "$HOME/.gemini/config/config.json"
+          echo "Token expiry: $(python3 -c "import json; d=json.load(open('$HOME/.gemini/antigravity-cli/antigravity-oauth-token')); print(d['token']['expiry'])")"
+
+      - name: Run agy -p "say ok"
+        id: agy_run
+        run: |
+          set +e
+          timeout 120 agy --dangerously-skip-permissions --print-timeout 90s \
+            -p "Reply with exactly one word: OK" \
+            > /tmp/agy_out.txt 2>&1
+          RC=$?
+          echo "Exit code: $RC"
+          LAST=$(tail -5 /tmp/agy_out.txt | head -c 300)
+          echo "Last output: $LAST"
+          if grep -qiE 'authentication required|auth.*failed|sign in|log in' /tmp/agy_out.txt; then
+            RESULT="fail_auth"
+          elif grep -qiE 'quota|rate.?limit|429' /tmp/agy_out.txt; then
+            RESULT="ok_quota"
+          elif [ "$RC" -eq 0 ]; then
+            RESULT="ok"
+          else
+            RESULT="fail_rc${RC}"
+          fi
+          echo "RESULT=$RESULT"
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
+
+      - name: Post result
+        if: always()
+        env:
+          RESULT: ${{ steps.agy_run.outputs.result }}
+        run: |
+          STATUS="unknown"
+          [ -n "$RESULT" ] && STATUS="$RESULT"
+          if echo "$STATUS" | grep -qE '^(ok|ok_quota)$'; then
+            ICON="[SUCCESS]"
+          else
+            ICON="[FAIL]"
+          fi
+          gh issue comment 70 \
+            --repo mohammadlali0707-stack/agw-workers \
+            --body "**E2E test (agy v1.2.14 from private HF + ACC3):** \`${STATUS}\` ${ICON}" \
+            || true
