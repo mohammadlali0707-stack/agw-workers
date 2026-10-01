@@ -273,59 +273,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: |
-            set -e
-            echo "=== Step 6: Android Emulator Runner (API 34, x86_64, KVM) ==="
-            adb wait-for-device
-            boot_completed=0
-            for i in $(seq 1 60); do
-              status=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
-              if [ "$status" = "1" ]; then
-                boot_completed=1
-                echo "Emulator booted successfully in ${i}s"
-                break
-              fi
-              sleep 2
-            done
-
-            mkdir -p out/screenshots
-
-            adb logcat -c
-
-            echo "Installing x86_64 APK..."
-            adb install -r -g out/apk/TehranBlindSpot-3d-x86_64.apk
-
-            echo "Launching game..."
-            adb shell monkey -p ir.tehranblindspot.game -c android.intent.category.LAUNCHER 1 || \
-            adb shell am start -n ir.tehranblindspot.game/com.godot.game.GodotApp
-
-            sleep 8
-
-            echo "Capturing Screenshot 1 (Launch)..."
-            adb exec-out screencap -p > out/screenshots/emu_01_launch.png
-
-            echo "Simulating left joystick touch (move)..."
-            adb shell input swipe 250 800 250 600 500
-            sleep 2
-
-            echo "Capturing Screenshot 2 (Joystick Move)..."
-            adb exec-out screencap -p > out/screenshots/emu_02_joystick.png
-
-            echo "Simulating right swipe (camera look)..."
-            adb shell input swipe 800 500 500 500 400
-            sleep 2
-
-            echo "Capturing Screenshot 3 (Swipe Look)..."
-            adb exec-out screencap -p > out/screenshots/emu_03_swipe.png
-
-            echo "Dumping logcat..."
-            adb logcat -d > out/logcat.txt
-
-            FATAL_COUNT=$(grep -c "FATAL EXCEPTION" out/logcat.txt || true)
-            RUNTIME_COUNT=$(grep -c "AndroidRuntime: FATAL" out/logcat.txt || true)
-            echo "Logcat check: FATAL=$FATAL_COUNT, AndroidRuntime=$RUNTIME_COUNT"
-
-            python3 ccp/godot3d/tools/update_emulator_result.py out/emulator_result.json "$FATAL_COUNT" "$RUNTIME_COUNT" emu_01_launch.png emu_02_joystick.png emu_03_swipe.png
+          script: bash ccp/godot3d/tools/run_android_emulator_test.sh
 
       - name: Upload screenshots and test logs
         if: always()
