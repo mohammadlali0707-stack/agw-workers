@@ -137,8 +137,11 @@ jobs:
           fi
 
           if [ -f /tmp/assets/kaveh/Soldier.glb ]; then
-            cp /tmp/assets/kaveh/Soldier.glb ccp/godot3d/models/
-            echo "Installed kaveh/Soldier.glb to models/"
+            cp /tmp/assets/kaveh/Soldier.glb ccp/godot3d/models/kaveh.glb
+            echo "Installed kaveh/Soldier.glb as models/kaveh.glb"
+          elif [ -f /tmp/assets/kaveh/kaveh.glb ]; then
+            cp /tmp/assets/kaveh/kaveh.glb ccp/godot3d/models/kaveh.glb
+            echo "Installed kaveh.glb to models/"
           fi
           if [ -f /tmp/assets/licensed-assets/amb_cafe_rain_loop.ogg ]; then
             cp /tmp/assets/licensed-assets/amb_cafe_rain_loop.ogg ccp/godot3d/audio/
@@ -148,7 +151,8 @@ jobs:
             cp /tmp/assets/licensed-assets/CREDITS.md ccp/godot3d/
           fi
           if [ -f /tmp/assets/licensed-assets/sugar-bowl.zip ]; then
-            unzip -q -o /tmp/assets/licensed-assets/sugar-bowl.zip -d ccp/godot3d/models/ || true
+            mkdir -p ccp/godot3d/models/sugar_bowl
+            unzip -q -o /tmp/assets/licensed-assets/sugar-bowl.zip -d ccp/godot3d/models/sugar_bowl/ || true
           fi
 
           font=$(find ccp/game/fonts -type f -name 'Vazirmatn-Regular.ttf' -print -quit 2>/dev/null || true)
@@ -243,12 +247,14 @@ jobs:
           sed -i "s|custom_template/release=.*|custom_template/release=\"$template_dir/android_release.apk\"|g" ccp/godot3d/export_presets.cfg
 
           echo "Exporting Android arm64+armeabi debug APK..."
-          godot --verbose --headless --path ccp/godot3d --export-debug "Android" "$GITHUB_WORKSPACE/out/apk/TehranBlindSpot-3d-arm64-armeabi.apk" 2>&1 | tee out/godot-export-arm.log
-          test -s out/apk/TehranBlindSpot-3d-arm64-armeabi.apk
+          godot --verbose --headless --path ccp/godot3d --export-debug "Android" "$GITHUB_WORKSPACE/out/apk/TBS-Kaveh-v1-phone.apk" 2>&1 | tee out/godot-export-arm.log
+          test -s out/apk/TBS-Kaveh-v1-phone.apk
+          cp out/apk/TBS-Kaveh-v1-phone.apk out/apk/TehranBlindSpot-3d-arm64-armeabi.apk
 
           echo "Exporting Android x86_64 debug APK..."
-          godot --verbose --headless --path ccp/godot3d --export-debug "Android-x86_64" "$GITHUB_WORKSPACE/out/apk/TehranBlindSpot-3d-x86_64.apk" 2>&1 | tee out/godot-export-x86_64.log
-          test -s out/apk/TehranBlindSpot-3d-x86_64.apk
+          godot --verbose --headless --path ccp/godot3d --export-debug "Android-x86_64" "$GITHUB_WORKSPACE/out/apk/TBS-Kaveh-v1-emu.apk" 2>&1 | tee out/godot-export-x86_64.log
+          test -s out/apk/TBS-Kaveh-v1-emu.apk
+          cp out/apk/TBS-Kaveh-v1-emu.apk out/apk/TehranBlindSpot-3d-x86_64.apk
 
           ls -lh out/apk/
 
