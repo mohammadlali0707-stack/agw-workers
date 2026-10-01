@@ -24,6 +24,8 @@ jobs:
             for j in $(gh api "repos/$REPO/actions/runs/$r/jobs" --jq '.jobs[] | select(.conclusion=="failure") | .id'); do
               if gh api "repos/$REPO/actions/jobs/$j/logs" > /tmp/l.txt 2>/tmp/err.txt; then :; else echo "LOG DOWNLOAD FAILED: $(head -c 300 /tmp/err.txt)" > /tmp/l.txt; fi
               echo "bytes=$(wc -c < /tmp/l.txt)" >> "$out"
+              if [ "$(wc -c < /tmp/l.txt)" -lt 2000 ]; then echo "~~~" >> "$out"; cat /tmp/l.txt >> "$out"; echo "~~~" >> "$out"; fi
+              echo "token-user=$(gh api user --jq .login 2>&1 | head -c 100)" >> "$out"
               echo "" >> "$out"
               echo "#### run $r / job $j" >> "$out"
               echo "~~~" >> "$out"
