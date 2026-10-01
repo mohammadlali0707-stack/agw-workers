@@ -1,0 +1,33 @@
+name: Diag -- read failed run logs (ACC6_PAT)
+on:
+  push:
+    branches: [main]
+    paths: ['diag/read_logs.txt']
+permissions:
+  contents: read
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post failing-step excerpts as an issue comment
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          ISSUE=$(sed -n 's/^issue=//p' diag/read_logs.txt | head -1)
+          RUNS=$(sed -n 's/^runs=//p' diag/read_logs.txt | head -1)
+          out=/tmp/out.md
+          echo "### Diag: failing-step log excerpts (runs: $RUNS)" > "$out"
+          for r in $RUNS; do
+            for j in $(gh api "repos/$REPO/actions/runs/$r/jobs" --jq '.jobs[] | select(.conclusion=="failure") | .id'); do
+              gh api "repos/$REPO/actions/jobs/$j/logs" > /tmp/l.txt 2>/dev/null || echo "log download failed" > /tmp/l.txt
+              echo "" >> "$out"
+              echo "#### run $r / job $j" >> "$out"
+              echo "~~~" >> "$out"
+              grep -n -i -E "fatal|error|rejected|denied|remote:|hint:|exit code|non-fast-forward" /tmp/l.txt | grep -v -i "node.js 20" | tail -30 | cut -c1-300 >> "$out"
+              echo "~~~" >> "$out"
+            done
+          done
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file "$out"
