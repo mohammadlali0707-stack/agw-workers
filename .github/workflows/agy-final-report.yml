@@ -63,8 +63,11 @@ jobs:
           echo "AGENT_REPO=${RUNNER_TEMP}/agent-repo-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-final-report" >> "$GITHUB_ENV"
 
       - name: Install AGY CLI from HF Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           curl -L \
+            -H "Authorization: Bearer $HF_TOKEN" \
             "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
             -o /tmp/cli.tar.gz
           mkdir -p /tmp/agx
