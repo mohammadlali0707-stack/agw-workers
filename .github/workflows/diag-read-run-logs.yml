@@ -22,11 +22,13 @@ jobs:
           echo "### Diag: failing-step log excerpts (runs: $RUNS)" > "$out"
           for r in $RUNS; do
             for j in $(gh api "repos/$REPO/actions/runs/$r/jobs" --jq '.jobs[] | select(.conclusion=="failure") | .id'); do
-              gh api "repos/$REPO/actions/jobs/$j/logs" > /tmp/l.txt 2>/dev/null || echo "log download failed" > /tmp/l.txt
+              if gh api "repos/$REPO/actions/jobs/$j/logs" > /tmp/l.txt 2>/tmp/err.txt; then :; else echo "LOG DOWNLOAD FAILED: $(head -c 300 /tmp/err.txt)" > /tmp/l.txt; fi
+              echo "bytes=$(wc -c < /tmp/l.txt)" >> "$out"
               echo "" >> "$out"
               echo "#### run $r / job $j" >> "$out"
               echo "~~~" >> "$out"
-              grep -n -i -E "fatal|error|rejected|denied|remote:|hint:|exit code|non-fast-forward" /tmp/l.txt | grep -v -i "node.js 20" | tail -30 | cut -c1-300 >> "$out"
+              awk '/Commit the account-level team report/{f=1} f{print; n++} n>70{exit}' /tmp/l.txt | sed -E 's/^[0-9T:.-]+Z //' | grep -v -i "node.js 20" | cut -c1-250 >> "$out"
+              grep -i -E "fatal|rejected|denied|error:" /tmp/l.txt | tail -8 | cut -c1-250 >> "$out"
               echo "~~~" >> "$out"
             done
           done
