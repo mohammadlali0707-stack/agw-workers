@@ -158,8 +158,11 @@ jobs:
             --body "نشست @sonnet-chat باز شد. پیام‌هایت را همین‌جا بفرست؛ لازم نیست دوباره تگ کنی. حافظه = کل همین ایشو (هر نوبت یک جاب تازه است، ولی تاریخچه خوانده می‌شود). بستن: @sonnet-chat-end"
 
       - name: Install AGY CLI from HF Dataset
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           curl -L \
+            -H "Authorization: Bearer $HF_TOKEN" \
             "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
             -o /tmp/cli.tar.gz
           mkdir -p /tmp/agx
