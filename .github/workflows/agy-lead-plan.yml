@@ -190,7 +190,8 @@ jobs:
           git -c "${HEADER_KEY}=${AUTH_HEADER}" clone "$CLONE_URL" "${AGENT_REPO}"
           git -C "${AGENT_REPO}" config user.email "agy-bot@claud-cloud.local"
           git -C "${AGENT_REPO}" config user.name "AGY Bot"
-          echo "branch=$(git -C \"${AGENT_REPO}\" symbolic-ref --short HEAD)" >> "$GITHUB_OUTPUT"
+          LEAD_BRANCH=$(git -C "${AGENT_REPO}" symbolic-ref --short HEAD 2>/dev/null || true)
+          echo "branch=${LEAD_BRANCH:-main}" >> "$GITHUB_OUTPUT"
 
       - name: Restore this account's own AGY identity
         env:
