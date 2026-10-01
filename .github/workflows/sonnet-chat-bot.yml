@@ -160,7 +160,7 @@ jobs:
       - name: Install AGY CLI from HF Dataset
         run: |
           curl -L \
-            "https://github.com/mohammadlali0707-stack/agw-workers/releases/download/agy-cli-v1.2.14/cli_linux_x64.tar.gz" \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
             -o /tmp/cli.tar.gz
           mkdir -p /tmp/agx
           tar -xzf /tmp/cli.tar.gz -C /tmp/agx
