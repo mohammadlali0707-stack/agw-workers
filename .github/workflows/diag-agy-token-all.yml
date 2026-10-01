@@ -85,7 +85,7 @@ jobs:
       - name: Install AGY CLI from HF Dataset
         run: |
           curl -L \
-            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
+            "https://github.com/mohammadlali0707-stack/agw-workers/releases/download/agy-cli-v1.2.14/cli_linux_x64.tar.gz" \
             -o /tmp/cli.tar.gz
           mkdir -p /tmp/agx
           tar -xzf /tmp/cli.tar.gz -C /tmp/agx
@@ -145,7 +145,7 @@ jobs:
             fi
             echo "$token_b64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
             chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
-            cat /proc/sys/kernel/random/uuid > ~/.gemini/antigravity-cli/installation_id
+            printf '%s' "${AGW_INSTALL_ID_ACC6}" > ~/.gemini/antigravity-cli/installation_id
             echo '{"userSettings":{}}' > ~/.gemini/config/config.json
             echo "Restored acc${idx}: $(wc -c < ~/.gemini/antigravity-cli/antigravity-oauth-token) bytes" >&2
           }
