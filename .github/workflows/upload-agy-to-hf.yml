@@ -21,69 +21,40 @@ jobs:
             "https://github.com/mohammadlali0707-stack/agw-workers/releases/download/agy-cli-v1.2.14/cli_linux_x64.tar.gz" \
             -o /tmp/cli_linux_x64.tar.gz
           echo "Downloaded: $(wc -c < /tmp/cli_linux_x64.tar.gz) bytes"
-          # Verify it contains the agy binary
-          mkdir -p /tmp/verify
-          tar -xzf /tmp/cli_linux_x64.tar.gz -C /tmp/verify
-          find /tmp/verify -type f -executable | head -5
-          FOUND=$(find /tmp/verify -type f \( -name "agy" -o -name "antigravity" \) | head -1)
-          echo "Binary found: $FOUND"
-          [ -n "$FOUND" ] && echo "Size: $(ls -lh "$FOUND")"
 
-      - name: Upload to HuggingFace dataset (stranger777777/agw-cli-bin)
+      - name: Upload to HuggingFace via huggingface_hub
         run: |
-          # Use HuggingFace API to upload the file
-          # Endpoint: PUT /api/datasets/{repo_id}/upload/{branch}/{path}
-          echo "Uploading to HuggingFace..."
-          HTTP_CODE=$(curl -s -o /tmp/hf_response.txt -w "%{http_code}" \
-            -X PUT \
-            -H "Authorization: Bearer $HF_TOKEN" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary @/tmp/cli_linux_x64.tar.gz \
-            "https://huggingface.co/api/datasets/stranger777777/agw-cli-bin/upload/main/cli_linux_x64.tar.gz")
-          echo "HTTP status: $HTTP_CODE"
-          cat /tmp/hf_response.txt | head -c 500
-          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo "Upload SUCCESS"
-          else
-            echo "Upload may have used different endpoint, trying git LFS method..."
-            # Alternative: use HF git API
-            FILE_B64=$(base64 -w 0 /tmp/cli_linux_x64.tar.gz | head -c 100)
-            echo "File too large for base64 API. Use huggingface_hub instead."
-            pip install huggingface_hub -q
-            python3 -c "
-from huggingface_hub import HfApi
+          pip install huggingface_hub -q
+          python3 - <<'PYEOF'
 import os
-api = HfApi(token=os.environ['HF_TOKEN'])
+from huggingface_hub import HfApi
+api = HfApi(token=os.environ["HF_TOKEN"])
 api.upload_file(
-    path_or_fileobj='/tmp/cli_linux_x64.tar.gz',
-    path_in_repo='cli_linux_x64.tar.gz',
-    repo_id='stranger777777/agw-cli-bin',
-    repo_type='dataset',
-    commit_message='Update agy CLI to v1.2.14 (supports token auto-refresh)'
+    path_or_fileobj="/tmp/cli_linux_x64.tar.gz",
+    path_in_repo="cli_linux_x64.tar.gz",
+    repo_id="stranger777777/agw-cli-bin",
+    repo_type="dataset",
+    commit_message="Update agy CLI to v1.2.14 (supports token auto-refresh)"
 )
-print('Uploaded via huggingface_hub!')
-"
-          fi
+print("Upload complete!")
+PYEOF
 
-      - name: Verify upload (download back and check version)
+      - name: Verify version on HF
         run: |
-          sleep 5
+          sleep 10
           curl -fsSL \
             "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
-            -o /tmp/verify_dl.tar.gz
-          echo "Downloaded: $(wc -c < /tmp/verify_dl.tar.gz) bytes"
-          mkdir -p /tmp/verify_dl
-          tar -xzf /tmp/verify_dl.tar.gz -C /tmp/verify_dl
-          BIN=$(find /tmp/verify_dl -type f \( -name "agy" -o -name "antigravity" \) | head -1)
-          if [ -n "$BIN" ]; then
-            chmod +x "$BIN"
-            echo "Version from HF: $($BIN --version 2>/dev/null)"
-          fi
+            -o /tmp/hf_verify.tar.gz
+          echo "HF file size: $(wc -c < /tmp/hf_verify.tar.gz) bytes"
+          mkdir -p /tmp/hfv
+          tar -xzf /tmp/hf_verify.tar.gz -C /tmp/hfv
+          BIN=$(find /tmp/hfv -type f \( -name "agy" -o -name "antigravity" \) | head -1)
+          [ -n "$BIN" ] && chmod +x "$BIN" && echo "HF binary version: $($BIN --version 2>/dev/null)"
 
-      - name: Post result to issue
+      - name: Report result
         if: always()
         run: |
           gh issue comment 70 \
             --repo mohammadlali0707-stack/agw-workers \
-            --body "**HF binary update:** agy v1.2.14 uploaded to stranger777777/agw-cli-bin ✅ Ready to delete GitHub Release and revert workflows to HF URL." \
+            --body "**HF upload done:** agy v1.2.14 now at stranger777777/agw-cli-bin. GitHub Release can be deleted." \
             || echo "Could not post comment"
