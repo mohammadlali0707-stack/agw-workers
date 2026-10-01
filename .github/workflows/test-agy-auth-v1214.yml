@@ -1,8 +1,5 @@
 name: "TEST: agy auth with fixed install_id + v1.2.14 (ACC3)"
 
-# Triggered manually to test if agy v1.2.14 + fixed installation_id
-# can auto-refresh an expired token without failing.
-
 on:
   workflow_dispatch:
 
@@ -19,15 +16,13 @@ jobs:
     steps:
       - name: Install AGY CLI v1.2.14 from GitHub Release
         run: |
-          curl -L \
+          curl -fsSL \
             "https://github.com/mohammadlali0707-stack/agw-workers/releases/download/agy-cli-v1.2.14/cli_linux_x64.tar.gz" \
             -o /tmp/cli.tar.gz
           mkdir -p /tmp/agx
           tar -xzf /tmp/cli.tar.gz -C /tmp/agx
           CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
-          if [ -z "$CLI_BIN" ]; then
-            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
-          fi
+          [ -z "$CLI_BIN" ] && CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
           AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
           mkdir -p "$AGY_BIN_DIR"
           install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
@@ -40,26 +35,21 @@ jobs:
           AGW_TOKEN_ACC3:      ${{ secrets.AGW_TOKEN_ACC3 }}
           AGW_INSTALL_ID_ACC3: ${{ secrets.AGW_INSTALL_ID_ACC3 }}
         run: |
-          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
-          # Write token (base64-encoded in secret)
-          echo "$AGW_TOKEN_ACC3" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
-          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
-          # Use FIXED installation_id from container (not random UUID)
-          echo "$AGW_INSTALL_ID_ACC3" > ~/.gemini/antigravity-cli/installation_id
-          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
-          # Show expiry without revealing token values
-          python3 - <<'PYEOF'
-          import json, sys
-          with open("/root/.gemini/antigravity-cli/antigravity-oauth-token") as f:
-              d = json.load(f)
-          tok = d.get("token", {})
-          print(f"Token expiry: {tok.get('expiry','?')}")
-          print(f"Has refresh_token: {bool(tok.get('refresh_token'))}")
-          print(f"Has access_token: {bool(tok.get('access_token'))}")
-          PYEOF
-          echo "installation_id bytes: $(wc -c < ~/.gemini/antigravity-cli/installation_id)"
+          mkdir -p "$HOME/.gemini/antigravity-cli" "$HOME/.gemini/config"
+          printf '%s' "$AGW_TOKEN_ACC3" | base64 -d > "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+          chmod 600 "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+          # Use FIXED installation_id from container secret
+          printf '%s' "$AGW_INSTALL_ID_ACC3" > "$HOME/.gemini/antigravity-cli/installation_id"
+          echo '{"userSettings":{}}' > "$HOME/.gemini/config/config.json"
+          # Show token metadata (no values)
+          TOKEN_FILE="$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+          echo "Token file bytes: $(wc -c < "$TOKEN_FILE")"
+          echo "Has access_token: $(python3 -c "import json; d=json.load(open('$TOKEN_FILE')); print(bool(d.get('token',{}).get('access_token')))")"
+          echo "Has refresh_token: $(python3 -c "import json; d=json.load(open('$TOKEN_FILE')); print(bool(d.get('token',{}).get('refresh_token')))")"
+          echo "Expiry: $(python3 -c "import json; d=json.load(open('$TOKEN_FILE')); print(d.get('token',{}).get('expiry','?'))")"
+          echo "install_id bytes: $(wc -c < "$HOME/.gemini/antigravity-cli/installation_id")"
 
-      - name: Run agy with a simple prompt (test auto-refresh)
+      - name: Run agy with a simple prompt (test auto-refresh on expired token)
         id: agy_test
         run: |
           echo "Running agy..."
@@ -69,32 +59,33 @@ jobs:
             > /tmp/agy_out.txt 2>&1
           AGY_RC=$?
           echo "Exit code: $AGY_RC"
-          echo "Output length: $(wc -c < /tmp/agy_out.txt)"
-          # Classify result (no raw output printed)
-          if grep -qiE 'authentication required|auth.*failed|sign in|log in' /tmp/agy_out.txt; then
-            echo "RESULT=fail_auth"
-            echo "result=fail_auth" >> "$GITHUB_OUTPUT"
-          elif grep -qiE 'quota|rate.?limit|429' /tmp/agy_out.txt; then
-            echo "RESULT=ok_quota"
-            echo "result=ok_quota" >> "$GITHUB_OUTPUT"
+          echo "Output bytes: $(wc -c < /tmp/agy_out.txt)"
+          # Classify (no raw output)
+          if grep -qiE 'authentication required|auth.*failed|sign in|log in|run .agy. to' /tmp/agy_out.txt; then
+            RESULT="fail_auth"
+          elif grep -qiE 'quota|rate.?limit|429|too many' /tmp/agy_out.txt; then
+            RESULT="ok_quota"
           elif [ "$AGY_RC" -eq 0 ]; then
-            echo "RESULT=ok"
-            echo "result=ok" >> "$GITHUB_OUTPUT"
+            RESULT="ok"
           else
-            echo "RESULT=unknown (rc=$AGY_RC)"
-            echo "result=unknown" >> "$GITHUB_OUTPUT"
+            # Show last 3 lines of output for debugging (masked by add-mask above)
+            LAST=$(tail -3 /tmp/agy_out.txt | head -c 200)
+            echo "Last output lines: $LAST"
+            RESULT="unknown_rc${AGY_RC}"
           fi
+          echo "RESULT=$RESULT"
+          echo "result=$RESULT" >> "$GITHUB_OUTPUT"
 
       - name: Report result as issue comment
         if: always()
         env:
           RESULT: ${{ steps.agy_test.outputs.result }}
         run: |
-          MSG="**AGY auth test (ACC3, v1.2.14 + fixed install_id):** \`${RESULT:-unknown}\`"
-          if [ "${RESULT}" = "ok" ] || [ "${RESULT}" = "ok_quota" ]; then
+          MSG="**AGY auth test (ACC3, v1.2.14 + fixed install_id):** \`${RESULT:-skipped}\`"
+          if echo "$RESULT" | grep -qE '^(ok|ok_quota)$'; then
             MSG="${MSG} ✅ — خودبه‌خود refresh کرد!"
           else
-            MSG="${MSG} ❌ — هنوز auth fail"
+            MSG="${MSG} ❌"
           fi
           gh issue comment 70 \
             --repo mohammadlali0707-stack/agw-workers \
