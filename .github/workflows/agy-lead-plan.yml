@@ -119,6 +119,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ensure a unique base tag
+        # An empty callback_id made every lead use the tag "-w02": all issues wrote the
+        # same Reports/agy/accN/-w02.txt, and the poll below saw an old run's file at once,
+        # so the team report was written early from a stale report. Never run untagged.
+        run: |
+          if [ -z "$BASE_TAG" ]; then
+            FP="${PLAN_FP:-$GITHUB_RUN_ID}"
+            echo "BASE_TAG=issue-${ISSUE_NUMBER:-manual}-acc${ACCOUNT}-${FP}" >> "$GITHUB_ENV"
+            echo "callback_id was empty; using issue-${ISSUE_NUMBER:-manual}-acc${ACCOUNT}-${FP}"
+          fi
+
       - name: Ack on the issue
         if: env.ISSUE_NUMBER != ''
         env:
@@ -582,10 +593,22 @@ jobs:
             printf '\n'
             cat /tmp/account_summary.txt
           } > "Reports/agy/team_reports/acc${ACCOUNT}.md"
-          git add "Reports/agy/team_reports/acc${ACCOUNT}.md"
+          # Per-issue archive copy: acc<N>.md is overwritten by the next run on the same
+          # account, so keep each issue's report where it cannot be clobbered.
+          ARCH="Reports/agy/team_reports/issue-${ISSUE_NUMBER:-manual}"
+          mkdir -p "$ARCH"
+          cp "Reports/agy/team_reports/acc${ACCOUNT}.md" "$ARCH/acc${ACCOUNT}.md"
+          git add "Reports/agy/team_reports/acc${ACCOUNT}.md" "$ARCH/acc${ACCOUNT}.md"
           if ! git diff --cached --quiet; then
             git commit -m "agy: account ${ACCOUNT} team report (${FOUND_COUNT}/${EXPECTED_COUNT} subordinates reported)"
-            git -c "${HEADER_KEY}=${AUTH_HEADER}" push origin "HEAD:$BRANCH"
+            for TRY in 1 2 3 4; do
+              if git -c "${HEADER_KEY}=${AUTH_HEADER}" push origin "HEAD:$BRANCH"; then
+                break
+              fi
+              echo "push rejected (try ${TRY}); rebasing on ${BRANCH}"
+              sleep $((TRY * 5))
+              git -c "${HEADER_KEY}=${AUTH_HEADER}" pull --rebase origin "$BRANCH" --quiet || true
+            done
           fi
 
       - name: Report to the issue

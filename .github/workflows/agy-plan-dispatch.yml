@@ -300,6 +300,7 @@ jobs:
             --field "target_repo=${TARGET_REPO}" \
             --field "issue_number=${ISSUE_NUMBER}" \
             --field "plan_fp=${PLAN_FP}" \
+            --field "callback_id=issue-${ISSUE_NUMBER}-acc${ACCOUNT}-${PLAN_FP}" \
             --field "all_accounts=${ACCOUNTS_CSV}" \
             --field "agy_token_b64=${AGY_TOKEN_B64}" \
             --field "target_repo_pat=${TARGET_REPO_PAT}" \
