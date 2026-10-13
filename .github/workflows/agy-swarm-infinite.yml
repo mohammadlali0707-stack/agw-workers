@@ -1,0 +1,233 @@
+name: AGY Infinite Swarm Collaboration
+
+on:
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: agy-swarm-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  swarm-conductor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate Swarm Trigger and Directives
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BODY: ${{ github.event.comment.body || github.event.issue.body || '' }}
+          LABELS: ${{ toJson(github.event.issue.labels.*.name) }}
+          AUTHOR: ${{ github.event.comment.user.login || github.event.issue.user.login }}
+        run: |
+          set +e
+          # 1. Check for emergency stop
+          if echo "$BODY" | grep -iqE '@agy-stop|@agy-pause|#pause|#stop'; then
+            echo "action=stop" >> "$GITHUB_OUTPUT"
+            echo "Swarm pause detected."
+            exit 0
+          fi
+
+          # 2. Check if swarm trigger is present
+          IS_SWARM=false
+          if echo "$BODY" | grep -iqE '@agy-swarm|@agy'; then
+            IS_SWARM=true
+          fi
+          if echo "$LABELS" | grep -iq 'agy-swarm'; then
+            IS_SWARM=true
+          fi
+
+          if [ "$IS_SWARM" = "true" ]; then
+            echo "action=proceed" >> "$GITHUB_OUTPUT"
+          else
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            echo "No swarm trigger found. Skipping."
+          fi
+
+      - name: Handle Swarm Pause
+        if: steps.filter.outputs.action == 'stop'
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUM}/comments" \
+            -f body="⏸️ **[Swarm Paused]** Autonomous swarm conversation paused by request. Comment \`@agy-swarm\` anytime to resume building!"
+
+      - name: Select Random Runner (1 of 27 across 9 Accounts)
+        if: steps.filter.outputs.action == 'proceed'
+        id: pick_runner
+        run: |
+          # 9 accounts (0..8), 3 runners each (1..3) -> 27 runners
+          ACC_IDX=$(( RANDOM % 9 ))
+          RUNNER_SLOT=$(( (RANDOM % 3) + 1 ))
+          RUNNER_ID="Acc${ACC_IDX}-R${RUNNER_SLOT}"
+          echo "Selected Runner: $RUNNER_ID (Account $ACC_IDX, Slot $RUNNER_SLOT)"
+          echo "acc_idx=$ACC_IDX" >> "$GITHUB_OUTPUT"
+          echo "runner_slot=$RUNNER_SLOT" >> "$GITHUB_OUTPUT"
+          echo "runner_id=$RUNNER_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Install AGY CLI
+        if: steps.filter.outputs.action == 'proceed'
+        env:
+          HF_TOKEN: ${{ secrets.AGW_HF_TOKEN }}
+        run: |
+          set -e
+          mkdir -p /tmp/agx /tmp/agy-bin
+          AUTH_HEADER=""
+          if [ -n "$HF_TOKEN" ]; then
+            AUTH_HEADER="Authorization: Bearer $HF_TOKEN"
+          fi
+          curl -s -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+            "https://huggingface.co/datasets/mohammadlali/agx/resolve/main/antigravity.tar.gz" \
+            -o /tmp/agx/antigravity.tar.gz
+          tar -xzf /tmp/agx/antigravity.tar.gz -C /tmp/agx/
+          CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+          install -m 0755 "$CLI_BIN" /tmp/agy-bin/agy
+          echo "/tmp/agy-bin" >> "$GITHUB_PATH"
+
+      - name: Fetch Issue Discussion Context
+        if: steps.filter.outputs.action == 'proceed'
+        id: context
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          # Fetch issue details and recent comments
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUM}" > /tmp/issue.json
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUM}/comments?per_page=15" > /tmp/comments.json
+
+          python3 - <<'PYEOF'
+          import json, re
+
+          with open('/tmp/issue.json', 'r', encoding='utf-8') as f:
+              issue = json.load(f)
+          with open('/tmp/comments.json', 'r', encoding='utf-8') as f:
+              comments = json.load(f)
+
+          title = issue.get('title', '')
+          issue_body = issue.get('body', '')
+
+          conv_history = []
+          conv_history.append(f"### [Original Issue Goal by {issue.get('user', {}).get('login', 'User')}]:
+{issue_body}
+")
+
+          for c in comments[-10:]:
+              author = c.get('user', {}).get('login', 'Unknown')
+              body = c.get('body', '')
+              # Check for human director intervention
+              if author in ['mohammadlali0707-stack', 'Mohammadlali', 'owner'] or '[DIRECTOR' in body:
+                  conv_history.append(f"🚨 **[DIRECTOR INTERVENTION by {author}]**:
+{body}
+")
+              else:
+                  conv_history.append(f"💬 **[Comment by {author}]**:
+{body}
+")
+
+          full_context = "
+---
+".join(conv_history)
+          with open('/tmp/formatted_context.txt', 'w', encoding='utf-8') as out:
+              out.write(full_context)
+          PYEOF
+
+      - name: Restore Selected Runner OAuth Token
+        if: steps.filter.outputs.action == 'proceed'
+        env:
+          ACC_IDX: ${{ steps.pick_runner.outputs.acc_idx }}
+        run: |
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          case "$ACC_IDX" in
+            0) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC0 }}" ;;
+            1) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC1 }}" ;;
+            2) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC2 }}" ;;
+            3) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC3 }}" ;;
+            4) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC4 }}" ;;
+            5) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC5 }}" ;;
+            6) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC6 }}" ;;
+            7) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC7 }}" ;;
+            8) TOKEN_B64="${{ secrets.AGW_TOKEN_ACC8 }}" ;;
+          esac
+          echo "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+          echo "Restored token for Acc${ACC_IDX} successfully."
+
+      - name: Execute AGY Swarm Turn with Gemini 3.8 Flash High
+        if: steps.filter.outputs.action == 'proceed'
+        id: run_turn
+        env:
+          RUNNER_ID: ${{ steps.pick_runner.outputs.runner_id }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          CONTEXT=$(cat /tmp/formatted_context.txt)
+          
+          PROMPT="You are $RUNNER_ID in an autonomous 27-runner engineering swarm powered by Gemini 3.8 Flash High.
+
+Your Swarm Mission:
+Collaboratively design, architect, implement, review, and refine the deliverables requested in Issue #$ISSUE_NUM.
+
+Rules:
+1. Review the conversation history below.
+2. If there is a DIRECTOR INTERVENTION, strictly follow the director's instructions as top priority.
+3. Advance the project one clear, concrete step forward (e.g. system design, implementation code, edge-case testing, optimizations).
+4. Be precise, creative, and constructive. Write real, high-quality code or architectural schemas when appropriate.
+5. Format your response cleanly in Markdown.
+6. Begin your response with: '🤖 **$RUNNER_ID (Gemini 3.8 Flash High)**:'
+7. End your comment with '@agy-swarm' so the next runner picks up the conversation.
+
+--- CONVERSATION CONTEXT ---
+$CONTEXT
+---------------------------"
+
+          echo "$PROMPT" > /tmp/agy_prompt.txt
+          timeout 1200 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 1180s -p "$PROMPT" > /tmp/agy_output.txt 2>&1 || true
+
+          if [ ! -s /tmp/agy_output.txt ]; then
+            echo "🤖 **$RUNNER_ID (Gemini 3.8 Flash High)**: Analyzing current project state and preparing next iteration... @agy-swarm" > /tmp/agy_output.txt
+          fi
+
+          # Ensure the trailing trigger is strictly present
+          if ! grep -q '@agy-swarm' /tmp/agy_output.txt; then
+            printf '
+
+@agy-swarm
+' >> /tmp/agy_output.txt
+          fi
+
+      - name: Post Comment via Runner Account PAT (Self-Perpetuating)
+        if: steps.filter.outputs.action == 'proceed'
+        env:
+          ACC_IDX: ${{ steps.pick_runner.outputs.acc_idx }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          set -e
+          # Cooldown to respect GitHub API rate limits and keep a steady conversation pace
+          echo "Cooling down for 8 seconds..."
+          sleep 8
+
+          case "$ACC_IDX" in
+            0) PAT="${{ secrets.ACC0_PAT }}" ;;
+            1) PAT="${{ secrets.ACC1_PAT }}" ;;
+            2) PAT="${{ secrets.ACC2_PAT }}" ;;
+            3) PAT="${{ secrets.ACC3_PAT }}" ;;
+            4) PAT="${{ secrets.ACC4_PAT }}" ;;
+            5) PAT="${{ secrets.ACC5_PAT }}" ;;
+            6) PAT="${{ secrets.ACC6_PAT }}" ;;
+            7) PAT="${{ secrets.ACC7_PAT }}" ;;
+            8) PAT="${{ secrets.ACC8_PAT }}" ;;
+          esac
+
+          # Post comment using the account PAT. This ensures a real issue_comment event is triggered for the next runner!
+          GH_TOKEN="$PAT" gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUM}/comments" \
+            -F body=@/tmp/agy_output.txt
+
+          echo "Comment posted successfully by Acc${ACC_IDX}!"
