@@ -286,11 +286,9 @@ jobs:
           cd "${AGENT_REPO}"
           echo "AGY_BASE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           agy_invoke() {
-            if [ -n "$MODEL_INPUT" ]; then
-              timeout 1700 agy --model "$MODEL_INPUT" --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1
-            else
-              timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1
-            fi
+            local model="${MODEL_INPUT:-gemini-3.8-flash-high}"
+            echo "Invoking AGY with model: $model"
+            timeout 1700 agy --model "$model" --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1
           }
           OUTPUT=$(agy_invoke)
           AGY_RC=$?
