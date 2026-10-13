@@ -115,26 +115,18 @@ jobs:
           issue_body = issue.get('body', '')
 
           conv_history = []
-          conv_history.append(f"### [Original Issue Goal by {issue.get('user', {}).get('login', 'User')}]:
-{issue_body}
-")
+          conv_history.append(f"### [Original Issue Goal by {issue.get('user', {}).get('login', 'User')}]:\n{issue_body}\n")
 
           for c in comments[-10:]:
               author = c.get('user', {}).get('login', 'Unknown')
               body = c.get('body', '')
               # Check for human director intervention
               if author in ['mohammadlali0707-stack', 'Mohammadlali', 'owner'] or '[DIRECTOR' in body:
-                  conv_history.append(f"🚨 **[DIRECTOR INTERVENTION by {author}]**:
-{body}
-")
+                  conv_history.append(f"🚨 **[DIRECTOR INTERVENTION by {author}]**:\n{body}\n")
               else:
-                  conv_history.append(f"💬 **[Comment by {author}]**:
-{body}
-")
+                  conv_history.append(f"💬 **[Comment by {author}]**:\n{body}\n")
 
-          full_context = "
----
-".join(conv_history)
+          full_context = "\n---\n".join(conv_history)
           with open('/tmp/formatted_context.txt', 'w', encoding='utf-8') as out:
               out.write(full_context)
           PYEOF
@@ -168,27 +160,38 @@ jobs:
           RUNNER_ID: ${{ steps.pick_runner.outputs.runner_id }}
           ISSUE_NUM: ${{ github.event.issue.number }}
         run: |
-          CONTEXT=$(cat /tmp/formatted_context.txt)
-          
-          PROMPT="You are $RUNNER_ID in an autonomous 27-runner engineering swarm powered by Gemini 3.8 Flash High.
+          python3 - <<'PYEOF'
+          import os
 
-Your Swarm Mission:
-Collaboratively design, architect, implement, review, and refine the deliverables requested in Issue #$ISSUE_NUM.
+          runner_id = os.environ.get('RUNNER_ID', 'Runner')
+          issue_num = os.environ.get('ISSUE_NUM', '')
+          context = ""
+          if os.path.exists('/tmp/formatted_context.txt'):
+              with open('/tmp/formatted_context.txt', 'r', encoding='utf-8') as f:
+                  context = f.read()
 
-Rules:
-1. Review the conversation history below.
-2. If there is a DIRECTOR INTERVENTION, strictly follow the director's instructions as top priority.
-3. Advance the project one clear, concrete step forward (e.g. system design, implementation code, edge-case testing, optimizations).
-4. Be precise, creative, and constructive. Write real, high-quality code or architectural schemas when appropriate.
-5. Format your response cleanly in Markdown.
-6. Begin your response with: '🤖 **$RUNNER_ID (Gemini 3.8 Flash High)**:'
-7. End your comment with '@agy-swarm' so the next runner picks up the conversation.
+          prompt = (
+              f"You are {runner_id} in an autonomous 27-runner engineering swarm powered by Gemini 3.8 Flash High.\n\n"
+              f"Your Swarm Mission:\n"
+              f"Collaboratively design, architect, implement, review, and refine the deliverables requested in Issue #{issue_num}.\n\n"
+              "Rules:\n"
+              "1. Review the conversation history below.\n"
+              "2. If there is a DIRECTOR INTERVENTION, strictly follow the director's instructions as top priority.\n"
+              "3. Advance the project one clear, concrete step forward (e.g. system design, implementation code, edge-case testing, optimizations).\n"
+              "4. Be precise, creative, and constructive. Write real, high-quality code or architectural schemas when appropriate.\n"
+              "5. Format your response cleanly in Markdown.\n"
+              f"6. Begin your response with: '🤖 **{runner_id} (Gemini 3.8 Flash High)**:'\n"
+              "7. End your comment with '@agy-swarm' so the next runner picks up the conversation.\n\n"
+              "--- CONVERSATION CONTEXT ---\n"
+              f"{context}\n"
+              "---------------------------"
+          )
 
---- CONVERSATION CONTEXT ---
-$CONTEXT
----------------------------"
+          with open('/tmp/agy_prompt.txt', 'w', encoding='utf-8') as f:
+              f.write(prompt)
+          PYEOF
 
-          echo "$PROMPT" > /tmp/agy_prompt.txt
+          PROMPT=$(cat /tmp/agy_prompt.txt)
           timeout 1200 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 1180s -p "$PROMPT" > /tmp/agy_output.txt 2>&1 || true
 
           if [ ! -s /tmp/agy_output.txt ]; then
@@ -197,10 +200,7 @@ $CONTEXT
 
           # Ensure the trailing trigger is strictly present
           if ! grep -q '@agy-swarm' /tmp/agy_output.txt; then
-            printf '
-
-@agy-swarm
-' >> /tmp/agy_output.txt
+            printf '\n\n@agy-swarm\n' >> /tmp/agy_output.txt
           fi
 
       - name: Post Comment via Runner Account PAT (Self-Perpetuating)
