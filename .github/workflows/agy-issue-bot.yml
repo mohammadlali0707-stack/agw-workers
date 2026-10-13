@@ -201,4 +201,5 @@ jobs:
             --field "acc_index=$ACC_IDX" \
             --field "issue_number=$ISSUE_NUMBER" \
             --field "callback_id=same-repo-${ISSUE_NUMBER}-${RUN_ID}" \
-            --field "callback_repo=$REPO"
+            --field "callback_repo=$REPO" \
+            --field "model=gemini-3.8-flash-high"
