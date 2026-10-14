@@ -60,6 +60,45 @@ def push_with_retry():
     raise SystemExit("push to CCP failed after retries")
 
 
+CCP_REPO = "mohammadlali0707-stack/Claud-Cloud-Project"
+TRIGGERS = re.compile(r"(ACC)(6)|(گزارش)( جامع)|(Fleet)( Review)|(بازبین)( ناوگان)", re.I)
+
+
+def neutral(t):
+    t = (t or "").replace("@", "@\u200b")
+    return TRIGGERS.sub(lambda m: "\u200c".join(g for g in m.groups() if g), t)
+
+
+def ccp_issue(issue, comments, path):
+    """Create a closed archive issue in CCP; return its number (or None)."""
+    n = issue["number"]
+    text = "\n".join([issue.get("body") or ""] + [c.get("body") or "" for c in comments])
+    shas = sorted(set(re.findall(r"\b[0-9a-f]{8,40}\b", text)))[:30]
+    runs = sorted(set(re.findall(r"actions/runs/(\d+)", text)))[:15]
+    link = "https://github.com/%s/blob/main/%s" % (CCP_REPO, path)
+    body = "\n".join([
+        "بایگانی ایشوی عمومی بسته‌شده‌ی agw-workers شماره‌ی %d (ایشوی اصلی از ریپوی عمومی حذف شد)." % n,
+        "",
+        "- فایل کامل گفتگو و جمع‌بندی: " + link,
+        "- وضعیت: closed (%s) · ساخته‌شده %s · بسته‌شده %s" % (issue.get("state_reason") or "completed", issue.get("created_at"), issue.get("closed_at")),
+        "- سازنده: %s · تعداد کامنت: %d" % (issue["user"]["login"], len(comments)),
+        "- برچسب‌ها: %s" % (", ".join(l["name"] for l in issue.get("labels", [])) or "—"),
+        "- کامیت‌های اشاره‌شده: %s" % (", ".join(shas) or "—"),
+        "- اجراهای Actions (agw-workers): %s" % (", ".join(runs) or "—"),
+        "",
+        "این ایشو فقط برای مراجعه است و بسته می‌ماند.",
+    ])
+    title = neutral("[agw-workers#%d] %s" % (n, issue["title"]))[:250]
+    st, data, _ = api("POST", "/repos/%s/issues" % CCP_REPO,
+                      {"title": title, "body": neutral(body), "labels": ["archived-public"]})
+    if st not in (200, 201):
+        st, data, _ = api("POST", "/repos/%s/issues" % CCP_REPO, {"title": title, "body": neutral(body)})
+    if st not in (200, 201):
+        print("CCP issue create failed for #%d: %s %s" % (n, st, str(data)[:200])); return None
+    time.sleep(2)
+    return data["number"]
+
+
 def summarize(issue, comments):
     text = "\n".join([issue.get("body") or ""] + [c.get("body") or "" for c in comments])
     shas = sorted(set(re.findall(r"\b[0-9a-f]{8,40}\b", text)))[:40]
@@ -113,65 +152,83 @@ def candidates():
     explicit = [int(x) for x in re.findall(r"\d+", os.environ.get("ISSUES", ""))]
     if explicit:
         return explicit
-    if os.environ.get("MODE") == "sweep":
-        cutoff = os.environ.get("CUTOFF", "2026-10-14T00:00:00Z")
+    mode = os.environ.get("MODE")
+    if mode in ("sweep", "backfill"):
+        cutoff = "1970-01-01T00:00:00Z" if mode == "backfill" else os.environ.get("CUTOFF", "2026-10-14T00:00:00Z")
         items = paged("/repos/%s/issues?state=closed&per_page=100&since=%s" % (REPO, cutoff))
-        return [i["number"] for i in items if not i.get("pull_request")
-                and (i.get("closed_at") or "") >= cutoff]
+        return sorted(i["number"] for i in items if not i.get("pull_request")
+                      and (i.get("closed_at") or "") >= cutoff)
     return []
 
 
 def main():
     nums = candidates()
-    print("candidates:", nums)
-    done = []
+    print("candidates (%d):" % len(nums), nums)
+    os.makedirs(os.path.join(CCP, OUT_DIR), exist_ok=True)
+    idx = os.path.join(CCP, OUT_DIR, "INDEX.md")
+    index = open(idx, encoding="utf-8").read() if os.path.exists(idx) else "# بایگانی ایشوهای عمومی agw-workers\n\n"
+    staged = []  # (n, issue, ccp_no)
     for n in nums:
         if n in PROTECTED:
             print("#%d protected, skip" % n); continue
         st, issue, _ = api("GET", "/repos/%s/issues/%d" % (REPO, n))
         if st != 200 or issue.get("pull_request"):
-            print("#%d not found / PR, skip" % n); continue
+            print("#%d not found / PR (%s), skip" % (n, st)); continue
         if issue["state"] != "closed":
             print("#%d still open, skip" % n); continue
         if any(l["name"] == KEEP_LABEL for l in issue.get("labels", [])):
             print("#%d keep-public, skip" % n); continue
         comments = paged("/repos/%s/issues/%d/comments?per_page=100" % (REPO, n))
-        path = os.path.join(OUT_DIR, "issue-%d.md" % n)
-        os.makedirs(os.path.join(CCP, OUT_DIR), exist_ok=True)
-        open(os.path.join(CCP, path), "w", encoding="utf-8").write(render(issue, comments))
-        idx = os.path.join(CCP, OUT_DIR, "INDEX.md")
-        row = "- [#%d](issue-%d.md) · %s · closed %s\n" % (n, n, issue["title"].replace("\n", " "), issue.get("closed_at"))
-        old = open(idx, encoding="utf-8").read() if os.path.exists(idx) else "# بایگانی ایشوهای عمومی agw-workers\n\n"
-        if ("[#%d]" % n) not in old:
-            open(idx, "w", encoding="utf-8").write(old + row)
-        git("add", OUT_DIR)
-        if git("diff", "--cached", "--quiet", check=False).returncode != 0:
-            git("commit", "-m", "archive: agw-workers#%d closed-issue summary" % n)
+        path = "%s/issue-%d.md" % (OUT_DIR, n)
+        ccp_no = None
+        if ("[#%d](" % n) not in index:
+            ccp_no = ccp_issue(issue, comments, path)
+        md = render(issue, comments)
+        if ccp_no:
+            md = md.replace("\n## جمع‌بندی", "\n- ایشوی بایگانی در CCP: #%d\n\n## جمع‌بندی" % ccp_no, 1)
+        open(os.path.join(CCP, path), "w", encoding="utf-8").write(md)
+        if ("[#%d](" % n) not in index:
+            index += "- [#%d](issue-%d.md) · CCP #%s · %s · closed %s\n" % (
+                n, n, ccp_no or "—", issue["title"].replace("\n", " "), issue.get("closed_at"))
+        staged.append((n, issue, ccp_no))
+    if not staged:
+        print("nothing to archive"); return
+    open(idx, "w", encoding="utf-8").write(index)
+    git("add", OUT_DIR)
+    if git("diff", "--cached", "--quiet", check=False).returncode != 0:
+        nums_s = ", ".join("#%d" % x[0] for x in staged)
+        git("commit", "-m", "archive: agw-workers closed issues %s" % (nums_s if len(staged) <= 8 else "(%d issues)" % len(staged)))
+        push_with_retry()
+        sha = git("rev-parse", "HEAD").stdout.strip()
+        cl = os.path.join(CCP, "Team/CHANGELOG.md")
+        s2 = open(cl, encoding="utf-8").read()
+        mark = "retroactively. Everything after it is.\n"
+        line = "- `%s` -- `%s/`: archive %d closed public agw-workers issue(s) (%s) with a closed CCP reference issue each, before removing them from the public repo. No runtime change.\n" % (
+            sha[:8], OUT_DIR, len(staged), ", ".join("#%d" % x[0] for x in staged))
+        if mark in s2:
+            open(cl, "w", encoding="utf-8").write(s2.replace(mark, mark + line, 1))
+            git("add", "Team/CHANGELOG.md")
+            git("commit", "-m", "changelog: record %s" % sha[:8])
             push_with_retry()
-            sha = git("rev-parse", "HEAD").stdout.strip()
-            cl = os.path.join(CCP, "Team/CHANGELOG.md")
-            s = open(cl, encoding="utf-8").read()
-            mark = "retroactively. Everything after it is.\n"
-            line = "- `%s` -- `%s`: archive closed public issue agw-workers#%d (%s) before removing it from the public repo. No runtime change.\n" % (sha[:8], path, n, issue["title"].replace("`", "'"))
-            if mark in s:
-                open(cl, "w", encoding="utf-8").write(s.replace(mark, mark + line, 1))
-                git("add", "Team/CHANGELOG.md")
-                git("commit", "-m", "changelog: record %s" % sha[:8])
-                push_with_retry()
-        # confirm archive is on remote before removing anything public
-        git("fetch", "origin", "main")
-        if git("cat-file", "-e", "origin/main:" + path, check=False).returncode != 0:
-            raise SystemExit("archive for #%d not on CCP main; NOT removing public issue" % n)
-        done.append(n)
-    if done and os.environ.get("DELETE", "true") == "true":
+    git("fetch", "origin", "main")
+    ok = []
+    for n, issue, ccp_no in staged:
+        if git("cat-file", "-e", "origin/main:%s/issue-%d.md" % (OUT_DIR, n), check=False).returncode != 0:
+            print("archive for #%d not on CCP main; NOT removing public issue" % n); continue
+        if ccp_no:
+            api("PATCH", "/repos/%s/issues/%d" % (CCP_REPO, ccp_no), {"state": "closed", "state_reason": "completed"})
+            time.sleep(1)
+        ok.append(n)
+    if ok and os.environ.get("DELETE", "true") == "true":
         delay = int(os.environ.get("DELAY_SECONDS", "0") or 0)
         if delay:
             print("waiting %ss so close-hooks (Notion Done) finish first" % delay); time.sleep(delay)
-        for n in done:
+        for n in ok:
             st, issue, _ = api("GET", "/repos/%s/issues/%d" % (REPO, n))
             if st == 200 and issue["state"] == "closed":
                 print("#%d -> %s" % (n, remove_public(issue)))
-    print("archived:", done)
+                time.sleep(1)
+    print("archived+removed:", ok)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@ name: Archive closed public issue to CCP and remove it
 on:
   issues:
     types: [closed]
+  push:
+    branches: [main]
+    paths: ['Tools/archive_backfill.request']
   schedule:
     - cron: '23 */6 * * *'
   workflow_dispatch:
@@ -30,7 +33,7 @@ jobs:
   archive:
     if: github.event_name != 'issues' || (github.event.issue.number != 55 && !contains(github.event.issue.labels.*.name, 'keep-public'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,6 +62,8 @@ jobs:
           export DELAY_SECONDS=0
           if [ "$EVENT_NAME" = "issues" ]; then
             export MODE=event ISSUES="$EVENT_ISSUE" DELAY_SECONDS=120
+          elif [ "$EVENT_NAME" = "push" ]; then
+            export MODE=backfill ISSUES=""
           elif [ -n "$INPUT_ISSUES" ]; then
             export MODE=manual ISSUES="$INPUT_ISSUES"
           else
