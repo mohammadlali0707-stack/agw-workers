@@ -155,7 +155,8 @@ def candidates():
     mode = os.environ.get("MODE")
     if mode in ("sweep", "backfill"):
         cutoff = "1970-01-01T00:00:00Z" if mode == "backfill" else os.environ.get("CUTOFF", "2026-10-14T00:00:00Z")
-        items = paged("/repos/%s/issues?state=closed&per_page=100&since=%s" % (REPO, cutoff))
+        q = "" if mode == "backfill" else "&since=" + cutoff
+        items = paged("/repos/%s/issues?state=closed&per_page=100%s" % (REPO, q))
         return sorted(i["number"] for i in items if not i.get("pull_request")
                       and (i.get("closed_at") or "") >= cutoff)
     return []
