@@ -92,6 +92,13 @@ jobs:
           set -euo pipefail
           echo "=== Step 2: Fetch Assets ==="
           mkdir -p /tmp/assets ccp/godot3d/models ccp/godot3d/audio ccp/godot3d/fonts ccp/godot3d/art/tex
+          # TBS-M05 Parchak textures: owner Gemini outputs, fetched at build time, never committed
+          mkdir -p ccp/godot3d/art/parchak
+          PARCHAK_BASE="https://n8n.airboxvip.top/gemini-worker/images"
+          curl -fsSL --retry 3 -o ccp/godot3d/art/parchak/facade.jpg "$PARCHAK_BASE/zahra_1791979060_image.jpg" || echo "warn: parchak facade not fetched"
+          curl -fsSL --retry 3 -o ccp/godot3d/art/parchak/sign.jpg "$PARCHAK_BASE/Just_1791979235_image.jpg" || echo "warn: parchak sign not fetched"
+          curl -fsSL --retry 3 -o ccp/godot3d/art/parchak/interior_ref.jpg "$PARCHAK_BASE/M2_1791979279_image.jpg" || echo "warn: parchak interior_ref not fetched"
+          ls -la ccp/godot3d/art/parchak || true
           
           if gh run download --repo mohammadlali0707-stack/agw-workers --name tbs-godot3d-free-assets-8 --dir /tmp/assets 2>/dev/null; then
             echo "Successfully downloaded tbs-godot3d-free-assets-8 via gh CLI"
