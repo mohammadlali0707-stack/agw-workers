@@ -4,7 +4,7 @@ name: AGW Sonnet interactive chat (issue session)
 # comments on the same issue continue the chat without a new tag. Memory is
 # the full issue thread (each turn is a new Actions job; GitHub cannot keep
 # a process alive). Close with trailing @sonnet-chat-end.
-# Pins Claude Sonnet 4.6 (Thinking), round-robins AGW_TOKEN_ACC0-ACC8, quota-walks.
+# Pins gemini-3.8-flash-high, round-robins AGW_TOKEN_ACC0-ACC8, quota-walks.
 # Does not clone a project repo and does not dispatch agw-worker.yml.
 
 on:
@@ -228,10 +228,10 @@ jobs:
             printf '%s\n' "$LATEST"
           } > /tmp/prompt.txt
 
-      - name: Run AGY chat (Sonnet 4.6, round-robin + quota-walk ACC0-ACC8)
+      - name: Run AGY chat (Gemini 3.8 Flash High, round-robin + quota-walk ACC0-ACC8)
         id: run_agy
         env:
-          MODEL_INPUT: "Claude Sonnet 4.6 (Thinking)"
+          MODEL_INPUT: "gemini-3.8-flash-high"
         run: |
           set +e
           restore_token() {

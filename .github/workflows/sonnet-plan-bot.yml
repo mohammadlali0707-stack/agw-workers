@@ -1,8 +1,8 @@
-name: AGY Project Planning Bot -- Sonnet 4.6 (propose, then auto-dispatch)
+name: AGY Project Planning Bot -- Gemini 3.8 Flash High (propose, then auto-dispatch)
 
 # Combined trailing markers (no separate approve needed):
-#   @sonnet-plan-agy      plan with Sonnet 4.6, execute with Gemini  (DEFAULT)
-#   @sonnet-plan-sonnet   plan with Sonnet 4.6, execute with Sonnet 4.6
+#   @sonnet-plan-agy      plan with Gemini 3.8 Flash High, execute with Gemini  (DEFAULT)
+#   @sonnet-plan-sonnet   plan with Gemini 3.8 Flash High, execute with Gemini 3.8 Flash High
 #   @sonnet-plan          alias of @sonnet-plan-agy
 # Project tag (ccp/cr/coffeenet/status/agw/n8n) before the marker selects the
 # destination repo for the final report. If omitted, the planner infers from
@@ -69,7 +69,7 @@ jobs:
           case "$LOWER" in
             *"@sonnet-plan-sonnet")
               echo "match=true" >> "$GITHUB_OUTPUT"
-              echo "exec_model=Claude Sonnet 4.6 (Thinking)" >> "$GITHUB_OUTPUT"
+              echo "exec_model=gemini-3.8-flash-high" >> "$GITHUB_OUTPUT"
               echo "project_tag=${PROJECT:-}" >> "$GITHUB_OUTPUT"
               ;;
             *"@sonnet-plan-agy"|*"@sonnet-plan")
@@ -148,7 +148,7 @@ jobs:
           printf '%s\t%s\t%s\n' \
             "plan-checkout" "خواندن مخزن هدف" "$TARGET_REPO" \
             "plan-thread" "خواندن کل گفتگوی این ایشو" "sonnet-planner" \
-            "plan-draft" "تدوین پروپوزال با Sonnet 4.6" "agy-token-acc${ACC_IDX}" \
+            "plan-draft" "تدوین پروپوزال با Gemini 3.8 Flash High" "agy-token-acc${ACC_IDX}" \
             "plan-post" "ارسال پروپوزال به‌عنوان کامنت" "sonnet-planner" \
             "plan-dispatch" "اعزام اجرا روی agw-workers" "auto" \
             > /tmp/plan_bot_tasks.tsv
@@ -156,7 +156,7 @@ jobs:
             --repo "$REPO" \
             --issue "$ISSUE_NUMBER" \
             --marker "$CHECKLIST_MARKER" \
-            --title "Project Manager — نقشه Sonnet 4.6 در $TARGET_REPO (agy token ACC${ACC_IDX})" \
+            --title "Project Manager — نقشه Gemini 3.8 Flash High در $TARGET_REPO (agy token ACC${ACC_IDX})" \
             --tasks /tmp/plan_bot_tasks.tsv
 
       - name: Checkout target repo
@@ -277,10 +277,10 @@ jobs:
           } > /tmp/prompt.txt
           echo "prompt_file=/tmp/prompt.txt" >> "$GITHUB_OUTPUT"
 
-      - name: Run AGY in planning mode (Sonnet 4.6, round-robin + quota-walk ACC0-ACC8)
+      - name: Run AGY in planning mode (Gemini 3.8 Flash High, round-robin + quota-walk ACC0-ACC8)
         id: run_agy
         env:
-          MODEL_INPUT: "Claude Sonnet 4.6 (Thinking)"
+          MODEL_INPUT: "gemini-3.8-flash-high"
         run: |
           set +e
           restore_token() {
@@ -375,7 +375,7 @@ jobs:
             --field "issue_number=$ISSUE_NUMBER" \
             "${EXTRA[@]}"
           MODEL_LABEL="Gemini"
-          if [ -n "$EXEC_MODEL" ]; then MODEL_LABEL="Sonnet 4.6"; fi
+          if [ -n "$EXEC_MODEL" ]; then MODEL_LABEL="Gemini 3.8 Flash High"; fi
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
             --body "Project Manager: پروپوزال آماده است. اعزام اجرا ($MODEL_LABEL) روی همین ریپوی عمومی شروع شد."
 

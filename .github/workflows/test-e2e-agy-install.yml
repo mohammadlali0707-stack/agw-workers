@@ -50,7 +50,7 @@ jobs:
         id: agy_run
         run: |
           set +e
-          timeout 120 agy --dangerously-skip-permissions --print-timeout 90s \
+          timeout 120 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 90s \
             -p "Reply with exactly one word: OK" \
             > /tmp/agy_out.txt 2>&1
           RC=$?

@@ -58,7 +58,7 @@ on:
         default: ''
         type: string
       model:
-        description: 'Optional agy --model value (e.g. "Claude Sonnet 4.6 (Thinking)"). Empty = CLI default (Gemini).'
+        description: 'Optional agy --model value (e.g. "gemini-3.8-flash-high"). Empty = CLI default (Gemini).'
         required: false
         default: ''
         type: string

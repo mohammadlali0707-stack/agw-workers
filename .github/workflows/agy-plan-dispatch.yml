@@ -1,7 +1,7 @@
 name: AGY Plan Dispatch (read the last tbs_account_plan, dispatch one lead per account)
 
 # Triggered by a trailing @agy-plan-approved (Gemini) or @sonnet-plan-approved
-# (Claude Sonnet 4.6) comment, or by workflow_dispatch from a combined tag
+# (Gemini 3.8 Flash High) comment, or by workflow_dispatch from a combined tag
 # (@agy-plan-agy / @agy-plan-sonnet / @sonnet-plan-agy / @sonnet-plan-sonnet).
 # ALL workflow runs stay on this public repo (agw-workers) -- never on an
 # account fork -- so Actions minutes are not consumed elsewhere. Each lead
@@ -18,7 +18,7 @@ on:
         required: true
         type: string
       model:
-        description: 'Empty = Gemini. Set to Claude Sonnet 4.6 (Thinking) for Sonnet execution.'
+        description: 'Empty = Gemini. Set to gemini-3.8-flash-high for Sonnet execution.'
         required: false
         default: ''
         type: string
@@ -72,7 +72,7 @@ jobs:
           case "$LOWER" in
             *"@sonnet-plan-approved")
               echo "match=true" >> "$GITHUB_OUTPUT"
-              echo "model=Claude Sonnet 4.6 (Thinking)" >> "$GITHUB_OUTPUT"
+              echo "model=gemini-3.8-flash-high" >> "$GITHUB_OUTPUT"
               ;;
             *"@agy-plan-approved")
               echo "match=true" >> "$GITHUB_OUTPUT"
@@ -215,7 +215,7 @@ jobs:
         run: |
           MODEL_LABEL="Gemini"
           if [ -n "$MODEL_INPUT" ]; then
-            MODEL_LABEL="Sonnet 4.6"
+            MODEL_LABEL="Gemini 3.8 Flash High"
           fi
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
             --body "Project Manager: Lead dispatch started for accounts ${ACCOUNTS} on ${TARGET} (model=${MODEL_LABEL}, workflows on ${REPO}). [plan:${PLAN_FP}]"

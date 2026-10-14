@@ -201,7 +201,7 @@ jobs:
           set +e
           cd "${AGENT_REPO}"
           PROMPT=$(cat /tmp/final_prompt.txt)
-          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          OUTPUT=$(timeout 1700 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           echo "$OUTPUT" > /tmp/final_report.txt
 
       - name: Post the final report as a new issue on target_repo

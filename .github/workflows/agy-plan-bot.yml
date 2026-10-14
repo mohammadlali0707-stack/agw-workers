@@ -2,7 +2,7 @@ name: AGY Project Planning Bot (propose, then auto-dispatch)
 
 # Combined trailing markers (no separate approve needed):
 #   @agy-plan-agy      plan with Gemini, execute with Gemini
-#   @agy-plan-sonnet   plan with Gemini, execute with Sonnet 4.6
+#   @agy-plan-sonnet   plan with Gemini, execute with Gemini 3.8 Flash High
 #   @agy-plan          alias of @agy-plan-agy
 # Project tag (ccp/cr/coffeenet/status/agw/n8n) before the marker selects the
 # destination repo for the final report. If omitted, the planner infers from
@@ -66,7 +66,7 @@ jobs:
           case "$LOWER" in
             *"@agy-plan-sonnet")
               echo "match=true" >> "$GITHUB_OUTPUT"
-              echo "exec_model=Claude Sonnet 4.6 (Thinking)" >> "$GITHUB_OUTPUT"
+              echo "exec_model=gemini-3.8-flash-high" >> "$GITHUB_OUTPUT"
               echo "project_tag=${PROJECT:-}" >> "$GITHUB_OUTPUT"
               ;;
             *"@agy-plan-agy"|*"@agy-plan")
@@ -292,7 +292,7 @@ jobs:
           set +e
           cd "${AGENT_REPO}" 2>/dev/null || true
           PROMPT=$(cat /tmp/prompt.txt)
-          OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+          OUTPUT=$(timeout 1700 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           echo "$OUTPUT" > /tmp/agy_output.txt
           echo "Output lines: $(wc -l < /tmp/agy_output.txt)"
 
@@ -351,7 +351,7 @@ jobs:
             --field "issue_number=$ISSUE_NUMBER" \
             "${EXTRA[@]}"
           MODEL_LABEL="Gemini"
-          if [ -n "$EXEC_MODEL" ]; then MODEL_LABEL="Sonnet 4.6"; fi
+          if [ -n "$EXEC_MODEL" ]; then MODEL_LABEL="Gemini 3.8 Flash High"; fi
           gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
             --body "Project Manager: پروپوزال آماده است. اعزام اجرا ($MODEL_LABEL) روی همین ریپوی عمومی شروع شد."
 

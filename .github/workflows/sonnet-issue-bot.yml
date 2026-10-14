@@ -1,7 +1,7 @@
 name: AGW Worker Sonnet Issue Bot (same-repo, no relay)
 
 # Trailing @sonnet (not @sonnet-plan, not @sonnet-chat). Same routing as
-# agy-issue-bot.yml but pins Claude Sonnet 4.6 (Thinking) instead of the Gemini
+# agy-issue-bot.yml but pins gemini-3.8-flash-high instead of the Gemini
 # default, round-robins AGW_TOKEN_ACC0-ACC8 by this workflow's run_number, and
 # quota-walks the next agy token rather than failing. GitHub clone/push/comment
 # uses this repo + ACC6_PAT; acc_index only selects the agy OAuth token
@@ -127,7 +127,7 @@ jobs:
         run: |
           gh issue comment "$ISSUE_NUMBER" \
             --repo "$REPO" \
-            --body "Project Manager: Routing to **$TARGET_REPO** (agy token AGW_TOKEN_ACC${ACC_IDX}, GitHub stays this repo / ACC6). Claude Sonnet 4.6, quota-walk."
+            --body "Project Manager: Routing to **$TARGET_REPO** (agy token AGW_TOKEN_ACC${ACC_IDX}, GitHub stays this repo / ACC6). Gemini 3.8 Flash High, quota-walk."
 
       - name: Build prompt
         id: prompt
@@ -191,5 +191,5 @@ jobs:
             --field "issue_number=$ISSUE_NUMBER" \
             --field "callback_id=sonnet-same-repo-${ISSUE_NUMBER}-${RUN_ID}" \
             --field "callback_repo=$REPO" \
-            --field "model=Claude Sonnet 4.6 (Thinking)" \
+            --field "model=gemini-3.8-flash-high" \
             --field "quota_walk=true"

@@ -5,7 +5,7 @@ name: AGY Account Lead (plan + dispatch up to max_subordinates, collect, aggrega
 # asked for: bot #1 (w01) of the given account.
 #
 # Optional input `model`: empty = Gemini (agy default). When set to
-# "Claude Sonnet 4.6 (Thinking)" (from @sonnet-plan-approved), lead planning,
+# "gemini-3.8-flash-high" (from @sonnet-plan-approved), lead planning,
 # account summary, and every agw-worker.yml dispatch use that model.
 # agy-plan-dispatch.yml only passes --field model= when Sonnet is selected,
 # so older copies of this file without the input still work for Gemini.
@@ -91,7 +91,7 @@ on:
         default: ''
         type: string
       model:
-        description: 'Optional agy --model. Empty = Gemini default. For Sonnet: Claude Sonnet 4.6 (Thinking).'
+        description: 'Optional agy --model. Empty = Gemini default. For Sonnet: gemini-3.8-flash-high.'
         required: false
         default: ''
         type: string
@@ -137,7 +137,7 @@ jobs:
         run: |
           MODEL_LABEL="Gemini"
           if [ -n "$MODEL_INPUT" ]; then
-            MODEL_LABEL="Sonnet 4.6"
+            MODEL_LABEL="Gemini 3.8 Flash High"
           fi
           gh issue comment "$ISSUE_NUMBER" --repo "$CONTROL_REPO" \
             --body "Account ${ACCOUNT} lead: در حال تدوین تسک‌ها (سقف ${MAX_SUBORDINATES} زیردست، مدل ${MODEL_LABEL})..."
@@ -272,7 +272,7 @@ jobs:
             OUTPUT=$(timeout 1700 agy --model "$MODEL_INPUT" --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           else
             echo "Running agy as acc${ACCOUNT} lead..."
-            OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+            OUTPUT=$(timeout 1700 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           fi
           AGY_RC=$?
           echo "$OUTPUT" > /tmp/lead_plan_output.txt
@@ -570,7 +570,7 @@ jobs:
           if [ -n "$MODEL_INPUT" ]; then
             OUTPUT=$(timeout 1700 agy --model "$MODEL_INPUT" --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           else
-            OUTPUT=$(timeout 1700 agy --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
+            OUTPUT=$(timeout 1700 agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 1680s -p "$PROMPT" 2>&1)
           fi
           echo "$OUTPUT" > /tmp/account_summary.txt
 
