@@ -44,10 +44,10 @@ jobs:
         run: |
           set +e
           set -uo pipefail
-          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/Soldier.glb" 2>&1 | tee out/kaveh-build.log
+          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/out/kaveh/kaveh.glb" 2>&1 | tee out/kaveh-build.log
           rc=${PIPESTATUS[0]}
           set -e
-          if [ "$rc" -ne 0 ] || [ ! -s out/kaveh/Soldier.glb ] || ! grep -q 'KAVEH_OK' out/kaveh-build.log; then
+          if [ "$rc" -ne 0 ] || [ ! -s out/kaveh/kaveh.glb ] || ! grep -q 'KAVEH_OK' out/kaveh-build.log; then
             message=$(tail -35 out/kaveh-build.log | cut -c1-3200)
             message=${message//'%'/'%25'}
             message=${message//$'\r'/'%0D'}

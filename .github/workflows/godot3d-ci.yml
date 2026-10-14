@@ -143,13 +143,72 @@ jobs:
           PYEOF
           fi
 
-          if [ -f /tmp/assets/kaveh/Soldier.glb ]; then
-            cp /tmp/assets/kaveh/Soldier.glb ccp/godot3d/models/kaveh.glb
-            echo "Installed kaveh/Soldier.glb as models/kaveh.glb"
-          elif [ -f /tmp/assets/kaveh/kaveh.glb ]; then
-            cp /tmp/assets/kaveh/kaveh.glb ccp/godot3d/models/kaveh.glb
-            echo "Installed kaveh.glb to models/"
-          fi
+          # Kaveh model selection: prefer a real Kaveh GLB (kaveh.glb, or any GLB whose glTF
+          # nodes are named Kaveh*, e.g. build_kaveh.py output). Generic Soldier.glb is only a
+          # logged FALLBACK. Choice + sha256 + size go to out/kaveh_model.json and the summary.
+          mkdir -p out
+          python3 - <<'PYEOF'
+          import glob, hashlib, json, os, shutil, struct
+
+          DEST = "ccp/godot3d/models/kaveh.glb"
+
+          def glb_nodes(path):
+              try:
+                  with open(path, "rb") as f:
+                      head = f.read(20)
+                      if len(head) < 20 or head[:4] != b"glTF":
+                          return []
+                      clen = struct.unpack("<I", head[12:16])[0]
+                      doc = json.loads(f.read(clen).decode("utf-8", "replace"))
+              except Exception as exc:
+                  print("warn: cannot parse", path, exc)
+                  return []
+              names = [n.get("name", "") for n in doc.get("nodes", [])]
+              names += [m.get("name", "") for m in doc.get("meshes", [])]
+              return [n for n in names if n]
+
+          cands = sorted(set(glob.glob("/tmp/assets/**/*.glb", recursive=True)))
+          info = {c: glb_nodes(c) for c in cands}
+          for c in cands:
+              print("candidate", c, os.path.getsize(c), "bytes, kaveh_nodes=", [n for n in info[c] if "kaveh" in n.lower()][:6])
+
+          def has_kaveh(c):
+              return any("kaveh" in n.lower() for n in info[c])
+
+          chosen, kind = None, "MISSING"
+          named = [c for c in cands if os.path.basename(c).lower() == "kaveh.glb"]
+          tagged = [c for c in cands if has_kaveh(c)]
+          soldier = [c for c in cands if os.path.basename(c).lower() == "soldier.glb"]
+          if [c for c in named if has_kaveh(c)]:
+              chosen, kind = [c for c in named if has_kaveh(c)][0], "KAVEH"
+          elif tagged:
+              chosen, kind = tagged[0], "KAVEH"
+          elif named:
+              chosen, kind = named[0], "KAVEH_UNVERIFIED"
+          elif soldier:
+              chosen, kind = soldier[0], "FALLBACK_SOLDIER"
+
+          rec = {"kind": kind, "source": chosen, "dest": DEST, "sha256": None, "size": 0, "kaveh_nodes": []}
+          if chosen:
+              shutil.copyfile(chosen, DEST)
+              data = open(DEST, "rb").read()
+              rec["sha256"] = hashlib.sha256(data).hexdigest()
+              rec["size"] = len(data)
+              rec["kaveh_nodes"] = [n for n in info[chosen] if "kaveh" in n.lower()][:8]
+          with open("out/kaveh_model.json", "w", encoding="utf-8") as f:
+              json.dump(rec, f, indent=2)
+          line = "KAVEH_MODEL kind=%s source=%s sha256=%s size=%s nodes=%s" % (kind, chosen, rec["sha256"], rec["size"], ",".join(rec["kaveh_nodes"]))
+          print(line)
+          if kind == "KAVEH":
+              print("::notice title=Kaveh model chosen::" + line)
+          else:
+              print("::warning title=Kaveh model not verified::" + line)
+          summ = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summ:
+              with open(summ, "a", encoding="utf-8") as f:
+                  f.write("### Kaveh model\n\n| kind | source | sha256 | size | Kaveh nodes |\n|---|---|---|---|---|\n")
+                  f.write("| %s | %s | %s | %s | %s |\n\n" % (kind, chosen, rec["sha256"], rec["size"], ", ".join(rec["kaveh_nodes"])))
+          PYEOF
           if [ -f /tmp/assets/licensed-assets/amb_cafe_rain_loop.ogg ]; then
             cp /tmp/assets/licensed-assets/amb_cafe_rain_loop.ogg ccp/godot3d/audio/
             echo "Installed licensed-assets/amb_cafe_rain_loop.ogg to audio/"
@@ -298,6 +357,7 @@ jobs:
             out/*.log
             out/logcat.txt
             out/emulator_result.json
+            out/kaveh_model.json
           if-no-files-found: warn
           retention-days: 14
 
