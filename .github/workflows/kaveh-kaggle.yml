@@ -1,0 +1,155 @@
+name: Kaveh Kaggle GPU image-to-3D
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/kaveh-kaggle-request.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaveh-kaggle
+  cancel-in-progress: false
+
+jobs:
+  kaggle-hy3d:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+
+      - name: Install Kaggle CLI and resolve account
+        id: acct
+        shell: bash
+        run: |
+          set -uo pipefail
+          python3 -m pip install --disable-pip-version-check -q --upgrade kaggle
+          echo "::notice title=kaggle-cli::$(kaggle --version 2>&1 | tr -d '\r\n' | cut -c1-200)"
+          U="${KAGGLE_USERNAME:-}"
+          if [ -z "$U" ]; then
+            U=$(python3 - <<'PYEOF' 2>/dev/null
+          try:
+              from kaggle.api.kaggle_api_extended import KaggleApi
+              a = KaggleApi()
+              a.authenticate()
+              v = a.get_config_value("username") or ""
+              print(v)
+          except Exception:
+              print("")
+          PYEOF
+            )
+          fi
+          if [ -z "$U" ]; then
+            U=$(kaggle kernels list --mine --csv 2>/dev/null | awk -F, 'NR==2{split($1,a,"/"); print a[1]}')
+          fi
+          if [ -z "$U" ]; then
+            echo "::error::Could not resolve Kaggle username (add secret KAGGLE_USERNAME)"
+            exit 1
+          fi
+          echo "::notice title=kaggle-user::$U"
+          echo "user=$U" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Kaggle kernel
+        shell: bash
+        env:
+          KUSER: ${{ steps.acct.outputs.user }}
+        run: |
+          set -euo pipefail
+          mkdir -p kk
+          python3 - <<'PYEOF'
+          import json, os
+          b64 = "".join(open(".github/kaveh_ref.b64").read().split())
+          body = open(".github/kaggle/kaveh_hy3d_kernel.py").read()
+          open("kk/kaveh_hy3d_kernel.py", "w").write('REF_B64 = "' + b64 + '"\n' + body)
+          meta = {
+              "id": os.environ["KUSER"] + "/kaveh-hy3d-gen",
+              "title": "kaveh-hy3d-gen",
+              "code_file": "kaveh_hy3d_kernel.py",
+              "language": "python",
+              "kernel_type": "script",
+              "is_private": True,
+              "enable_gpu": True,
+              "enable_internet": True,
+              "machine_shape": "NvidiaTeslaT4",
+              "dataset_sources": [],
+              "competition_sources": [],
+              "kernel_sources": [],
+          }
+          json.dump(meta, open("kk/kernel-metadata.json", "w"), indent=2)
+          PYEOF
+          out=$(kaggle kernels push -p kk 2>&1 || true)
+          echo "$out"
+          echo "::notice title=kaggle-push::$(echo "$out" | tr -d '\r' | tr '\n' ' ' | cut -c1-600)"
+
+      - name: Wait for the Kaggle run
+        shell: bash
+        env:
+          KUSER: ${{ steps.acct.outputs.user }}
+        run: |
+          set -uo pipefail
+          REF="$KUSER/kaveh-hy3d-gen"
+          sleep 60
+          st=""
+          for i in $(seq 1 200); do
+            st=$(kaggle kernels status "$REF" 2>&1 | tr -d '\r' | tail -1)
+            echo "$(date -u +%H:%M:%S) $st"
+            case "$st" in
+              *COMPLETE*|*complete*|*ERROR*|*error*|*CANCEL*|*cancel*) break ;;
+            esac
+            sleep 60
+          done
+          echo "::notice title=kaggle-status::$st"
+
+      - name: Collect outputs
+        if: always()
+        shell: bash
+        env:
+          KUSER: ${{ steps.acct.outputs.user }}
+        run: |
+          set -uo pipefail
+          mkdir -p kout out
+          kaggle kernels output "$KUSER/kaveh-hy3d-gen" -p kout -o 2>&1 | tail -5 || true
+          ls -la kout || true
+          for f in kaveh_raw_ai.glb kaveh_shape.glb gen_report.json kaveh_ref.png; do
+            [ -f "kout/$f" ] && cp "kout/$f" out/
+          done
+          if [ -f out/kaveh_ref.png ]; then cp out/kaveh_ref.png out/kaveh_ref_rgba.png; fi
+          if [ -f out/gen_report.json ]; then
+            echo "::notice title=gen_report.json::$(tr -d '\r\n' < out/gen_report.json | cut -c1-3800)"
+          fi
+          log=$(ls kout/*.log 2>/dev/null | head -1)
+          if [ -n "$log" ]; then
+            cp "$log" out/kaggle_run.log
+            python3 - "$log" <<'PYEOF'
+          import json, sys
+          raw = open(sys.argv[1], errors="replace").read()
+          try:
+              lines = [e.get("data", "") for e in json.loads(raw)]
+              text = "".join(lines)
+          except Exception:
+              text = raw
+          keep = [l for l in text.splitlines() if l.strip() and "%|" not in l]
+          tail = "\n".join(keep[-120:])
+          chunks = [tail[i:i + 3500] for i in range(0, len(tail), 3500)][-6:]
+          for n, c in enumerate(chunks):
+              c = c.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+              print("::notice title=kaggle-log-" + str(n) + "::" + c)
+          PYEOF
+          fi
+          ls -la out
+
+      - name: Upload artifacts (rig mode reads kaveh-pipeline-artifacts)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaveh-pipeline-artifacts
+          path: out/
+          if-no-files-found: warn
