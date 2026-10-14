@@ -1,0 +1,67 @@
+name: Archive closed public issue to CCP and remove it
+
+# Owner policy 2026-10-14: work runs in this public repo, but once an issue is
+# closed its full thread + summary go to the private repo
+# (Claud-Cloud-Project: Reports/public_issues/agw-workers/issue-N.md) and the
+# public issue is deleted (fallback: comments deleted, body scrubbed, locked).
+# Issue 55 and issues labelled keep-public are never touched.
+
+on:
+  issues:
+    types: [closed]
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      issues:
+        description: 'Comma-separated issue numbers to archive+remove (empty = sweep issues closed since cutoff)'
+        required: false
+        default: ''
+      delete:
+        description: 'Remove the public issue after archiving (true/false)'
+        required: false
+        default: 'true'
+
+concurrency:
+  group: archive-closed-issue
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    if: github.event_name != 'issues' || (github.event.issue.number != 55 && !contains(github.event.issue.labels.*.name, 'keep-public'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: Tools
+      - uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+          path: ccp
+          fetch-depth: 1
+      - name: Archive and remove
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          PUBLIC_REPO: ${{ github.repository }}
+          CCP_DIR: ccp
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ISSUE: ${{ github.event.issue.number }}
+          INPUT_ISSUES: ${{ github.event.inputs.issues }}
+          INPUT_DELETE: ${{ github.event.inputs.delete }}
+          CUTOFF: '2026-10-14T00:00:00Z'
+        run: |
+          set -e
+          git -C ccp config user.name 'AGY Bot'
+          git -C ccp config user.email 'agy-bot@claud-cloud.local'
+          export DELETE="${INPUT_DELETE:-true}"
+          export DELAY_SECONDS=0
+          if [ "$EVENT_NAME" = "issues" ]; then
+            export MODE=event ISSUES="$EVENT_ISSUE" DELAY_SECONDS=120
+          elif [ -n "$INPUT_ISSUES" ]; then
+            export MODE=manual ISSUES="$INPUT_ISSUES"
+          else
+            export MODE=sweep ISSUES=""
+          fi
+          python3 Tools/archive_closed_issue.py
