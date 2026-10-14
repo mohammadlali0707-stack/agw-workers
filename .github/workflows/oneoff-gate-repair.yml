@@ -1,0 +1,50 @@
+name: One-off gate repair (morning 2026-10-14)
+
+# Owner-side repair of team_lint + check_digest_provenance after the ACC1
+# worker for agw-workers#84 never reported. Demotes orphan digests, never
+# back-fills artifacts. Runs once per push of the request file.
+
+on:
+  push:
+    branches: [main]
+    paths: ['Tools/oneoff_gate_repair.request']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: Tools
+      - uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+          path: ccp
+          fetch-depth: 0
+      - name: Repair, measure, commit
+        env:
+          CCP_DIR: ccp
+          BODY_FILE: /tmp/body.md
+        run: |
+          git -C ccp config user.name 'AGY Bot'
+          git -C ccp config user.email 'agy-bot@claud-cloud.local'
+          set +e
+          python3 Tools/oneoff_gate_repair.py
+          echo "rc=$?"
+          set -e
+          test -f /tmp/body.md || echo "repair script crashed before writing a report" > /tmp/body.md
+      - name: Post result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          test -f /tmp/body.md || echo "repair job failed early" > /tmp/body.md
+          gh issue comment 84 --repo "$REPO" --body-file /tmp/body.md
