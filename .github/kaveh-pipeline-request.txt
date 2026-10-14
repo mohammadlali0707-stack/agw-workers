@@ -1,2 +1,1 @@
-inspect 0
-# run 2
+full 0

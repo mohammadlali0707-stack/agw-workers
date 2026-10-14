@@ -63,6 +63,20 @@ jobs:
           token: ${{ secrets.ACC6_PAT }}
           path: ccp
 
+      - name: Stage reference image from request (optional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest=ccp/godot3d/tools/kaveh_pipeline/input
+          if [ -f self/.github/kaveh_ref.b64 ]; then
+            mkdir -p "$dest"
+            base64 -d self/.github/kaveh_ref.b64 > "$dest/kaveh_ref.png"
+            ls -l "$dest/kaveh_ref.png"
+            file "$dest/kaveh_ref.png" || true
+          else
+            echo "no staged reference image"
+          fi
+
       - name: Install system dependencies
         shell: bash
         run: |
@@ -202,10 +216,12 @@ jobs:
           rm -rf "$dest"
           mkdir -p "$dest"
           find ../out -type f \( -name '*.json' -o -name '*.png' -o -name '*.log' -o -name '*.txt' \) -size -4M -exec cp {} "$dest"/ \;
+          find ../out -type f -name '*.glb' -size -95M -exec cp {} "$dest"/ \;
           echo "run_id=$RUN_ID" > "$dest/RUN.txt"
           git config user.name kaveh-pipeline-ci
           git config user.email kaveh-pipeline-ci@users.noreply.github.com
           git add "$dest"
+          if [ -f godot3d/tools/kaveh_pipeline/input/kaveh_ref.png ]; then git add godot3d/tools/kaveh_pipeline/input/kaveh_ref.png; fi
           if git diff --cached --quiet; then
             echo "nothing to publish"
             exit 0
