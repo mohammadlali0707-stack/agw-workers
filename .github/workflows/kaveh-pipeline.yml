@@ -1,0 +1,193 @@
+name: Kaveh Pipeline CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Pipeline execution mode'
+        type: choice
+        options:
+          - inspect
+          - smoke
+          - full
+        default: 'smoke'
+      rot_z_deg:
+        description: 'Additional Z-axis rotation override (degrees)'
+        type: string
+        default: '0'
+  push:
+    branches: [main]
+    paths:
+      - '.github/kaveh-pipeline-request.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaveh-pipeline
+  cancel-in-progress: false
+
+jobs:
+  kaveh-pipeline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out this repo (request file)
+        uses: actions/checkout@v4
+        with:
+          path: self
+
+      - name: Resolve mode (dispatch input, else request file "mode rot_z_deg")
+        id: mode
+        shell: bash
+        env:
+          IN_MODE: ${{ steps.mode.outputs.mode }}
+          IN_ROT: ${{ inputs.rot_z_deg }}
+        run: |
+          set -euo pipefail
+          MODE="${IN_MODE:-}"
+          ROT="${IN_ROT:-0}"
+          if [ -z "$MODE" ] && [ -f self/.github/kaveh-pipeline-request.txt ]; then
+            read -r MODE ROT_FILE < self/.github/kaveh-pipeline-request.txt || true
+            ROT="${ROT_FILE:-0}"
+          fi
+          case "$MODE" in inspect|smoke|full) ;; *) MODE=inspect ;; esac
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "rot=$ROT" >> "$GITHUB_OUTPUT"
+          echo "Resolved mode=$MODE rot_z_deg=$ROT"
+
+      - name: Check out Claud-Cloud-Project (CCP)
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+          path: ccp
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends blender curl unzip python3-numpy python3-venv
+          blender --version | head -1
+
+      - name: Set up Python venv and install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$GITHUB_WORKSPACE/venv"
+          "$GITHUB_WORKSPACE/venv/bin/pip" install -q --upgrade pip
+          "$GITHUB_WORKSPACE/venv/bin/pip" install -q gradio_client pillow "rembg[cpu]" trimesh numpy
+          echo "KP_PY=$GITHUB_WORKSPACE/venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: Build baseline source Kaveh exactly like tbs-godot3d-assets.yml
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p source out
+          curl --retry 4 --retry-all-errors -fsSL -o source/AnimationLibrary_Godot_Standard.gltf https://raw.githubusercontent.com/J-Ponzo/gltf-universal-animation-library/main/glTF/AnimationLibrary_Godot_Standard.gltf
+          curl --retry 4 --retry-all-errors -fsSL -o source/AnimationLibrary_Godot_Standard.bin https://raw.githubusercontent.com/J-Ponzo/gltf-universal-animation-library/main/glTF/AnimationLibrary_Godot_Standard.bin
+          set +e
+          blender --background --python ccp/godot3d/tools/build_kaveh.py -- "$GITHUB_WORKSPACE/source/AnimationLibrary_Godot_Standard.gltf" "$GITHUB_WORKSPACE/source_kaveh.glb" > out/kaveh-build.log 2>&1
+          rc=$?
+          set -e
+          tail -20 out/kaveh-build.log
+          if [ "$rc" -ne 0 ] || [ ! -s source_kaveh.glb ] || ! grep -q 'KAVEH_OK' out/kaveh-build.log; then
+            echo "::error title=Kaveh baseline build failed::see out/kaveh-build.log"
+            exit 1
+          fi
+
+      - name: Execute run_pipeline.sh and summarize results
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          MODE: ${{ steps.mode.outputs.mode }}
+          ROT_Z_DEG: ${{ steps.mode.outputs.rot }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+
+          PIPELINE_SCRIPT=""
+          if [ -f ccp/godot3d/tools/kaveh_pipeline/run_pipeline.sh ]; then
+            PIPELINE_SCRIPT="ccp/godot3d/tools/kaveh_pipeline/run_pipeline.sh"
+          elif [ -f godot3d/tools/kaveh_pipeline/run_pipeline.sh ]; then
+            PIPELINE_SCRIPT="godot3d/tools/kaveh_pipeline/run_pipeline.sh"
+          elif [ -f ./run_pipeline.sh ]; then
+            PIPELINE_SCRIPT="./run_pipeline.sh"
+          fi
+
+          EXIT_CODE=0
+          if [ -n "$PIPELINE_SCRIPT" ]; then
+            chmod +x "$PIPELINE_SCRIPT"
+            echo "Executing $PIPELINE_SCRIPT mode=$MODE rot_z_deg=$ROT_Z_DEG"
+            bash "$PIPELINE_SCRIPT" "$MODE" "$GITHUB_WORKSPACE/source_kaveh.glb" "$GITHUB_WORKSPACE/out" "$ROT_Z_DEG" || EXIT_CODE=$?
+          else
+            echo "Notice: run_pipeline.sh not located on disk"
+          fi
+
+          echo "=== Summarizing results into GITHUB_STEP_SUMMARY ==="
+          python3 - <<'PYEOF'
+          import json
+          import os
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if not summary_path:
+              exit(0)
+
+          lines = ["# Kaveh Pipeline Execution Summary\n"]
+
+          status_file = "out/status.json"
+          if os.path.exists(status_file):
+              try:
+                  with open(status_file, "r", encoding="utf-8") as f:
+                      st = json.load(f)
+                  lines.append("## Pipeline Status")
+                  lines.append(f"- **Stage**: `{st.get('stage', 'N/A')}`")
+                  lines.append(f"- **Status**: `{st.get('status', 'N/A')}`")
+                  if "detail" in st:
+                      lines.append(f"- **Detail**: {st['detail']}")
+                  lines.append("")
+              except Exception as err:
+                  lines.append(f"**Warning**: Failed to parse {status_file}: {err}\n")
+          else:
+              lines.append(f"- Notice: `{status_file}` not found.\n")
+
+          qa_candidates = ["out/qa_report.json", "out/qa/qa_report.json"]
+          qa_file = next((p for p in qa_candidates if os.path.exists(p)), None)
+          if qa_file:
+              try:
+                  with open(qa_file, "r", encoding="utf-8") as f:
+                      qa = json.load(f)
+                  lines.append("## QA Verification Report")
+                  lines.append(f"- **QA Status**: `{qa.get('status', 'N/A')}`")
+                  lines.append(f"- **Triangles**: `{qa.get('triangle_count', 'N/A')}`")
+                  lines.append(f"- **Vertex Groups Transferred**: `{qa.get('vertex_groups_transferred', 'N/A')}`")
+                  lines.append(f"- **Materials**: `{qa.get('materials_count', 'N/A')}`")
+                  anims = qa.get("animations_preserved", [])
+                  if anims:
+                      lines.append(f"- **Preserved Animations**: {', '.join(anims)}")
+                  renders = qa.get("qa_renders", [])
+                  if renders:
+                      lines.append(f"- **Renders Captured**: {len(renders)} image(s)")
+                  lines.append("")
+              except Exception as err:
+                  lines.append(f"**Warning**: Failed to parse {qa_file}: {err}\n")
+          else:
+              lines.append("- Notice: `qa_report.json` not found.\n")
+
+          with open(summary_path, "a", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          PYEOF
+
+          if [ "$EXIT_CODE" -ne 0 ]; then
+            echo "Pipeline run exited with error code: $EXIT_CODE" >&2
+            exit "$EXIT_CODE"
+          fi
+
+      - name: Upload pipeline artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kaveh-pipeline-artifacts
+          path: out/
+          if-no-files-found: warn
