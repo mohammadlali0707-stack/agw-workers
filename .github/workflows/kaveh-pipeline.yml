@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: kaveh-pipeline
@@ -46,14 +47,15 @@ jobs:
         run: |
           set -euo pipefail
           MODE="${IN_MODE:-}"
-          ROT="${IN_ROT:-0}"
+          ROT="${IN_ROT:-auto}"
           if [ -z "$MODE" ] && [ -f self/.github/kaveh-pipeline-request.txt ]; then
-            read -r MODE ROT_FILE < self/.github/kaveh-pipeline-request.txt || true
-            ROT="${ROT_FILE:-0}"
+            read -r MODE ROT_FILE REUSE_FILE < self/.github/kaveh-pipeline-request.txt || true
+            ROT="${ROT_FILE:-auto}"
           fi
-          case "$MODE" in inspect|smoke|full) ;; *) MODE=inspect ;; esac
+          case "$MODE" in inspect|smoke|full|rig) ;; *) MODE=inspect ;; esac
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "rot=$ROT" >> "$GITHUB_OUTPUT"
+          echo "reuse=${REUSE_FILE:-}" >> "$GITHUB_OUTPUT"
           echo "Resolved mode=$MODE rot_z_deg=$ROT"
 
       - name: Check out Claud-Cloud-Project (CCP)
@@ -117,6 +119,8 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           MODE: ${{ steps.mode.outputs.mode }}
           ROT_Z_DEG: ${{ steps.mode.outputs.rot }}
+          REUSE_RUN: ${{ steps.mode.outputs.reuse }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p out
@@ -131,7 +135,17 @@ jobs:
           fi
 
           EXIT_CODE=0
-          if [ -n "$PIPELINE_SCRIPT" ]; then
+          if [ "$MODE" = "rig" ]; then
+            K=ccp/godot3d/tools/kaveh_pipeline
+            W="$GITHUB_WORKSPACE"
+            gh run download "$REUSE_RUN" -R "$GITHUB_REPOSITORY" -n kaveh-pipeline-artifacts -D prev
+            cp prev/kaveh_raw_ai.glb out/
+            cp prev/gen_report.json out/ 2>/dev/null || true
+            cp prev/kaveh_ref_rgba.png out/ 2>/dev/null || true
+            echo "rig mode: reusing kaveh_raw_ai.glb from run $REUSE_RUN"
+            { blender -b -P "$K/03_blender_rig_transfer.py" -- "$W/source_kaveh.glb" "$W/out/kaveh_raw_ai.glb" "$W/out/kaveh_final.glb" "$ROT_Z_DEG" && blender -b -P "$K/04_qa_verify.py" -- "$W/out/kaveh_final.glb" "$W/out/qa_renders"; } 2>&1 | tee "$W/out/pipeline.log" || EXIT_CODE=$?
+            printf '{"stage": "RIG_ONLY", "status": "%s", "detail": "03+04 on raw mesh from run %s"}\n' "$([ "$EXIT_CODE" = 0 ] && echo SUCCESS || echo FAILED)" "$REUSE_RUN" > out/status.json
+          elif [ -n "$PIPELINE_SCRIPT" ]; then
             chmod +x "$PIPELINE_SCRIPT"
             export PYTHON_BIN="${KP_PY:-python3}"
             echo "Executing $PIPELINE_SCRIPT mode=$MODE rot_z_deg=$ROT_Z_DEG"
@@ -205,6 +219,7 @@ jobs:
         working-directory: ccp
         env:
           RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
         run: |
           set -uo pipefail
           for f in ../out/status.json ../out/rig_metadata.json ../out/gen_report.json ../out/qa_report.json; do
@@ -219,6 +234,31 @@ jobs:
           find ../out -type f \( -name '*.json' -o -name '*.png' -o -name '*.log' -o -name '*.txt' \) -size -4M -exec cp {} "$dest"/ \;
           find ../out -type f -name '*.glb' -size -95M -exec cp {} "$dest"/ \;
           echo "run_id=$RUN_ID" > "$dest/RUN.txt"
+          git lfs install --local || true
+          prev="$dest/previews"
+          mkdir -p "$prev"
+          "${KP_PY:-python3}" - "$prev" <<'PYEOF' || true
+          import base64, glob, io, os, sys
+          from PIL import Image
+          out = sys.argv[1]
+          for p in sorted(glob.glob("../out/**/*.png", recursive=True)):
+              try:
+                  im = Image.open(p).convert("RGB")
+                  im.thumbnail((640, 640))
+                  b = io.BytesIO()
+                  im.save(b, "JPEG", quality=80)
+                  name = os.path.basename(p)[:-4] + ".jpg.b64"
+                  open(os.path.join(out, name), "w").write(base64.b64encode(b.getvalue()).decode())
+              except Exception as e:
+                  print("preview failed", p, e)
+          PYEOF
+          if [ -f ../out/kaveh_final.glb ]; then
+            R=mohammadlali0707-stack/Claud-Cloud-Project
+            gh release view kaveh-model-latest -R "$R" >/dev/null 2>&1 || gh release create kaveh-model-latest -R "$R" --prerelease --title "Kaveh model (latest pipeline output)" --notes "Automated output of godot3d/tools/kaveh_pipeline" || true
+            assets=""
+            for g in ../out/kaveh_final.glb ../out/kaveh_raw_ai.glb; do [ -f "$g" ] && assets="$assets $g"; done
+            gh release upload kaveh-model-latest $assets -R "$R" --clobber && echo "::notice title=release::kaveh-model-latest updated from run $RUN_ID" || echo "::warning::release upload failed"
+          fi
           git config user.name kaveh-pipeline-ci
           git config user.email kaveh-pipeline-ci@users.noreply.github.com
           git add "$dest"
