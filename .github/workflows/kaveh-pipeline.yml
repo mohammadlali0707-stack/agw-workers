@@ -184,6 +184,42 @@ jobs:
             exit "$EXIT_CODE"
           fi
 
+      - name: Publish small results to CCP (output/latest) and as annotations
+        if: always()
+        shell: bash
+        working-directory: ccp
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          for f in ../out/status.json ../out/rig_metadata.json ../out/gen_report.json ../out/qa_report.json; do
+            if [ -f "$f" ]; then
+              msg=$(tr -d '\r\n' < "$f" | cut -c1-3800)
+              echo "::notice title=$(basename "$f")::$msg"
+            fi
+          done
+          dest=godot3d/tools/kaveh_pipeline/output/latest
+          rm -rf "$dest"
+          mkdir -p "$dest"
+          find ../out -type f \( -name '*.json' -o -name '*.png' -o -name '*.log' -o -name '*.txt' \) -size -4M -exec cp {} "$dest"/ \;
+          echo "run_id=$RUN_ID" > "$dest/RUN.txt"
+          git config user.name kaveh-pipeline-ci
+          git config user.email kaveh-pipeline-ci@users.noreply.github.com
+          git add "$dest"
+          if git diff --cached --quiet; then
+            echo "nothing to publish"
+            exit 0
+          fi
+          git commit -q -m "kaveh_pipeline: publish output/latest from run $RUN_ID"
+          for i in 1 2 3 4 5; do
+            if git pull -q --rebase origin main && git push -q origin HEAD:main; then
+              echo "published"
+              exit 0
+            fi
+            sleep $((i * 7))
+          done
+          echo "::warning::publish to CCP failed"
+
       - name: Upload pipeline artifacts
         uses: actions/upload-artifact@v4
         if: always()
