@@ -20,27 +20,41 @@ def sh(cmd, cwd=None):
     return r.returncode
 
 
+GEN = "--gen" in sys.argv
 t0 = time.time()
 ref = os.path.join(W, "kaveh_ref.png")
-with open(ref, "wb") as f:
-    f.write(base64.b64decode(REF_B64))
-sh("nvidia-smi")
+if not GEN:
+    with open(ref, "wb") as f:
+        f.write(base64.b64decode(REF_B64))
+    sh("nvidia-smi")
+    cap = subprocess.run("nvidia-smi --query-gpu=compute_cap --format=csv,noheader", shell=True,
+                         capture_output=True, text=True).stdout.strip().splitlines()
+    os.environ["TORCH_CUDA_ARCH_LIST"] = cap[0].strip() if cap else "7.5"
+    npv = subprocess.run([sys.executable, "-c", "import numpy;print(numpy.__version__)"],
+                         capture_output=True, text=True).stdout.strip()
+    report["numpy_orig"] = npv
+    sh("git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git " + REPO)
+    pkgs = ("ninja pybind11 diffusers einops opencv-python-headless transformers omegaconf tqdm "
+            "trimesh pymeshlab pygltflib xatlas accelerate")
+    sh("pip install -q " + pkgs + (" numpy==" + npv if npv else ""))
+    sh("pip install -q --no-deps -e .", cwd=REPO)
+    rc_r = sh("python setup.py install", cwd=REPO + "/hy3dgen/texgen/custom_rasterizer")
+    rc_d = sh("python setup.py install", cwd=REPO + "/hy3dgen/texgen/differentiable_renderer")
+    report["build"] = {"custom_rasterizer": rc_r, "differentiable_renderer": rc_d}
+    report["timings"]["setup_s"] = round(time.time() - t0)
+    save()
+    # Generate in a fresh interpreter so the freshly installed packages load cleanly.
+    rc = subprocess.run([sys.executable, os.path.abspath(__file__), "--gen"]).returncode
+    print("gen rc=%d" % rc, flush=True)
+    sys.exit(0)
+
+with open(os.path.join(W, "gen_report.json")) as f:
+    report = json.load(f)
 import torch
-cap = torch.cuda.get_device_capability(0) if torch.cuda.is_available() else (7, 5)
-os.environ["TORCH_CUDA_ARCH_LIST"] = "%d.%d" % cap
 report["gpu"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none"
 print("GPU", report["gpu"], "torch", torch.__version__, flush=True)
-
-sh("git clone --depth 1 https://github.com/Tencent-Hunyuan/Hunyuan3D-2.git " + REPO)
-sh("pip install -q -r requirements.txt", cwd=REPO)
-sh("pip install -q --no-deps -e .", cwd=REPO)
-rc_r = sh("python setup.py install", cwd=REPO + "/hy3dgen/texgen/custom_rasterizer")
-rc_d = sh("python setup.py install", cwd=REPO + "/hy3dgen/texgen/differentiable_renderer")
-report["build"] = {"custom_rasterizer": rc_r, "differentiable_renderer": rc_d}
-report["timings"]["setup_s"] = round(time.time() - t0)
 sys.path.insert(0, REPO)
 os.chdir(REPO)
-save()
 
 from PIL import Image
 img = Image.open(ref).convert("RGBA")
@@ -86,3 +100,4 @@ if mesh is not None:
 report["timings"]["total_s"] = round(time.time() - t0)
 save()
 print("REPORT", json.dumps(report), flush=True)
+
