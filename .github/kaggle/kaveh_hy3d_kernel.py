@@ -82,6 +82,13 @@ save()
 if mesh is not None:
     try:
         t2 = time.time()
+        import diffusers
+        _orig_fp = diffusers.DiffusionPipeline.from_pretrained.__func__
+
+        def _fp(cls, *a, **k):
+            k.setdefault("trust_remote_code", True)
+            return _orig_fp(cls, *a, **k)
+        diffusers.DiffusionPipeline.from_pretrained = classmethod(_fp)
         from hy3dgen.texgen import Hunyuan3DPaintPipeline
         paint = Hunyuan3DPaintPipeline.from_pretrained("tencent/Hunyuan3D-2")
         try:
