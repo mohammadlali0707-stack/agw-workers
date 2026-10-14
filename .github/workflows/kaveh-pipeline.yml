@@ -133,8 +133,9 @@ jobs:
           EXIT_CODE=0
           if [ -n "$PIPELINE_SCRIPT" ]; then
             chmod +x "$PIPELINE_SCRIPT"
+            export PYTHON_BIN="${KP_PY:-python3}"
             echo "Executing $PIPELINE_SCRIPT mode=$MODE rot_z_deg=$ROT_Z_DEG"
-            bash "$PIPELINE_SCRIPT" "$MODE" "$GITHUB_WORKSPACE/source_kaveh.glb" "$GITHUB_WORKSPACE/out" "$ROT_Z_DEG" || EXIT_CODE=$?
+            bash "$PIPELINE_SCRIPT" "$MODE" "$GITHUB_WORKSPACE/source_kaveh.glb" "$GITHUB_WORKSPACE/out" "$ROT_Z_DEG" 2>&1 | tee "$GITHUB_WORKSPACE/out/pipeline.log" || EXIT_CODE=$?
           else
             echo "Notice: run_pipeline.sh not located on disk"
           fi
