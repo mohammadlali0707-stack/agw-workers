@@ -59,12 +59,19 @@ def main():
     if only:
         jobs = [j for j in jobs if j["name"] in only]
     note("gemini", "running %d jobs: %s" % (len(jobs), ", ".join(j["name"] for j in jobs)))
-    par = max(1, min(3, len(jobs)))
+    par = max(1, min(6, len(jobs)))
     with ThreadPoolExecutor(par) as ex:
         results = list(ex.map(run, jobs))
     for r in results:
         note("gem-" + r["name"], json.dumps(r), "notice" if r.get("ok") else "warning")
     note("gemini-summary", json.dumps({r["name"]: r.get("url") for r in results}))
+    rd = os.path.join(HERE, "results")
+    os.makedirs(rd, exist_ok=True)
+    rp = os.path.join(rd, req[0])
+    old = json.load(open(rp)) if os.path.exists(rp) else {}
+    for r in results:
+        old.setdefault(r["name"], []).append(dict(r, run=os.environ.get("GITHUB_RUN_ID"), t=int(time.time())))
+    json.dump(old, open(rp, "w"), indent=1)
     if not any(r.get("ok") for r in results):
         sys.exit(1)
 

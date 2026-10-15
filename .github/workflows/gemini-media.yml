@@ -8,7 +8,7 @@ on:
       - '.github/gemini/request.txt'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: gemini-media
@@ -28,3 +28,12 @@ jobs:
       - name: Run Gemini jobs
         run: |
           python3 .github/gemini/run_jobs.py
+
+      - name: Commit results back to the repo
+        if: always()
+        run: |
+          git config user.name "gemini-media-bot"
+          git config user.email "gemini-media-bot@users.noreply.github.com"
+          git add .github/gemini/results || true
+          git commit -m "gemini-media: results [skip ci]" || exit 0
+          for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 5; done

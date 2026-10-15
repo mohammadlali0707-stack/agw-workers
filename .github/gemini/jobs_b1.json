@@ -1,0 +1,66 @@
+[
+ {
+  "name": "turn_a",
+  "type": "image",
+  "model": "gemini-pro",
+  "aspect_ratio": "16:9",
+  "prompt": "Professional T-pose character turnaround model sheet of the EXACT same man shown in the reference image, for building a realistic 3D video-game character.\n\nIDENTITY (must match the reference 100%): same face shape, eyes, nose and mouth; same short dark hair and hairline; same full dark beard of the same length; same skin tone and age; same height, build and body proportions; same outfit with identical colors, fabric and details: dark charcoal suit jacket, dark shirt, dark trousers, black leather shoes. Do not redesign, stylize, idealize, slim down or beautify him. No hat, no glasses, no accessories that are not in the reference.\n\nLAYOUT: one single wide landscape image on a pure flat uniform light-grey studio background (#BFBFBF). No floor texture, no shadows on the ground, no props, no text, no labels, no numbers, no grid, no watermark. Exactly four full-body views in one horizontal row, left to right, evenly spaced and not overlapping:\n1) FRONT view, facing the camera directly;\n2) THREE-QUARTER view, body rotated 45 degrees;\n3) exact SIDE profile view, body rotated 90 degrees;\n4) BACK view, body rotated 180 degrees, showing the back of the head and jacket.\nAll four views at exactly the same scale and height, feet on the same invisible ground line, the whole body from top of the hair to the soles of the shoes visible with a small margin above and below. Arms must not be cut off by the image edges or overlap the neighbouring view.\n\nPOSE (identical in all four views): strict T-pose. Both arms stretched straight out horizontally to the sides at shoulder height, elbows straight, wrists straight, palms facing down, fingers together and extended, thumbs relaxed. Legs straight, feet shoulder-width apart, toes pointing forward. Spine upright, shoulders level, head straight, neutral relaxed expression, mouth closed, eyes looking straight ahead in the direction the body faces. Jacket buttoned so it does not hide the body silhouette.\n\nSTYLE: photorealistic, like a high-end photogrammetry capture photo shoot. Even, soft, diffuse, shadowless studio lighting from the front, identical lighting and white balance in all four views, no rim light, no dramatic color grading, no depth of field blur, everything in sharp focus. Orthographic-like camera at chest height with no perspective distortion (long telephoto lens look). Natural real skin and fabric texture, high detail.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg"
+  ]
+ },
+ {
+  "name": "turn_b",
+  "type": "image",
+  "model": "gemini-pro",
+  "aspect_ratio": "16:9",
+  "prompt": "Professional T-pose character turnaround model sheet of the EXACT same man shown in the reference image, for building a realistic 3D video-game character.\n\nIDENTITY (must match the reference 100%): same face shape, eyes, nose and mouth; same short dark hair and hairline; same full dark beard of the same length; same skin tone and age; same height, build and body proportions; same outfit with identical colors, fabric and details: dark charcoal suit jacket, dark shirt, dark trousers, black leather shoes. Do not redesign, stylize, idealize, slim down or beautify him. No hat, no glasses, no accessories that are not in the reference.\n\nLAYOUT: one single wide landscape image on a pure flat uniform light-grey studio background (#BFBFBF). No floor texture, no shadows on the ground, no props, no text, no labels, no numbers, no grid, no watermark. Exactly four full-body views in one horizontal row, left to right, evenly spaced and not overlapping:\n1) FRONT view, facing the camera directly;\n2) THREE-QUARTER view, body rotated 45 degrees;\n3) exact SIDE profile view, body rotated 90 degrees;\n4) BACK view, body rotated 180 degrees, showing the back of the head and jacket.\nAll four views at exactly the same scale and height, feet on the same invisible ground line, the whole body from top of the hair to the soles of the shoes visible with a small margin above and below. Arms must not be cut off by the image edges or overlap the neighbouring view.\n\nPOSE (identical in all four views): strict T-pose. Both arms stretched straight out horizontally to the sides at shoulder height, elbows straight, wrists straight, palms facing down, fingers together and extended, thumbs relaxed. Legs straight, feet shoulder-width apart, toes pointing forward. Spine upright, shoulders level, head straight, neutral relaxed expression, mouth closed, eyes looking straight ahead in the direction the body faces. Jacket buttoned so it does not hide the body silhouette.\n\nSTYLE: photorealistic, like a high-end photogrammetry capture photo shoot. Even, soft, diffuse, shadowless studio lighting from the front, identical lighting and white balance in all four views, no rim light, no dramatic color grading, no depth of field blur, everything in sharp focus. Orthographic-like camera at chest height with no perspective distortion (long telephoto lens look). Natural real skin and fabric texture, high detail.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg"
+  ]
+ },
+ {
+  "name": "vid_idle_front",
+  "type": "video",
+  "model": "gemini-pro",
+  "aspect_ratio": "9:16",
+  "prompt": "Realistic full-body video of a man standing still in a relaxed natural idle pose, as a looping idle animation reference for a video game: weight shifts very slightly from one foot to the other, calm natural breathing visible in the chest and shoulders, arms hanging relaxed at his sides with a tiny natural sway, occasional natural blink, he looks straight ahead. He does not walk, talk, gesture or leave his spot. The last frame should match the first frame so the clip can loop.\n\nThe man must be EXACTLY the man in the reference image: same face, short dark hair, full dark beard, skin tone, age, build and proportions, wearing the same dark charcoal suit jacket, dark shirt, dark trousers and black leather shoes. Do not change his identity or clothing at any moment of the video.\n\nCamera: completely static locked-off tripod shot, front view, camera at chest height, the whole body from head to shoes always in frame with margin, centered, no zoom, no pan.\n\nSetting: empty seamless light-grey photo studio (cyclorama), flat uniform background, plain floor of the same grey, soft even diffuse lighting, no props, no other people, no text, no logos, no music video effects. Photorealistic, natural real motion, 24 fps look, sharp focus, no motion blur trails, no cuts, one continuous shot.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg"
+  ],
+  "tries": 2
+ },
+ {
+  "name": "vid_walk_side",
+  "type": "video",
+  "model": "gemini-pro",
+  "aspect_ratio": "16:9",
+  "prompt": "Realistic full-body video of a man walking at a normal relaxed walking pace from the left side of the frame toward the right, as a walk-cycle animation reference for a video game: natural heel-to-toe steps, opposite arm swings with each step, upright posture, steady constant speed, at least four full steps.\n\nThe man must be EXACTLY the man in the reference image: same face, short dark hair, full dark beard, skin tone, age, build and proportions, wearing the same dark charcoal suit jacket, dark shirt, dark trousers and black leather shoes. Do not change his identity or clothing at any moment of the video.\n\nCamera: exact side view (90 degrees profile), camera at hip height, tracking sideways on a dolly at exactly his walking speed so he stays centered in the frame the whole time, whole body from head to shoes always visible, no zoom, no cuts.\n\nSetting: empty seamless light-grey photo studio (cyclorama), flat uniform background, plain floor of the same grey, soft even diffuse lighting, no props, no other people, no text, no logos, no music video effects. Photorealistic, natural real motion, 24 fps look, sharp focus, no motion blur trails, no cuts, one continuous shot.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg"
+  ],
+  "tries": 2
+ },
+ {
+  "name": "vid_run_side",
+  "type": "video",
+  "model": "gemini-pro",
+  "aspect_ratio": "16:9",
+  "prompt": "Realistic full-body video of a man running at a steady jogging-to-running pace from the left side of the frame toward the right, as a run-cycle animation reference for a video game: natural running form, arms bent about 90 degrees swinging opposite to the legs, both feet briefly off the ground in each stride, steady constant speed, at least four full strides. His jacket moves naturally with the motion.\n\nThe man must be EXACTLY the man in the reference image: same face, short dark hair, full dark beard, skin tone, age, build and proportions, wearing the same dark charcoal suit jacket, dark shirt, dark trousers and black leather shoes. Do not change his identity or clothing at any moment of the video.\n\nCamera: exact side view (90 degrees profile), camera at hip height, tracking sideways at exactly his running speed so he stays centered in frame the whole time, whole body from head to shoes always visible, no zoom, no cuts.\n\nSetting: empty seamless light-grey photo studio (cyclorama), flat uniform background, plain floor of the same grey, soft even diffuse lighting, no props, no other people, no text, no logos, no music video effects. Photorealistic, natural real motion, 24 fps look, sharp focus, no motion blur trails, no cuts, one continuous shot.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg"
+  ],
+  "tries": 2
+ },
+ {
+  "name": "vid_walk_back",
+  "type": "video",
+  "model": "gemini-pro",
+  "aspect_ratio": "16:9",
+  "prompt": "Realistic full-body video of a man walking straight away from the camera at a normal relaxed pace, seen from behind, like a third-person video game camera following the player character: natural steps, natural arm swing, upright posture, steady speed.\n\nThe man must be EXACTLY the man in the reference image: same face, short dark hair, full dark beard, skin tone, age, build and proportions, wearing the same dark charcoal suit jacket, dark shirt, dark trousers and black leather shoes. Do not change his identity or clothing at any moment of the video.\n\nCamera: third-person follow camera directly behind him, slightly above shoulder height, looking slightly down, moving forward at exactly his walking speed so his distance and size in frame stay constant, his whole body from head to shoes always visible in the lower-center of the frame, no zoom, no cuts.\n\nSetting: empty seamless light-grey photo studio (cyclorama), flat uniform background, plain floor of the same grey, soft even diffuse lighting, no props, no other people, no text, no logos, no music video effects. Photorealistic, natural real motion, 24 fps look, sharp focus, no motion blur trails, no cuts, one continuous shot.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg"
+  ],
+  "tries": 2
+ }
+]
