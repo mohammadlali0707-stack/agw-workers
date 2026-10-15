@@ -2,6 +2,14 @@ name: Kaveh Kaggle GPU image-to-3D
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Generation mode (single or mv)'
+        type: choice
+        options:
+          - single
+          - mv
+        default: 'single'
   push:
     branches: [main]
     paths:
@@ -25,6 +33,24 @@ jobs:
     steps:
       - name: Check out this repo
         uses: actions/checkout@v4
+
+      - name: Resolve mode
+        id: mode
+        shell: bash
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          MODE="${INPUT_MODE:-}"
+          if [ -z "$MODE" ]; then
+            if [ -f .github/kaveh-kaggle-request.txt ] && grep -qiE '\bmv\b|multi-view|multiview' .github/kaveh-kaggle-request.txt; then
+              MODE="mv"
+            else
+              MODE="single"
+            fi
+          fi
+          echo "Selected mode: $MODE"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Install Kaggle CLI and resolve account
         id: acct
@@ -57,22 +83,223 @@ jobs:
           echo "::notice title=kaggle-user::$U"
           echo "user=$U" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push Kaggle kernel
+      - name: Inspect inputs and prepare payload
+        id: prepare
         shell: bash
         env:
+          MODE: ${{ steps.mode.outputs.mode }}
           KUSER: ${{ steps.acct.outputs.user }}
         run: |
           set -euo pipefail
-          mkdir -p kk
+          mkdir -p kk out
           python3 - <<'PYEOF'
-          import json, os
-          b64 = "".join(open(".github/kaveh_ref.b64").read().split())
-          body = open(".github/kaggle/kaveh_hy3d_kernel.py").read()
-          open("kk/kaveh_hy3d_kernel.py", "w").write('REF_B64 = "' + b64 + '"\n' + body)
+          import base64, glob, io, json, os, sys
+
+          mode = os.environ.get("MODE", "single").strip().lower()
+          kuser = os.environ.get("KUSER", "").strip()
+          github_output = os.environ.get("GITHUB_OUTPUT", "")
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
+
+          def write_output(key, val):
+              if github_output and os.path.exists(github_output):
+                  with open(github_output, "a", encoding="utf-8") as f:
+                      f.write(f"{key}={val}\n")
+              print(f"[OUTPUT] {key}={val}")
+
+          def write_summary(md_text):
+              if github_summary and os.path.exists(github_summary):
+                  with open(github_summary, "a", encoding="utf-8") as f:
+                      f.write(md_text + "\n")
+
+          if mode == "single":
+              ref_path = ".github/kaveh_ref.b64"
+              kernel_path = ".github/kaggle/kaveh_hy3d_kernel.py"
+
+              if not os.path.exists(ref_path) or not os.path.exists(kernel_path):
+                  err_msg = f"Missing single-view source file: {ref_path} or {kernel_path}"
+                  print(f"::error::{err_msg}")
+                  report = {
+                      "space": "kaggle:tencent/Hunyuan3D-2",
+                      "endpoint": "local-gpu",
+                      "status": "BLOCKED",
+                      "reason": err_msg,
+                      "textured": False,
+                      "faces": 0,
+                      "attempts": 0,
+                      "errors": [err_msg],
+                      "timings": {}
+                  }
+                  with open("out/gen_report.json", "w", encoding="utf-8") as f:
+                      json.dump(report, f, indent=2)
+                  write_output("inputs_ready", "false")
+                  write_output("kernel_slug", "kaveh-hy3d-gen")
+                  write_summary(f"# Kaveh Kaggle GPU Image-to-3D (Single Mode)\n\n**Status:** BLOCKED ⏸️\n**Reason:** {err_msg}\n")
+                  sys.exit(0)
+
+              b64 = "".join(open(ref_path).read().split())
+              body = open(kernel_path).read()
+              with open("kk/kaveh_hy3d_kernel.py", "w", encoding="utf-8") as f:
+                  f.write('REF_B64 = "' + b64 + '"\n' + body)
+
+              meta = {
+                  "id": f"{kuser}/kaveh-hy3d-gen",
+                  "title": "kaveh-hy3d-gen",
+                  "code_file": "kaveh_hy3d_kernel.py",
+                  "language": "python",
+                  "kernel_type": "script",
+                  "is_private": True,
+                  "enable_gpu": True,
+                  "enable_internet": True,
+                  "machine_shape": "NvidiaTeslaT4",
+                  "dataset_sources": [],
+                  "competition_sources": [],
+                  "kernel_sources": [],
+              }
+              with open("kk/kernel-metadata.json", "w", encoding="utf-8") as f:
+                  json.dump(meta, f, indent=2)
+
+              write_output("inputs_ready", "true")
+              write_output("kernel_slug", "kaveh-hy3d-gen")
+              write_output("code_file", "kaveh_hy3d_kernel.py")
+              print("Single-view payload prepared successfully in kk/")
+              sys.exit(0)
+
+          # Multi-view mode ('mv')
+          print("Evaluating MV mode inputs...")
+          results_file = ".github/gemini/results/jobs_b1.json"
+          alt_file = ".github/gemini/jobs_b1.json"
+
+          target_file = None
+          if os.path.exists(results_file):
+              target_file = results_file
+          elif os.path.exists(alt_file):
+              target_file = alt_file
+
+          front_b64 = None
+          left_b64 = None
+          back_b64 = None
+          blocked_reason = None
+
+          if not target_file:
+              blocked_reason = f"Results file '{results_file}' not found (turnaround jobs not yet executed)."
+          else:
+              try:
+                  with open(target_file, "r", encoding="utf-8") as f:
+                      data = json.load(f)
+              except Exception as e:
+                  data = None
+                  blocked_reason = f"Failed to parse {target_file}: {e}"
+
+              if data is not None:
+                  turn_entries = []
+                  if isinstance(data, dict):
+                      for k in ("turn_a", "turn_b"):
+                          if k in data:
+                              vals = data[k] if isinstance(data[k], list) else [data[k]]
+                              turn_entries.extend(vals)
+                      if not turn_entries and "crops" in data and isinstance(data["crops"], dict):
+                          c = data["crops"]
+                          if "front" in c and "left" in c and "back" in c:
+                              front_b64 = c["front"]
+                              left_b64 = c["left"]
+                              back_b64 = c["back"]
+                  elif isinstance(data, list):
+                      for item in data:
+                          if isinstance(item, dict) and item.get("name") in ("turn_a", "turn_b"):
+                              turn_entries.append(item)
+
+                  if not (front_b64 and left_b64 and back_b64):
+                      for entry in turn_entries:
+                          if not entry.get("ok", False):
+                              continue
+                          cutouts = entry.get("cutouts") or entry.get("crops") or {}
+                          if isinstance(cutouts, dict) and "front" in cutouts and "left" in cutouts and "back" in cutouts:
+                              front_b64 = cutouts["front"]
+                              left_b64 = cutouts["left"]
+                              back_b64 = cutouts["back"]
+                              break
+
+                      if not (front_b64 and left_b64 and back_b64):
+                          for prefix in [
+                              ".github/gemini/results/turn_a",
+                              ".github/gemini/results/turn_b",
+                              ".github/gemini/cutouts/turn_a",
+                              ".github/gemini/cutouts/turn_b",
+                          ]:
+                              f_p, l_p, b_p = f"{prefix}_front.png", f"{prefix}_left.png", f"{prefix}_back.png"
+                              if os.path.exists(f_p) and os.path.exists(l_p) and os.path.exists(b_p):
+                                  with open(f_p, "rb") as fh: front_b64 = base64.b64encode(fh.read()).decode("ascii")
+                                  with open(l_p, "rb") as fh: left_b64 = base64.b64encode(fh.read()).decode("ascii")
+                                  with open(b_p, "rb") as fh: back_b64 = base64.b64encode(fh.read()).decode("ascii")
+                                  break
+
+                      if not (front_b64 and left_b64 and back_b64):
+                          completed_turns = [e for e in turn_entries if e.get("ok", False)]
+                          if not completed_turns:
+                              blocked_reason = f"Turnaround jobs (turn_a / turn_b) are pending or incomplete in {target_file}."
+                          else:
+                              blocked_reason = "Turnaround job succeeded but RGBA cutouts (front, left, back) are not yet extracted."
+
+          if not (front_b64 and left_b64 and back_b64):
+              if not blocked_reason:
+                  blocked_reason = "Turnaround crops with RGBA cutouts (front, left, back) missing or pending."
+              print(f"::warning title=kaveh-kaggle-mv::BLOCKED: {blocked_reason}")
+              report = {
+                  "space": "kaggle:tencent/Hunyuan3D-2mv",
+                  "endpoint": "local-gpu",
+                  "status": "BLOCKED",
+                  "reason": blocked_reason,
+                  "textured": False,
+                  "faces": 0,
+                  "attempts": 0,
+                  "errors": [f"BLOCKED: {blocked_reason}"],
+                  "timings": {}
+              }
+              with open("out/gen_report.json", "w", encoding="utf-8") as f:
+                  json.dump(report, f, indent=2)
+
+              write_summary(f"""# Kaveh Kaggle GPU Image-to-3D (MV Mode)
+
+          **Status:** BLOCKED ⏸️
+          **Reason:** {blocked_reason}
+
+          > **Note:** Kaggle GPU quota was preserved. No GPU compute was burned while waiting for turnaround RGBA inputs.
+          """)
+              write_output("inputs_ready", "false")
+              write_output("kernel_slug", "kaveh-hy3d-mv-gen")
+              sys.exit(0)
+
+          kernel_template = ".github/kaggle/kaveh_hy3d_mv_kernel.py"
+          if not os.path.exists(kernel_template):
+              err_msg = f"Kernel template '{kernel_template}' not found on disk."
+              print(f"::error::{err_msg}")
+              report = {
+                  "space": "kaggle:tencent/Hunyuan3D-2mv",
+                  "endpoint": "local-gpu",
+                  "status": "BLOCKED",
+                  "reason": err_msg,
+                  "textured": False,
+                  "faces": 0,
+                  "attempts": 0,
+                  "errors": [err_msg],
+                  "timings": {}
+              }
+              with open("out/gen_report.json", "w", encoding="utf-8") as f:
+                  json.dump(report, f, indent=2)
+              write_summary(f"# Kaveh Kaggle GPU Image-to-3D (MV Mode)\n\n**Status:** BLOCKED ⏸️\n**Reason:** {err_msg}\n")
+              write_output("inputs_ready", "false")
+              write_output("kernel_slug", "kaveh-hy3d-mv-gen")
+              sys.exit(0)
+
+          kernel_code = open(kernel_template, "r", encoding="utf-8").read()
+          payload_header = f"""FRONT_B64 = "{front_b64}"\nLEFT_B64 = "{left_b64}"\nBACK_B64 = "{back_b64}"\n"""
+          with open("kk/kaveh_hy3d_mv_kernel.py", "w", encoding="utf-8") as f:
+              f.write(payload_header + "\n" + kernel_code)
+
           meta = {
-              "id": os.environ["KUSER"] + "/kaveh-hy3d-gen",
-              "title": "kaveh-hy3d-gen",
-              "code_file": "kaveh_hy3d_kernel.py",
+              "id": f"{kuser}/kaveh-hy3d-mv-gen",
+              "title": "kaveh-hy3d-mv-gen",
+              "code_file": "kaveh_hy3d_mv_kernel.py",
               "language": "python",
               "kernel_type": "script",
               "is_private": True,
@@ -83,19 +310,33 @@ jobs:
               "competition_sources": [],
               "kernel_sources": [],
           }
-          json.dump(meta, open("kk/kernel-metadata.json", "w"), indent=2)
+          with open("kk/kernel-metadata.json", "w", encoding="utf-8") as f:
+              json.dump(meta, f, indent=2)
+
+          write_output("inputs_ready", "true")
+          write_output("kernel_slug", "kaveh-hy3d-mv-gen")
+          write_output("code_file", "kaveh_hy3d_mv_kernel.py")
+          print("MV payload prepared successfully in kk/")
           PYEOF
+
+      - name: Build and push Kaggle kernel
+        if: steps.prepare.outputs.inputs_ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
           out=$(kaggle kernels push -p kk 2>&1 || true)
           echo "$out"
           echo "::notice title=kaggle-push::$(echo "$out" | tr -d '\r' | tr '\n' ' ' | cut -c1-600)"
 
       - name: Wait for the Kaggle run
+        if: steps.prepare.outputs.inputs_ready == 'true'
         shell: bash
         env:
           KUSER: ${{ steps.acct.outputs.user }}
+          KSLUG: ${{ steps.prepare.outputs.kernel_slug }}
         run: |
           set -uo pipefail
-          REF="$KUSER/kaveh-hy3d-gen"
+          REF="$KUSER/$KSLUG"
           sleep 60
           st=""
           for i in $(seq 1 200); do
@@ -109,16 +350,17 @@ jobs:
           echo "::notice title=kaggle-status::$st"
 
       - name: Collect outputs
-        if: always()
+        if: always() && steps.prepare.outputs.inputs_ready == 'true'
         shell: bash
         env:
           KUSER: ${{ steps.acct.outputs.user }}
+          KSLUG: ${{ steps.prepare.outputs.kernel_slug }}
         run: |
           set -uo pipefail
           mkdir -p kout out
-          kaggle kernels output "$KUSER/kaveh-hy3d-gen" -p kout -o 2>&1 | tail -5 || true
+          kaggle kernels output "$KUSER/$KSLUG" -p kout -o 2>&1 | tail -5 || true
           ls -la kout || true
-          for f in kaveh_raw_ai.glb kaveh_shape.glb gen_report.json kaveh_ref.png; do
+          for f in kaveh_raw_ai.glb kaveh_shape.glb gen_report.json kaveh_ref.png kaveh_front.png kaveh_left.png kaveh_back.png; do
             [ -f "kout/$f" ] && cp "kout/$f" out/
           done
           if [ -f out/kaveh_ref.png ]; then cp out/kaveh_ref.png out/kaveh_ref_rgba.png; fi
