@@ -1,0 +1,131 @@
+name: Relay plan markers to control repo
+
+# Why: the plan bots (agy-plan-bot, sonnet-plan-bot, sonnet-issue-bot,
+# agy-plan-dispatch, agy-final-report) live ONLY in the control repo
+# mohammadlali0707-stack/agw-workers. Issues/comments that end with a plan
+# marker in THIS repo (Mohammadlali/agw-workers) therefore never started
+# anything. This relay mirrors such an issue into the control repo (once)
+# and forwards each marker comment there, so the real bots run.
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+
+concurrency:
+  group: relay-control-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >
+      github.event.sender.type != 'Bot' &&
+      (contains(github.event.comment.body || github.event.issue.body, '@agy-plan') ||
+       contains(github.event.comment.body || github.event.issue.body, '@sonnet'))
+    env:
+      CONTROL_REPO: mohammadlali0707-stack/agw-workers
+      SRC_REPO: ${{ github.repository }}
+      EVENT_NAME: ${{ github.event_name }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_URL: ${{ github.event.issue.html_url }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      COMMENT_URL: ${{ github.event.comment.html_url }}
+      ACTOR: ${{ github.event.sender.login }}
+      ASSOC: ${{ github.event.comment.author_association || github.event.issue.author_association }}
+      RELAY_PAT: ${{ secrets.ACC6_PAT || secrets.ACC0_PAT }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Relay to control repo
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, re, subprocess, sys
+
+          TRUSTED = {"Mohammadlali", "mohammadlali0707-stack"}
+          MARKERS = ("@agy-plan", "@agy-plan-agy", "@agy-plan-sonnet", "@agy-plan-approved",
+                     "@sonnet-plan", "@sonnet-plan-agy", "@sonnet-plan-sonnet",
+                     "@sonnet-plan-approved", "@sonnet")
+          TAG = re.compile(r"<!-- relay-control: (\d+) -->")
+          e = os.environ
+
+          def note(level, msg):
+              print("::%s title=relay::%s" % (level, msg), flush=True)
+
+          def gh(args, token, inp=None):
+              env = dict(os.environ, GH_TOKEN=token)
+              r = subprocess.run(["gh"] + args, env=env, input=inp, capture_output=True, text=True)
+              if r.returncode:
+                  note("error", "gh %s failed: %s" % (args[:2], r.stderr.strip()[:500]))
+                  sys.exit(1)
+              return r.stdout.strip()
+
+          def trailing_marker(text):
+              lines = [l.strip() for l in (text or "").replace("\r", "").split("\n")]
+              lines = [l for l in lines if l and not l.startswith("<!--")]
+              if not lines:
+                  return None
+              last = lines[-1].lower()
+              for m in sorted(MARKERS, key=len, reverse=True):
+                  if last.endswith(m):
+                      return m
+              return None
+
+          def strip_marker(text):
+              lines = (text or "").replace("\r", "").rstrip().split("\n")
+              if lines and trailing_marker(lines[-1]):
+                  last = lines[-1]
+                  last = re.sub(r"@(agy-plan|sonnet)[\w-]*\s*$", "", last, flags=re.I).rstrip()
+                  lines[-1] = last
+              return "\n".join(lines).rstrip()
+
+          if e["ACTOR"] not in TRUSTED and e["ASSOC"] not in ("OWNER", "COLLABORATOR"):
+              note("notice", "ignored: %s (%s) is not trusted" % (e["ACTOR"], e["ASSOC"]))
+              sys.exit(0)
+          if not e.get("RELAY_PAT"):
+              note("error", "ACC6_PAT/ACC0_PAT secret missing; cannot reach the control repo")
+              sys.exit(1)
+
+          is_comment = e["EVENT_NAME"] == "issue_comment"
+          text = e["COMMENT_BODY"] if is_comment else e["ISSUE_BODY"]
+          marker = trailing_marker(text)
+          if not marker:
+              note("notice", "no trailing plan marker; nothing to relay")
+              sys.exit(0)
+
+          src, num, ctl = e["SRC_REPO"], e["ISSUE_NUMBER"], e["CONTROL_REPO"]
+          header = "> Relayed from %s#%s (%s) by %s.\n\n" % (src, num, e["ISSUE_URL"], e["ACTOR"])
+
+          # Existing mirror for this issue?
+          comments = json.loads(gh(["api", "repos/%s/issues/%s/comments?per_page=100" % (src, num)],
+                                   e["GH_TOKEN"]) or "[]")
+          mirror = None
+          for c in comments:
+              m = TAG.search(c.get("body") or "")
+              if m:
+                  mirror = m.group(1)
+
+          if mirror is None:
+              body = e["ISSUE_BODY"] or ""
+              if is_comment:
+                  body = strip_marker(body)  # the comment carries the marker, avoid a double trigger
+              url = gh(["issue", "create", "--repo", ctl, "--title", e["ISSUE_TITLE"],
+                        "--body-file", "-"], e["RELAY_PAT"], inp=header + body + "\n")
+              mirror = url.rstrip("/").split("/")[-1]
+              gh(["issue", "comment", num, "--repo", src, "--body-file", "-"], e["GH_TOKEN"],
+                 inp="Relayed to the control repo, where the plan bots run: %s\n\n<!-- relay-control: %s -->\n"
+                     % (url, mirror))
+              note("notice", "mirrored %s#%s -> %s" % (src, num, url))
+
+          if is_comment:
+              gh(["issue", "comment", mirror, "--repo", ctl, "--body-file", "-"], e["RELAY_PAT"],
+                 inp="> Relayed comment from %s by %s.\n\n%s\n" % (e["COMMENT_URL"], e["ACTOR"], text.rstrip()))
+              note("notice", "forwarded comment (%s) to %s#%s" % (marker, ctl, mirror))
+          PYEOF
