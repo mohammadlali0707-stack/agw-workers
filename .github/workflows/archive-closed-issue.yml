@@ -1,8 +1,8 @@
-name: Archive closed public issue to CCP and remove it
+name: Archive closed public issue to automations and remove it
 
 # Owner policy 2026-10-14: work runs in this public repo, but once an issue is
 # closed its full thread + summary go to the private repo
-# (Claud-Cloud-Project: Reports/public_issues/agw-workers/issue-N.md) and the
+# (automations: Reports/public_issues/agw-workers/issue-N.md) and the
 # public issue is deleted (fallback: comments deleted, body scrubbed, locked).
 # Issue 55 and issues labelled keep-public are never touched.
 
@@ -40,15 +40,17 @@ jobs:
           sparse-checkout: Tools
       - uses: actions/checkout@v4
         with:
-          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          repository: mohammadlali0707-stack/automations
           token: ${{ secrets.ACC6_PAT }}
-          path: ccp
+          path: automations
           fetch-depth: 1
       - name: Archive and remove
         env:
           GH_TOKEN: ${{ secrets.ACC6_PAT }}
           PUBLIC_REPO: ${{ github.repository }}
-          CCP_DIR: ccp
+          ARCHIVE_DIR: automations
+          CCP_DIR: automations
+          ARCHIVE_REPO: mohammadlali0707-stack/automations
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ISSUE: ${{ github.event.issue.number }}
           INPUT_ISSUES: ${{ github.event.inputs.issues }}
@@ -56,8 +58,8 @@ jobs:
           CUTOFF: '2026-10-14T00:00:00Z'
         run: |
           set -e
-          git -C ccp config user.name 'AGY Bot'
-          git -C ccp config user.email 'agy-bot@claud-cloud.local'
+          git -C automations config user.name 'AGY Bot'
+          git -C automations config user.email 'agy-bot@automations.local'
           export DELETE="${INPUT_DELETE:-true}"
           export DELAY_SECONDS=0
           if [ "$EVENT_NAME" = "issues" ]; then
