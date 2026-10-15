@@ -1,0 +1,28 @@
+{
+ "turn_flash": [
+  {
+   "name": "turn_flash",
+   "ok": true,
+   "url": "https://n8n.airboxvip.top/gemini-worker/images/zahra_1792054701_image.jpg",
+   "status": "success",
+   "account": "zahra",
+   "model": "gemini-flash",
+   "bytes": 399737,
+   "latency": 47.13,
+   "attempt": 1,
+   "run": "38709399147",
+   "t": 1792056225
+  }
+ ],
+ "vid_walk_side_noref": [
+  {
+   "name": "vid_walk_side_noref",
+   "ok": false,
+   "attempt": 1,
+   "error": "TimeoutError('The read operation timed out')",
+   "secs": 1500,
+   "run": "38709399147",
+   "t": 1792056225
+  }
+ ]
+}
