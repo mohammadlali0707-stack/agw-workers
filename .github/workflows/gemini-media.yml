@@ -1,0 +1,30 @@
+name: Gemini worker media jobs
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/gemini/request.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gemini-media
+  cancel-in-progress: false
+
+jobs:
+  gemini-media:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      GEMINI_WORKER_KEY: ${{ secrets.GEMINI_WORKER_KEY }}
+      GEMINI_WORKER_URL: https://n8n.airboxvip.top/gemini-worker
+    steps:
+      - name: Check out this repo
+        uses: actions/checkout@v4
+
+      - name: Run Gemini jobs
+        run: |
+          python3 .github/gemini/run_jobs.py
