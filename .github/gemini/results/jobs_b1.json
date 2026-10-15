@@ -1,0 +1,62 @@
+{
+ "turn_a": [
+  {
+   "name": "turn_a",
+   "ok": false,
+   "attempt": 2,
+   "error": "HTTP 500 {\"detail\":\"All account generation attempts failed. Last error: Gemini responded with text but no media: I can create more images as soon as your limit resets. Check your usage in Settings.\"}",
+   "run": "38707596481",
+   "t": 1792054014
+  }
+ ],
+ "turn_b": [
+  {
+   "name": "turn_b",
+   "ok": false,
+   "attempt": 2,
+   "error": "HTTP 500 {\"detail\":\"All account generation attempts failed. Last error: Gemini responded with text but no media: Sorry, something went wrong. Please try your request again.\"}",
+   "run": "38707596481",
+   "t": 1792054014
+  }
+ ],
+ "vid_idle_front": [
+  {
+   "name": "vid_idle_front",
+   "ok": false,
+   "attempt": 2,
+   "error": "HTTP 500 {\"detail\":\"All account generation attempts failed. Last error: Gemini responded with text but no media: I'm having a hard time fulfilling your request. Can I help you with something else instead?\"}",
+   "run": "38707596481",
+   "t": 1792054014
+  }
+ ],
+ "vid_walk_side": [
+  {
+   "name": "vid_walk_side",
+   "ok": false,
+   "attempt": 2,
+   "error": "HTTP 500 {\"detail\":\"All account generation attempts failed. Last error: Gemini responded with text but no media: I'm having a hard time fulfilling your request. Can I help you with something else instead?\"}",
+   "run": "38707596481",
+   "t": 1792054014
+  }
+ ],
+ "vid_run_side": [
+  {
+   "name": "vid_run_side",
+   "ok": false,
+   "attempt": 2,
+   "error": "HTTP 500 {\"detail\":\"All account generation attempts failed. Last error: Gemini responded with text but no media: I seem to be encountering an error. Can I try something else for you?\"}",
+   "run": "38707596481",
+   "t": 1792054014
+  }
+ ],
+ "vid_walk_back": [
+  {
+   "name": "vid_walk_back",
+   "ok": false,
+   "attempt": 2,
+   "error": "HTTP 500 {\"detail\":\"All account generation attempts failed. Last error: Gemini responded with text but no media: I'm having a hard time fulfilling your request. Can I help you with something else instead?\"}",
+   "run": "38707596481",
+   "t": 1792054014
+  }
+ ]
+}
