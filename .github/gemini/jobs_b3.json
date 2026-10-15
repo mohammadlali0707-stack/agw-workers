@@ -1,0 +1,62 @@
+[
+ {
+  "name": "view_front",
+  "type": "image",
+  "model": "gemini-flash",
+  "aspect_ratio": "16:9",
+  "prompt": "FRONT view: he faces the camera directly, body and face pointing straight at the viewer.\n\nSame man as in the reference images, identity 100% identical: same face, short dark hair, full dark beard, skin tone, age, build and proportions. Same outfit as the turnaround reference: dark charcoal wool suit jacket, black shirt, thin black tie, dark trousers, dark brown leather shoes. Do not redesign or stylize him.\n\nStrict T-pose: both arms straight out horizontally at shoulder height, palms down, fingers together, legs straight and slightly apart. The ENTIRE body including both complete arms, all fingers, the top of the hair and the soles of the shoes must be fully inside the frame with clear empty margin on all four sides; nothing cropped. Single person only, one view only. Pure flat uniform light-grey studio background (#BFBFBF), no floor line, no shadow, no text, no labels, no captions, no watermark. Photorealistic photogrammetry reference photo, soft even shadowless studio lighting, sharp focus, orthographic-like telephoto camera at chest height, no perspective distortion.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg",
+   "https://n8n.airboxvip.top/gemini-worker/images/zahra_1792054701_image.jpg"
+  ],
+  "tries": 2
+ },
+ {
+  "name": "view_left",
+  "type": "image",
+  "model": "gemini-flash",
+  "aspect_ratio": "16:9",
+  "prompt": "Exact LEFT SIDE PROFILE view: his body is rotated 90 degrees so we see his left side; his face points to the left edge of the image; his arms extend toward the left and right image edges.\n\nSame man as in the reference images, identity 100% identical: same face, short dark hair, full dark beard, skin tone, age, build and proportions. Same outfit as the turnaround reference: dark charcoal wool suit jacket, black shirt, thin black tie, dark trousers, dark brown leather shoes. Do not redesign or stylize him.\n\nStrict T-pose: both arms straight out horizontally at shoulder height, palms down, fingers together, legs straight and slightly apart. The ENTIRE body including both complete arms, all fingers, the top of the hair and the soles of the shoes must be fully inside the frame with clear empty margin on all four sides; nothing cropped. Single person only, one view only. Pure flat uniform light-grey studio background (#BFBFBF), no floor line, no shadow, no text, no labels, no captions, no watermark. Photorealistic photogrammetry reference photo, soft even shadowless studio lighting, sharp focus, orthographic-like telephoto camera at chest height, no perspective distortion.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg",
+   "https://n8n.airboxvip.top/gemini-worker/images/zahra_1792054701_image.jpg"
+  ],
+  "tries": 2
+ },
+ {
+  "name": "view_back",
+  "type": "image",
+  "model": "gemini-flash",
+  "aspect_ratio": "16:9",
+  "prompt": "BACK view: his body is rotated 180 degrees, we see the back of his head, jacket and heels; face not visible.\n\nSame man as in the reference images, identity 100% identical: same face, short dark hair, full dark beard, skin tone, age, build and proportions. Same outfit as the turnaround reference: dark charcoal wool suit jacket, black shirt, thin black tie, dark trousers, dark brown leather shoes. Do not redesign or stylize him.\n\nStrict T-pose: both arms straight out horizontally at shoulder height, palms down, fingers together, legs straight and slightly apart. The ENTIRE body including both complete arms, all fingers, the top of the hair and the soles of the shoes must be fully inside the frame with clear empty margin on all four sides; nothing cropped. Single person only, one view only. Pure flat uniform light-grey studio background (#BFBFBF), no floor line, no shadow, no text, no labels, no captions, no watermark. Photorealistic photogrammetry reference photo, soft even shadowless studio lighting, sharp focus, orthographic-like telephoto camera at chest height, no perspective distortion.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg",
+   "https://n8n.airboxvip.top/gemini-worker/images/zahra_1792054701_image.jpg"
+  ],
+  "tries": 2
+ },
+ {
+  "name": "view_right",
+  "type": "image",
+  "model": "gemini-flash",
+  "aspect_ratio": "16:9",
+  "prompt": "Exact RIGHT SIDE PROFILE view: his body is rotated 90 degrees so we see his right side; his face points to the right edge of the image.\n\nSame man as in the reference images, identity 100% identical: same face, short dark hair, full dark beard, skin tone, age, build and proportions. Same outfit as the turnaround reference: dark charcoal wool suit jacket, black shirt, thin black tie, dark trousers, dark brown leather shoes. Do not redesign or stylize him.\n\nStrict T-pose: both arms straight out horizontally at shoulder height, palms down, fingers together, legs straight and slightly apart. The ENTIRE body including both complete arms, all fingers, the top of the hair and the soles of the shoes must be fully inside the frame with clear empty margin on all four sides; nothing cropped. Single person only, one view only. Pure flat uniform light-grey studio background (#BFBFBF), no floor line, no shadow, no text, no labels, no captions, no watermark. Photorealistic photogrammetry reference photo, soft even shadowless studio lighting, sharp focus, orthographic-like telephoto camera at chest height, no perspective distortion.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/1997_1792014427_image.jpg",
+   "https://n8n.airboxvip.top/gemini-worker/images/zahra_1792054701_image.jpg"
+  ],
+  "tries": 2
+ },
+ {
+  "name": "vid_idle_flash",
+  "type": "video",
+  "model": "gemini-flash",
+  "aspect_ratio": "9:16",
+  "prompt": "Realistic full-body video of the man from the reference image standing still in a relaxed natural idle pose: arms relaxed at his sides, calm breathing, tiny weight shift, natural blinking, looking ahead. He does not walk or talk. Static tripod camera, front view, whole body from head to shoes in frame. Plain light-grey studio background, soft even lighting. Photorealistic, one continuous shot.",
+  "refs": [
+   "https://n8n.airboxvip.top/gemini-worker/images/zahra_1792054701_image.jpg"
+  ],
+  "tries": 1,
+  "timeout": 2700
+ }
+]

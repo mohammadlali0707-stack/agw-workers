@@ -28,7 +28,7 @@ def run(job):
                                      headers={"Content-Type": "application/json", "X-API-Key": KEY,
                                               "Authorization": "Bearer " + KEY}, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=1500) as r:
+            with urllib.request.urlopen(req, timeout=int(job.get("timeout", 1500))) as r:
                 res = json.loads(r.read().decode())
             url = res.get("public_url") or res.get("media_url") or res.get("image_url")
             out = {"name": job["name"], "ok": bool(url), "url": url, "status": res.get("status"),
