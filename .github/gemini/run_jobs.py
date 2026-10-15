@@ -55,11 +55,12 @@ def main():
         sys.exit(1)
     req = open(os.path.join(HERE, "request.txt")).read().split()
     jobs = json.load(open(os.path.join(HERE, req[0])))
-    only = set(req[1:])
+    par_opt = [a for a in req[1:] if a.startswith("--par=")]
+    only = set(a for a in req[1:] if not a.startswith("--"))
     if only:
         jobs = [j for j in jobs if j["name"] in only]
     note("gemini", "running %d jobs: %s" % (len(jobs), ", ".join(j["name"] for j in jobs)))
-    par = max(1, min(6, len(jobs)))
+    par = int(par_opt[0].split("=")[1]) if par_opt else max(1, min(6, len(jobs)))
     with ThreadPoolExecutor(par) as ex:
         results = list(ex.map(run, jobs))
     for r in results:
