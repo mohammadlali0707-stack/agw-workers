@@ -1,1 +1,1 @@
-jobs_b1.json
+jobs_b1.json turn_a turn_b vid_idle_front vid_walk_side vid_run_side vid_walk_back
