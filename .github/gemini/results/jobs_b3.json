@@ -1,0 +1,72 @@
+{
+ "view_front": [
+  {
+   "name": "view_front",
+   "ok": true,
+   "url": "https://n8n.airboxvip.top/gemini-worker/images/zahra_1792057504_image.jpg",
+   "status": "success",
+   "account": "zahra",
+   "model": "gemini-flash",
+   "bytes": 1698619,
+   "latency": 37.91,
+   "attempt": 1,
+   "run": "38715165568",
+   "t": 1792057809
+  }
+ ],
+ "view_left": [
+  {
+   "name": "view_left",
+   "ok": true,
+   "url": "https://n8n.airboxvip.top/gemini-worker/images/Momona_1792057501_image.jpg",
+   "status": "success",
+   "account": "Momona",
+   "model": "gemini-flash",
+   "bytes": 1875575,
+   "latency": 35.05,
+   "attempt": 1,
+   "run": "38715165568",
+   "t": 1792057809
+  }
+ ],
+ "view_back": [
+  {
+   "name": "view_back",
+   "ok": true,
+   "url": "https://n8n.airboxvip.top/gemini-worker/images/lets_1792057540_image.jpg",
+   "status": "success",
+   "account": "lets",
+   "model": "gemini-flash",
+   "bytes": 1733314,
+   "latency": 38.74,
+   "attempt": 1,
+   "run": "38715165568",
+   "t": 1792057809
+  }
+ ],
+ "view_right": [
+  {
+   "name": "view_right",
+   "ok": true,
+   "url": "https://n8n.airboxvip.top/gemini-worker/images/Just_1792057543_image.jpg",
+   "status": "success",
+   "account": "Just",
+   "model": "gemini-flash",
+   "bytes": 1857063,
+   "latency": 41.37,
+   "attempt": 1,
+   "run": "38715165568",
+   "t": 1792057809
+  }
+ ],
+ "vid_idle_flash": [
+  {
+   "name": "vid_idle_flash",
+   "ok": false,
+   "attempt": 1,
+   "error": "HTTP 500 {\"detail\":\"All account generation attempts failed. Last error: stat: path should be string, bytes, os.PathLike or integer, not dict\"}",
+   "run": "38715165568",
+   "t": 1792057809
+  }
+ ]
+}
