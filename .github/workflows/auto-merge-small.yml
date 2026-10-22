@@ -1,0 +1,38 @@
+name: Auto-merge small green PRs
+# Owner decision 2026-10-22: small PRs whose checks are all green are merged automatically.
+# Small = <=400 changed lines, <=10 files, no .github/ changes, not draft, no "no-automerge" label.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge small PRs with all checks green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          for n in $(gh pr list -R "$REPO" --state open --json number,isDraft --jq '.[] | select(.isDraft==false) | .number'); do
+            info=$(gh pr view "$n" -R "$REPO" --json additions,deletions,changedFiles,headRefOid,labels,files,mergeable)
+            size=$(echo "$info" | jq '.additions + .deletions'); files=$(echo "$info" | jq '.changedFiles')
+            sha=$(echo "$info" | jq -r '.headRefOid'); mergeable=$(echo "$info" | jq -r '.mergeable')
+            wf=$(echo "$info" | jq '[.files[].path | select(startswith(".github/"))] | length')
+            skip=$(echo "$info" | jq '[.labels[].name | select(. == "no-automerge")] | length')
+            if [ "$size" -gt 400 ] || [ "$files" -gt 10 ] || [ "$wf" -gt 0 ] || [ "$skip" -gt 0 ] || [ "$mergeable" != "MERGEABLE" ]; then
+              echo "#$n skip (lines=$size files=$files workflow_files=$wf mergeable=$mergeable)"; continue
+            fi
+            checks=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" --jq '[.check_runs[] | select(.name != "automerge")]')
+            total=$(echo "$checks" | jq length)
+            bad=$(echo "$checks" | jq '[.[] | select(.status != "completed" or (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral"))] | length')
+            if [ "$total" -gt 0 ] && [ "$bad" -eq 0 ]; then
+              gh pr merge "$n" -R "$REPO" --squash --delete-branch && echo "#$n merged"
+            else
+              echo "#$n waiting (checks=$total not_green=$bad)"
+            fi
+          done
