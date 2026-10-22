@@ -1,0 +1,23 @@
+id: TBS-M07
+name: ambience_audio
+version: '1.0'
+layer: feature
+path: godot3d/modules/ambience_audio/
+depends_on: [TBS-M00@1]
+listens: [zone_entered, player_moved]
+emits: []
+node: Node3D → AudioStreamPlayer×2 (bus=Ambience, crossfade) + Node3D (emitters_3d)
+params: { crossfade_time: 1.5, default_volume_db: -6.0, mute_volume_db: -80.0, max_distance_3d: 20.0 }
+behaviour:
+  - 'دریافت zone_entered(zone_id) → شروع crossfade بین پلیر فعال و پلیر رزرو در مدت crossfade_time'
+  - 'پخش loop بدون درز روی استریم‌های محیطی؛ نادیده‌گرفتن سیگنال در صورت یکسان بودن zone_id جدید با ناحیه‌ی فعلی'
+  - 'دریافت player_moved(pos) → به‌روزرسانی موقعیت شنونده یا محاسبه‌ی فاصله تا منابع صوتی سه‌بعدی محیطی'
+  - 'اجرای کامل منطق زمان‌بندی و حجم صدا در حالت headless (بدون وابستگی به خروجی سخت‌افزار صدا)'
+mocks: [mocks/mock_zone_emitter.gd]
+errors:
+  - { code: E_UNKNOWN_ZONE, when: 'zone_id نامعتبر یا بدون استریم → ثبت هشدار و fade-out پلیر فعال به mute_volume_db' }
+acceptance:
+  - 'تست headless (loop بدون درز): جهش (seek) به 0.05s مانده به انتهای استریم و پردازش 0.1s → playing==true در تمام فریم‌ها و بازگشت playback_position به ابتدای بازه'
+  - 'تست headless (crossfade): ارسال zone_entered(\'A\') سپس zone_entered(\'B\') → در t=0.75s هر دو پلیر playing==true با حجم صدای میانی؛ در t=1.6s پلیر A متوقف (playing==false) و پلیر B روی -6.0±0.1 dB'
+  - 'تست headless (تکرار ناحیه): ارسال مجدد zone_entered(\'B\') → عدم ریست شدن playback_position و عدم شروع مجدد Tween'
+budget: { max_files: 4, max_changed_lines: 250 }
