@@ -9,6 +9,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx src/seed.ts",
+    "pretest": "prisma generate",
     "test": "vitest run"
   },
   "dependencies": {
