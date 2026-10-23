@@ -1,0 +1,62 @@
+name: Fleet runs audit (read-only, all accounts)
+# Notion AI 2026-10-23: owner gets many "Run failed" emails from the fleet accounts.
+# Read-only: lists failed runs per account repo (last 3 days), failing jobs/steps and key error lines. Prints to the job log only.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/fleet-runs-audit.yml"]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    env:
+      ACC0_PAT: ${{ secrets.ACC0_PAT }}
+      ACC1_PAT: ${{ secrets.ACC1_PAT }}
+      ACC2_PAT: ${{ secrets.ACC2_PAT }}
+      ACC3_PAT: ${{ secrets.ACC3_PAT }}
+      ACC4_PAT: ${{ secrets.ACC4_PAT }}
+      ACC5_PAT: ${{ secrets.ACC5_PAT }}
+      ACC6_PAT: ${{ secrets.ACC6_PAT }}
+      ACC7_PAT: ${{ secrets.ACC7_PAT }}
+      ACC8_PAT: ${{ secrets.ACC8_PAT }}
+    steps:
+      - name: Audit
+        shell: python
+        run: |
+          import os, json, re, io, zipfile, urllib.request, collections, datetime
+          ACC = [(0,"Mohammadlali"),(1,"momonakikugava-pixel"),(2,"lali94m-max"),(3,"ngocgminh5-debug"),(4,"hmmletssee7-design"),(5,"kidding602"),(6,"mohammadlali0707-stack"),(7,"mohammad97okk"),(8,"moradzahra85-png")]
+          since = (datetime.datetime.utcnow() - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+          def g(tok, path, raw=False):
+              r = urllib.request.Request("https://api.github.com/" + path, headers={"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json", "User-Agent": "audit"})
+              b = urllib.request.urlopen(r, timeout=60).read()
+              return b if raw else json.loads(b)
+          for i, o in ACC:
+              tok = os.environ.get(f"ACC{i}_PAT", "")
+              print(f"\n##AUDIT## ===== ACC{i} {o} =====")
+              if not tok: print("##AUDIT## NO_PAT"); continue
+              try:
+                  rs = g(tok, f"repos/{o}/agw-workers/actions/runs?per_page=100&created=>{since}")
+              except Exception as e: print("##AUDIT## ERR", str(e)[:150]); continue
+              runs = rs["workflow_runs"]; bad = [x for x in runs if x["conclusion"] in ("failure", "startup_failure", "timed_out")]
+              print(f"##AUDIT## runs={rs['total_count']} failed={len(bad)}")
+              c = collections.Counter((x["name"], x["event"], x["conclusion"]) for x in bad)
+              for k, v in c.most_common(8): print(f"##AUDIT##   {v} x {k[0]} [{k[1]}] {k[2]}  path={next(x['path'] for x in bad if x['name']==k[0])}")
+              seen = set()
+              for x in bad:
+                  if x["name"] in seen or len(seen) >= 3: continue
+                  seen.add(x["name"])
+                  try:
+                      jobs = g(tok, f"repos/{o}/agw-workers/actions/runs/{x['id']}/jobs")["jobs"]
+                      for j in jobs:
+                          if j["conclusion"] != "failure": continue
+                          steps = [s["name"] for s in j.get("steps", []) if s["conclusion"] == "failure"]
+                          print(f"##AUDIT##   >> {x['name']} run {x['id']} {x['created_at']} job '{j['name']}' failed steps {steps}")
+                          try:
+                              log = g(tok, f"repos/{o}/agw-workers/actions/jobs/{j['id']}/logs", True).decode("utf-8", "replace")
+                              keys = [l[29:].strip()[:220] for l in log.splitlines() if re.search(r"error|Error|ERROR|fatal|denied|quota|exceeded|not found|401|403|429|exit code", l)]
+                              for l in keys[-6:]: print("##AUDIT##      |", l)
+                          except Exception as e: print("##AUDIT##      log ERR", str(e)[:120])
+                          break
+                  except Exception as e: print("##AUDIT##   jobs ERR", str(e)[:120])
