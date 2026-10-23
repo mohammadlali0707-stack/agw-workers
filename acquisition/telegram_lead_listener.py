@@ -345,7 +345,37 @@ class ChannelSchedulingManager:
 # 3. VERIFICATION & TEST ROUTINE
 # ==============================================================================
 
-def verify_deprioritization_wiring() -> bool:
+def _load_fixtures() -> Dict[str, Any]:
+    """Loads keyword filter test fixtures from external fixture module.
+
+    Separates validation sample data from listener engine operational logic.
+    """
+    try:
+        from acquisition.test_fixtures import KEYWORD_FILTER_FIXTURES
+        return KEYWORD_FILTER_FIXTURES
+    except ImportError:
+        pass
+    try:
+        from tests.fixtures import KEYWORD_FILTER_FIXTURES
+        return KEYWORD_FILTER_FIXTURES
+    except ImportError:
+        pass
+
+    cur_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_root = cur_dir if os.path.basename(cur_dir) != "acquisition" else os.path.dirname(cur_dir)
+    for p in [repo_root, os.path.join(repo_root, "acquisition")]:
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    try:
+        from acquisition.test_fixtures import KEYWORD_FILTER_FIXTURES
+        return KEYWORD_FILTER_FIXTURES
+    except ImportError:
+        from test_fixtures import KEYWORD_FILTER_FIXTURES
+        return KEYWORD_FILTER_FIXTURES
+
+
+def verify_deprioritization_wiring(fixtures: Optional[Dict[str, Any]] = None) -> bool:
     """Verifies that all deprioritization constraints and rules are properly wired."""
     print("=" * 80)
     print("🔍 VERIFYING TELEGRAM LEAD LISTENER CONFIGURATION & WIRING")
@@ -392,11 +422,14 @@ def verify_deprioritization_wiring() -> bool:
             return False
     print(f"✅ Verified: All 6 Golden Tier 1 channels configured with 15m polling intervals.")
 
-    # 6. Verify Keyword Gating on Tier 3
-    test_ch = "@Group_PyDev"
-    chatter_msg = "سلام دوستان چطوری میشه توی پایتون لیست رو معکوس کرد؟"
-    lead_msg = "پروژه فوری: نیازمند برنامه‌نویس ارشد جنگو با بودجه ۳۰ میلیون تومان جهت طراحی اختصاصی"
-    
+    # 6. Verify Keyword Gating on Tier 3 using external fixtures
+    fx = fixtures if fixtures is not None else _load_fixtures()
+    test_ch = fx.get("tier_3_test_channel", "@Group_PyDev")
+    chatter_msgs = fx.get("chatter_messages") or [fx.get("chatter_msg", "")]
+    lead_msgs = fx.get("qualified_lead_messages") or [fx.get("lead_msg", "")]
+    chatter_msg = chatter_msgs[0]
+    lead_msg = lead_msgs[0]
+
     passed_chatter, _ = mgr.should_process_event(test_ch, chatter_msg)
     passed_lead, _ = mgr.should_process_event(test_ch, lead_msg)
 
