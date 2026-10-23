@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ChannelMessage",
+  "description": "Standard schema for individual messages extracted from candidate Telegram channel feeds.",
+  "type": "object",
+  "required": [
+    "message_id",
+    "channel_id",
+    "timestamp",
+    "content_type",
+    "text",
+    "views",
+    "is_forward",
+    "language"
+  ],
+  "properties": {
+    "message_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Unique sequential message ID within the channel"
+    },
+    "channel_id": {
+      "type": "string",
+      "pattern": "^@[a-zA-Z0-9_]{4,32}$",
+      "description": "Canonical Telegram channel username handle starting with @"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of message publication"
+    },
+    "content_type": {
+      "type": "string",
+      "enum": [
+        "text",
+        "photo",
+        "video",
+        "audio",
+        "voice",
+        "document",
+        "poll",
+        "link"
+      ],
+      "description": "Primary media/content classification"
+    },
+    "text": {
+      "type": "string",
+      "description": "Text body or media caption of the message (UTF-8 encoded)"
+    },
+    "views": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "View count metric at time of scrape/smoke test"
+    },
+    "forwards": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of times forwarded"
+    },
+    "is_forward": {
+      "type": "boolean",
+      "description": "Whether this post was forwarded from another entity"
+    },
+    "forward_from": {
+      "type": ["string", "null"],
+      "description": "Origin channel or user ID if is_forward is true"
+    },
+    "language": {
+      "type": "string",
+      "enum": ["fa", "en", "mixed", "other"],
+      "description": "Primary detected language code"
+    },
+    "has_links": {
+      "type": "boolean",
+      "description": "Indicates whether message body contains outbound URLs"
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      },
+      "description": "List of outbound URLs extracted from message"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Hashtags extracted from text"
+    },
+    "media_metadata": {
+      "type": "object",
+      "properties": {
+        "file_size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "mime_type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

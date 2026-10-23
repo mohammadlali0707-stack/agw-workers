@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CandidateChannel",
+  "description": "Standard schema for candidate channel definitions submitted for QA smoke testing and registry consideration.",
+  "type": "object",
+  "required": [
+    "candidate_id",
+    "handle",
+    "title",
+    "category",
+    "primary_language",
+    "feed_url",
+    "poll_interval_minutes",
+    "operational_endpoint",
+    "sample_messages"
+  ],
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^cand-[a-z0-9_-]+$",
+      "description": "Unique identifier for candidate channel"
+    },
+    "handle": {
+      "type": "string",
+      "pattern": "^@[a-zA-Z0-9_]{4,32}$",
+      "description": "Canonical Telegram channel handle"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 100,
+      "description": "Display name of the channel"
+    },
+    "description": {
+      "type": "string",
+      "description": "Channel bio or topic overview"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "ai_tech",
+        "game_development",
+        "automation_devops",
+        "narrative_audio",
+        "persian_ui_typography",
+        "general_tech"
+      ],
+      "description": "Functional domain category aligned with fleet projects"
+    },
+    "primary_language": {
+      "type": "string",
+      "enum": ["fa", "en", "mixed"],
+      "description": "Dominant language of published content"
+    },
+    "feed_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Public web preview or bridge URL (e.g., https://t.me/s/...)"
+    },
+    "poll_interval_minutes": {
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 1440,
+      "description": "Proposed polling frequency in minutes"
+    },
+    "operational_endpoint": {
+      "type": "object",
+      "required": ["protocol", "target", "expected_status"],
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "enum": ["https", "telegram_mtproto", "telegram_bot_api", "rss_bridge"]
+        },
+        "target": {
+          "type": "string"
+        },
+        "expected_status": {
+          "type": "integer",
+          "default": 200
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "default": 5.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "sample_messages": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "minItems": 1,
+      "description": "Historic sample of extracted messages for verification and smoke testing"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,398 @@
+{
+  "evaluated_at": "2026-10-23T05:30:00+00:00",
+  "total_candidates": 7,
+  "summary": {
+    "PASS": 3,
+    "CONDITIONAL": 1,
+    "FAIL": 3
+  },
+  "candidates": [
+    {
+      "candidate_id": "cand-tech-ai-01",
+      "handle": "@tech_ai_persian",
+      "title": "هوش مصنوعی و یادگیری عمیق به زبان فارسی",
+      "category": "ai_tech",
+      "status": "PASS",
+      "composite_score": 99.4,
+      "metrics": {
+        "stability": {
+          "reachable": true,
+          "expected_status": 200,
+          "simulated_latency_ms": 350.0,
+          "failure_rate": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "schema": {
+          "candidate_schema_valid": true,
+          "candidate_errors": [],
+          "total_messages": 5,
+          "valid_messages": 5,
+          "pass_rate_pct": 100.0,
+          "message_errors": [],
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "cadence": {
+          "posts_per_day": 1.33,
+          "hours_since_latest": 10.0,
+          "latest_post_iso": "2026-10-22T19:30:00+00:00",
+          "timespan_days": 3.8,
+          "max_hourly_burst": 1,
+          "score": 97.6,
+          "critical_failure": false,
+          "reason": null
+        },
+        "noise": {
+          "ad_count": 0,
+          "ad_ratio_pct": 0.0,
+          "duplicate_count": 0,
+          "duplicate_ratio_pct": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        }
+      },
+      "critical_failures": [],
+      "warnings": []
+    },
+    {
+      "candidate_id": "cand-gamedev-godot-02",
+      "handle": "@godot_gamecraft_fa",
+      "title": "توسعه بازی با گودو و گرافیک سه‌بعدی",
+      "category": "game_development",
+      "status": "PASS",
+      "composite_score": 99.5,
+      "metrics": {
+        "stability": {
+          "reachable": true,
+          "expected_status": 200,
+          "simulated_latency_ms": 350.0,
+          "failure_rate": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "schema": {
+          "candidate_schema_valid": true,
+          "candidate_errors": [],
+          "total_messages": 4,
+          "valid_messages": 4,
+          "pass_rate_pct": 100.0,
+          "message_errors": [],
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "cadence": {
+          "posts_per_day": 0.87,
+          "hours_since_latest": 8.5,
+          "latest_post_iso": "2026-10-22T21:00:00+00:00",
+          "timespan_days": 4.6,
+          "max_hourly_burst": 1,
+          "score": 98.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "noise": {
+          "ad_count": 0,
+          "ad_ratio_pct": 0.0,
+          "duplicate_count": 0,
+          "duplicate_ratio_pct": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        }
+      },
+      "critical_failures": [],
+      "warnings": []
+    },
+    {
+      "candidate_id": "cand-automation-cloud-03",
+      "handle": "@devops_automation_pro",
+      "title": "اتوماسیون زیرساخت و جریان‌های کاری مدرن",
+      "category": "automation_devops",
+      "status": "PASS",
+      "composite_score": 99.3,
+      "metrics": {
+        "stability": {
+          "reachable": true,
+          "expected_status": 200,
+          "simulated_latency_ms": 350.0,
+          "failure_rate": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "schema": {
+          "candidate_schema_valid": true,
+          "candidate_errors": [],
+          "total_messages": 3,
+          "valid_messages": 3,
+          "pass_rate_pct": 100.0,
+          "message_errors": [],
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "cadence": {
+          "posts_per_day": 0.89,
+          "hours_since_latest": 12.3,
+          "latest_post_iso": "2026-10-22T17:10:00+00:00",
+          "timespan_days": 3.4,
+          "max_hourly_burst": 1,
+          "score": 97.1,
+          "critical_failure": false,
+          "reason": null
+        },
+        "noise": {
+          "ad_count": 0,
+          "ad_ratio_pct": 0.0,
+          "duplicate_count": 0,
+          "duplicate_ratio_pct": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        }
+      },
+      "critical_failures": [],
+      "warnings": []
+    },
+    {
+      "candidate_id": "cand-dormant-legacy-04",
+      "handle": "@retro_archive_dormant",
+      "title": "آرشیو بازی‌های رترو و مقالات قدیمی",
+      "category": "game_development",
+      "status": "FAIL",
+      "composite_score": 75.0,
+      "metrics": {
+        "stability": {
+          "reachable": true,
+          "expected_status": 200,
+          "simulated_latency_ms": 350.0,
+          "failure_rate": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "schema": {
+          "candidate_schema_valid": true,
+          "candidate_errors": [],
+          "total_messages": 1,
+          "valid_messages": 1,
+          "pass_rate_pct": 100.0,
+          "message_errors": [],
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "cadence": {
+          "posts_per_day": 0.02,
+          "hours_since_latest": 1145.5,
+          "latest_post_iso": "2026-09-05T12:00:00+00:00",
+          "timespan_days": 47.7,
+          "max_hourly_burst": 1,
+          "score": 0.0,
+          "critical_failure": true,
+          "reason": "Feed is stale (1145.5h > 168.0h threshold)"
+        },
+        "noise": {
+          "ad_count": 0,
+          "ad_ratio_pct": 0.0,
+          "duplicate_count": 0,
+          "duplicate_ratio_pct": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        }
+      },
+      "critical_failures": [
+        "Cadence: Feed is stale (1145.5h > 168.0h threshold)"
+      ],
+      "warnings": []
+    },
+    {
+      "candidate_id": "cand-malformed-bot-05",
+      "handle": "@broken_crypto_signals",
+      "title": "سیگنال‌های نوسان‌گیری کریپتو و ربات ترید",
+      "category": "general_tech",
+      "status": "FAIL",
+      "composite_score": 43.2,
+      "metrics": {
+        "stability": {
+          "reachable": false,
+          "expected_status": 500,
+          "simulated_latency_ms": 4200.0,
+          "failure_rate": 1.0,
+          "score": 0.0,
+          "critical_failure": true,
+          "reason": "Endpoint returned non-200 status (500)"
+        },
+        "schema": {
+          "candidate_schema_valid": true,
+          "candidate_errors": [],
+          "total_messages": 2,
+          "valid_messages": 0,
+          "pass_rate_pct": 0.0,
+          "message_errors": [
+            {
+              "message_index": 0,
+              "message_id": "NOT_AN_INTEGER",
+              "errors": [
+                "$.message_id: 'NOT_AN_INTEGER' is not of type 'integer'",
+                "$.channel_id: 'invalid_handle_without_at' does not match '^@[a-zA-Z0-9_]{4,32}$'",
+                "$.content_type: 'unknown_type_xxx' is not one of ['text', 'photo', 'video', 'audio', 'voice', 'document', 'poll', 'link']",
+                "$.views: -5 is less than the minimum of 0",
+                "$.is_forward: 'not_a_boolean' is not of type 'boolean'",
+                "$.language: 'invalid_lang_code' is not one of ['fa', 'en', 'mixed', 'other']"
+              ]
+            },
+            {
+              "message_index": 1,
+              "message_id": "unknown",
+              "errors": [
+                "$: 'message_id' is a required property",
+                "$: 'text' is a required property"
+              ]
+            }
+          ],
+          "score": 0.0,
+          "critical_failure": true,
+          "reason": "Schema violations: 0 candidate errs, 2 invalid messages"
+        },
+        "cadence": {
+          "posts_per_day": 0.81,
+          "hours_since_latest": 29.5,
+          "latest_post_iso": "2026-10-22T00:00:00+00:00",
+          "timespan_days": 1.2,
+          "max_hourly_burst": 1,
+          "score": 93.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "noise": {
+          "ad_count": 0,
+          "ad_ratio_pct": 0.0,
+          "duplicate_count": 0,
+          "duplicate_ratio_pct": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        }
+      },
+      "critical_failures": [
+        "Stability: Endpoint returned non-200 status (500)",
+        "Schema: Schema violations: 0 candidate errs, 2 invalid messages"
+      ],
+      "warnings": []
+    },
+    {
+      "candidate_id": "cand-ad-spam-forwarder-06",
+      "handle": "@vpn_promo_linkfarm",
+      "title": "فروش فیلترشکن پرسرعت و وی‌پی‌ان اختصاصی",
+      "category": "general_tech",
+      "status": "FAIL",
+      "composite_score": 82.6,
+      "metrics": {
+        "stability": {
+          "reachable": true,
+          "expected_status": 200,
+          "simulated_latency_ms": 350.0,
+          "failure_rate": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "schema": {
+          "candidate_schema_valid": true,
+          "candidate_errors": [],
+          "total_messages": 5,
+          "valid_messages": 5,
+          "pass_rate_pct": 100.0,
+          "message_errors": [],
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "cadence": {
+          "posts_per_day": 5.0,
+          "hours_since_latest": 9.5,
+          "latest_post_iso": "2026-10-22T20:00:00+00:00",
+          "timespan_days": 1.0,
+          "max_hourly_burst": 2,
+          "score": 97.7,
+          "critical_failure": false,
+          "reason": null
+        },
+        "noise": {
+          "ad_count": 4,
+          "ad_ratio_pct": 80.0,
+          "duplicate_count": 1,
+          "duplicate_ratio_pct": 20.0,
+          "score": 16.0,
+          "critical_failure": true,
+          "reason": "High ad ratio (80.0% > 5.0% max); Duplicates detected (1 duplicate posts, 20.0%)"
+        }
+      },
+      "critical_failures": [
+        "Noise: High ad ratio (80.0% > 5.0% max); Duplicates detected (1 duplicate posts, 20.0%)"
+      ],
+      "warnings": []
+    },
+    {
+      "candidate_id": "cand-narrative-sound-07",
+      "handle": "@ambient_soundscapes_fa",
+      "title": "صداپیشگی، افکت صوتی و روایت صوتی",
+      "category": "narrative_audio",
+      "status": "CONDITIONAL",
+      "composite_score": 87.1,
+      "metrics": {
+        "stability": {
+          "reachable": true,
+          "expected_status": 200,
+          "simulated_latency_ms": 350.0,
+          "failure_rate": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "schema": {
+          "candidate_schema_valid": true,
+          "candidate_errors": [],
+          "total_messages": 2,
+          "valid_messages": 2,
+          "pass_rate_pct": 100.0,
+          "message_errors": [],
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        },
+        "cadence": {
+          "posts_per_day": 0.15,
+          "hours_since_latest": 39.5,
+          "latest_post_iso": "2026-10-21T14:00:00+00:00",
+          "timespan_days": 13.5,
+          "max_hourly_burst": 1,
+          "score": 48.4,
+          "critical_failure": false,
+          "reason": "Low cadence (0.15 posts/day < 0.5)"
+        },
+        "noise": {
+          "ad_count": 0,
+          "ad_ratio_pct": 0.0,
+          "duplicate_count": 0,
+          "duplicate_ratio_pct": 0.0,
+          "score": 100.0,
+          "critical_failure": false,
+          "reason": null
+        }
+      },
+      "critical_failures": [],
+      "warnings": [
+        "Cadence: Low cadence (0.15 < 0.5 posts/day threshold) requires Low-Priority Extended Tier"
+      ]
+    }
+  ]
+}
