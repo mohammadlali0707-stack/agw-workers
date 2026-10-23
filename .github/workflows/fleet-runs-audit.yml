@@ -25,7 +25,7 @@ jobs:
       - name: Audit
         shell: python
         run: |
-          import os, json, re, io, zipfile, urllib.request, collections, datetime
+          import os, json, re, io, zipfile, urllib.request, urllib.error, collections, datetime
           ACC = [(0,"Mohammadlali"),(1,"momonakikugava-pixel"),(2,"lali94m-max"),(3,"ngocgminh5-debug"),(4,"hmmletssee7-design"),(5,"kidding602"),(6,"mohammadlali0707-stack"),(7,"mohammad97okk"),(8,"moradzahra85-png")]
           since = (datetime.datetime.utcnow() - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
           def g(tok, path, raw=False):
@@ -45,7 +45,7 @@ jobs:
               for k, v in c.most_common(8): print(f"##AUDIT##   {v} x {k[0]} [{k[1]}] {k[2]}  path={next(x['path'] for x in bad if x['name']==k[0])}")
               seen = set()
               for x in bad:
-                  if x["name"] in seen or len(seen) >= 3: continue
+                  if x["name"] in seen or len(seen) >= 2: continue
                   seen.add(x["name"])
                   try:
                       jobs = g(tok, f"repos/{o}/agw-workers/actions/runs/{x['id']}/jobs")["jobs"]
@@ -54,9 +54,14 @@ jobs:
                           steps = [s["name"] for s in j.get("steps", []) if s["conclusion"] == "failure"]
                           print(f"##AUDIT##   >> {x['name']} run {x['id']} {x['created_at']} job '{j['name']}' failed steps {steps}")
                           try:
-                              log = g(tok, f"repos/{o}/agw-workers/actions/jobs/{j['id']}/logs", True).decode("utf-8", "replace")
-                              keys = [l[29:].strip()[:220] for l in log.splitlines() if re.search(r"error|Error|ERROR|fatal|denied|quota|exceeded|not found|401|403|429|exit code", l)]
-                              for l in keys[-6:]: print("##AUDIT##      |", l)
+                              class NR(urllib.request.HTTPRedirectHandler):
+                                  def redirect_request(self, *a): return None
+                              try:
+                                  urllib.request.build_opener(NR).open(urllib.request.Request(f"https://api.github.com/repos/{o}/agw-workers/actions/jobs/{j['id']}/logs", headers={"Authorization": "Bearer " + tok, "User-Agent": "audit"}), timeout=60); loc = ""
+                              except urllib.error.HTTPError as e: loc = e.headers.get("Location", "")
+                              log = urllib.request.urlopen(loc, timeout=60).read().decode("utf-8", "replace")
+                              keys = [l[29:].strip()[:220] for l in log.splitlines() if re.search(r"error|Error|ERROR|fatal|denied|quota|exceeded|not found|rejected|! \\[|hint:|401|403|429|exit code|Permission|refusing|conflict|non-fast-forward", l)]
+                              for l in keys[-10:]: print("##AUDIT##      |", l)
                           except Exception as e: print("##AUDIT##      log ERR", str(e)[:120])
                           break
                   except Exception as e: print("##AUDIT##   jobs ERR", str(e)[:120])
