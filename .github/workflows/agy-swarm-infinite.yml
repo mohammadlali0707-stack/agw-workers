@@ -78,7 +78,7 @@ jobs:
       - name: Install AGY CLI
         if: steps.filter.outputs.action == 'proceed'
         env:
-          HF_TOKEN: ${{ secrets.AGW_HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.AGW_HF_TOKEN || secrets.HF_TOKEN }}  # Notion AI 2026-10-23: AGW_HF_TOKEN returned 401
         run: |
           set -e
           mkdir -p /tmp/agx /tmp/agy-bin
