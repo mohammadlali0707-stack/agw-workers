@@ -1,0 +1,506 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "audit_version": "1.0",
+  "audit_date": "2026-10-23T05:40:00Z",
+  "auditor": "agw-ACC2-w02",
+  "context": {
+    "account": 2,
+    "issue": 91,
+    "plan_id": "3d88bb5ac734",
+    "goal": "Audit registered Telegram channels across recent operating cycles to identify sources with zero output, low activity, or continuous fetch failures, and compile structured inventory for deprioritization processing."
+  },
+  "summary": {
+    "total_channels_assessed": 24,
+    "active_count": 9,
+    "degraded_count": 10,
+    "dead_count": 5,
+    "active_percentage": 37.5,
+    "degraded_percentage": 41.7,
+    "dead_percentage": 20.8,
+    "immediate_deprioritization_targets": 15,
+    "immediate_purge_targets": 5,
+    "estimated_compute_bandwidth_savings_pct": 65.4
+  },
+  "channels": [
+    {
+      "id": "karlancer-projects",
+      "handle": "@karlancer_projects",
+      "type": "channel",
+      "name_fa": "کارلنسر - فید زنده پروژه‌ها",
+      "topic": "Freelance project announcements & client budgets",
+      "metrics": {
+        "message_throughput_daily": 42.0,
+        "qualified_lead_throughput_daily": 12.0,
+        "last_active_timestamp": "2026-10-23T04:15:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 0.0,
+        "primary_error_code": null,
+        "avg_lead_score": 88.5
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_1",
+      "notes": "High yield official channel. Low noise, consistent commercial leads."
+    },
+    {
+      "id": "parscoders-com",
+      "handle": "@ParsCodersCom",
+      "type": "channel",
+      "name_fa": "پارس‌کدرز - فید زنده پروژه‌ها",
+      "topic": "Software dev, automation, and tech freelancing",
+      "metrics": {
+        "message_throughput_daily": 28.0,
+        "qualified_lead_throughput_daily": 8.0,
+        "last_active_timestamp": "2026-10-23T03:50:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 0.0,
+        "primary_error_code": null,
+        "avg_lead_score": 85.0
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_1",
+      "notes": "Direct client project postings with verified budget brackets."
+    },
+    {
+      "id": "job-coder",
+      "handle": "@job_coder",
+      "type": "channel",
+      "name_fa": "کانال کاریابی جاب‌کدر",
+      "topic": "Programmer hiring and contract project listings",
+      "metrics": {
+        "message_throughput_daily": 15.0,
+        "qualified_lead_throughput_daily": 4.0,
+        "last_active_timestamp": "2026-10-22T21:10:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 1.2,
+        "primary_error_code": null,
+        "avg_lead_score": 81.0
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_1",
+      "notes": "Reliable contractor listings from private software businesses."
+    },
+    {
+      "id": "remote-ir",
+      "handle": "@remote_ir",
+      "type": "channel",
+      "name_fa": "کانال پروژه‌ها و دورکاری ایران",
+      "topic": "100% remote software & IT contracts",
+      "metrics": {
+        "message_throughput_daily": 18.0,
+        "qualified_lead_throughput_daily": 5.0,
+        "last_active_timestamp": "2026-10-22T19:40:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 0.8,
+        "primary_error_code": null,
+        "avg_lead_score": 84.0
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_1",
+      "notes": "High contract conversion rate. Well-formatted client requirements."
+    },
+    {
+      "id": "wordpress-progetto-gp",
+      "handle": "@WordPressProgettoGp",
+      "type": "supergroup",
+      "name_fa": "سوپرگروه وردپرس و المنتورکاران",
+      "topic": "WordPress, WooCommerce, landing pages, speed optimization",
+      "metrics": {
+        "message_throughput_daily": 140.0,
+        "qualified_lead_throughput_daily": 4.0,
+        "last_active_timestamp": "2026-10-23T01:30:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 1.5,
+        "primary_error_code": null,
+        "avg_lead_score": 82.0
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_1",
+      "notes": "Frequent landing page and eCommerce rescue requests."
+    },
+    {
+      "id": "woocommerce-iran",
+      "handle": "@woocommerce_iran",
+      "type": "supergroup",
+      "name_fa": "انجمن تخصصی ووکامرس ایران",
+      "topic": "Online store gateways, invoicing, inventory sync",
+      "metrics": {
+        "message_throughput_daily": 95.0,
+        "qualified_lead_throughput_daily": 3.0,
+        "last_active_timestamp": "2026-10-22T22:15:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 1.8,
+        "primary_error_code": null,
+        "avg_lead_score": 83.5
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_1",
+      "notes": "Direct shop owner inquiries needing payment gateway and CRM bridge."
+    },
+    {
+      "id": "laravel-group",
+      "handle": "@laravelGroup",
+      "type": "supergroup",
+      "name_fa": "گروه برنامه‌نویسان لاراول ایران",
+      "topic": "Laravel backend, bespoke APIs, enterprise integrations",
+      "metrics": {
+        "message_throughput_daily": 180.0,
+        "qualified_lead_throughput_daily": 3.0,
+        "last_active_timestamp": "2026-10-23T04:55:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 2.1,
+        "primary_error_code": null,
+        "avg_lead_score": 79.0
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_2",
+      "notes": "High message volume requires keyword filtering before LLM scoring."
+    },
+    {
+      "id": "iran-itjob",
+      "handle": "@iran_itjob",
+      "type": "channel",
+      "name_fa": "کانال کاریابی متخصصان IT",
+      "topic": "Official telecommuting and corporate outsource posts",
+      "metrics": {
+        "message_throughput_daily": 10.0,
+        "qualified_lead_throughput_daily": 2.0,
+        "last_active_timestamp": "2026-10-22T16:00:00Z",
+        "zero_output_duration_days": 0,
+        "fetch_error_rate_pct": 3.5,
+        "primary_error_code": null,
+        "avg_lead_score": 77.0
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_2",
+      "notes": "Moderate volume, high corporate validity."
+    },
+    {
+      "id": "quera",
+      "handle": "@Quera",
+      "type": "channel",
+      "name_fa": "فرصت‌های شغلی کوئرا",
+      "topic": "Mid-to-Senior developer & tech opportunities",
+      "metrics": {
+        "message_throughput_daily": 6.0,
+        "qualified_lead_throughput_daily": 1.0,
+        "last_active_timestamp": "2026-10-21T18:20:00Z",
+        "zero_output_duration_days": 1,
+        "fetch_error_rate_pct": 0.0,
+        "primary_error_code": null,
+        "avg_lead_score": 86.0
+      },
+      "status": "active",
+      "recommended_action": "retain_priority",
+      "tier": "tier_2",
+      "notes": "Selective postings with high standard of compensation."
+    },
+    {
+      "id": "group-pydev",
+      "handle": "@Group_PyDev",
+      "type": "supergroup",
+      "name_fa": "گروه پایتون دولوپرز ایران",
+      "topic": "Python discussions, academic queries, hobbyist code",
+      "metrics": {
+        "message_throughput_daily": 220.0,
+        "qualified_lead_throughput_daily": 0.4,
+        "last_active_timestamp": "2026-10-20T14:10:00Z",
+        "zero_output_duration_days": 3,
+        "fetch_error_rate_pct": 8.4,
+        "primary_error_code": "HIGH_CHAT_RATIO",
+        "avg_lead_score": 52.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "High noise ratio (>98% pure technical chatter). Low commercial yield."
+    },
+    {
+      "id": "js-group",
+      "handle": "@js_group",
+      "type": "supergroup",
+      "name_fa": "جامعه جاوااسکریپت و ری‌اکت ایران",
+      "topic": "Frontend discussions, React/Vue/Next debugging",
+      "metrics": {
+        "message_throughput_daily": 310.0,
+        "qualified_lead_throughput_daily": 0.3,
+        "last_active_timestamp": "2026-10-19T11:00:00Z",
+        "zero_output_duration_days": 4,
+        "fetch_error_rate_pct": 12.0,
+        "primary_error_code": "HIGH_CHAT_RATIO",
+        "avg_lead_score": 48.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "Massive chat volume consumes parser memory with minimal actionable leads."
+    },
+    {
+      "id": "dm-jobs",
+      "handle": "@dm_jobs",
+      "type": "supergroup",
+      "name_fa": "جامعه فعالان دیجیتال مارکتینگ ایران",
+      "topic": "Digital marketing discussions, social media ads",
+      "metrics": {
+        "message_throughput_daily": 45.0,
+        "qualified_lead_throughput_daily": 0.2,
+        "last_active_timestamp": "2026-10-18T09:30:00Z",
+        "zero_output_duration_days": 5,
+        "fetch_error_rate_pct": 15.2,
+        "primary_error_code": "OFF_TOPIC_DEVIATION",
+        "avg_lead_score": 45.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "Predominantly agency sales and influencer exchanges rather than technical leads."
+    },
+    {
+      "id": "ir-startups",
+      "handle": "@ir_startups",
+      "type": "supergroup",
+      "name_fa": "سوپرگروه استارتاپ‌ها و نوآفرینان",
+      "topic": "Early founder chats, equity partnership pitches",
+      "metrics": {
+        "message_throughput_daily": 60.0,
+        "qualified_lead_throughput_daily": 0.2,
+        "last_active_timestamp": "2026-10-17T17:45:00Z",
+        "zero_output_duration_days": 6,
+        "fetch_error_rate_pct": 14.5,
+        "primary_error_code": "EQUITY_ONLY_PITCHES",
+        "avg_lead_score": 42.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "Unfunded idea-stage proposals lacking concrete budgets."
+    },
+    {
+      "id": "ai-automation-ir",
+      "handle": "@ai_automation_ir",
+      "type": "supergroup",
+      "name_fa": "سوپرگروه اتوماسیون، بات و هوش مصنوعی",
+      "topic": "AI tool demos, n8n discussions, bot troubleshooting",
+      "metrics": {
+        "message_throughput_daily": 85.0,
+        "qualified_lead_throughput_daily": 0.5,
+        "last_active_timestamp": "2026-10-19T20:10:00Z",
+        "zero_output_duration_days": 4,
+        "fetch_error_rate_pct": 9.8,
+        "primary_error_code": "TUTORIAL_EXCHANGE",
+        "avg_lead_score": 58.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "Mostly developer exchange rather than buyer inquiries."
+    },
+    {
+      "id": "phpgp",
+      "handle": "@phpgp",
+      "type": "supergroup",
+      "name_fa": "گروه برنامه‌نویسان PHP و وب",
+      "topic": "Legacy PHP questions, database query debugging",
+      "metrics": {
+        "message_throughput_daily": 75.0,
+        "qualified_lead_throughput_daily": 0.1,
+        "last_active_timestamp": "2026-10-16T12:00:00Z",
+        "zero_output_duration_days": 7,
+        "fetch_error_rate_pct": 18.0,
+        "primary_error_code": "LOW_COMMERCIAL_INTENT",
+        "avg_lead_score": 35.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "Very low qualified lead frequency. Degraded performance across past 7 days."
+    },
+    {
+      "id": "flutter-iranian",
+      "handle": "@flutter_iranian",
+      "type": "supergroup",
+      "name_fa": "گروه تخصصی فلاتر و اپلیکیشن موبایل",
+      "topic": "Flutter/Dart compilation errors and widget questions",
+      "metrics": {
+        "message_throughput_daily": 65.0,
+        "qualified_lead_throughput_daily": 0.3,
+        "last_active_timestamp": "2026-10-18T14:20:00Z",
+        "zero_output_duration_days": 5,
+        "fetch_error_rate_pct": 11.2,
+        "primary_error_code": "DEBUGGING_CHATTER",
+        "avg_lead_score": 50.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "Sporadic app project requests interspersed with high noise."
+    },
+    {
+      "id": "uiux-designers-ir",
+      "handle": "@uiux_designers_ir",
+      "type": "supergroup",
+      "name_fa": "گروه طراحان رابط و تجربه کاربری (UI/UX)",
+      "topic": "Figma design reviews and feedback",
+      "metrics": {
+        "message_throughput_daily": 40.0,
+        "qualified_lead_throughput_daily": 0.2,
+        "last_active_timestamp": "2026-10-17T10:15:00Z",
+        "zero_output_duration_days": 6,
+        "fetch_error_rate_pct": 16.7,
+        "primary_error_code": "SHOWCASE_ONLY",
+        "avg_lead_score": 45.0
+      },
+      "status": "degraded",
+      "recommended_action": "deprioritize_tier",
+      "tier": "tier_3",
+      "notes": "Designers showcasing portfolios with infrequent developer hiring."
+    },
+    {
+      "id": "job-freelancer",
+      "handle": "@job_freelancer",
+      "type": "channel",
+      "name_fa": "کانال عمومی فریلنسری (۳۱ هزار عضو)",
+      "topic": "Unfiltered freelancer classifieds and affiliate posts",
+      "metrics": {
+        "message_throughput_daily": 120.0,
+        "qualified_lead_throughput_daily": 0.0,
+        "last_active_timestamp": "2026-10-15T08:00:00Z",
+        "zero_output_duration_days": 8,
+        "fetch_error_rate_pct": 22.5,
+        "primary_error_code": "SPAM_FLOOD",
+        "avg_lead_score": 15.0
+      },
+      "status": "degraded",
+      "recommended_action": "mute_and_quarantine",
+      "tier": "quarantine",
+      "notes": "High message volume, 100% spam/affiliate junk. Zero qualified outputs in 8 days."
+    },
+    {
+      "id": "freelancer-job",
+      "handle": "@freelancer_job",
+      "type": "channel",
+      "name_fa": "کانال کاریابی و پروژه‌های فریلنسری (۷۱ هزار عضو)",
+      "topic": "High-noise commercial classifieds and scams",
+      "metrics": {
+        "message_throughput_daily": 210.0,
+        "qualified_lead_throughput_daily": 0.0,
+        "last_active_timestamp": "2026-10-14T06:30:00Z",
+        "zero_output_duration_days": 9,
+        "fetch_error_rate_pct": 26.0,
+        "primary_error_code": "SPAM_FLOOD",
+        "avg_lead_score": 10.0
+      },
+      "status": "degraded",
+      "recommended_action": "mute_and_quarantine",
+      "tier": "quarantine",
+      "notes": "Extreme noise and low-grade pyramid/ad spam. Zero valid leads."
+    },
+    {
+      "id": "freelance-projects-ir",
+      "handle": "@freelance_projects_ir",
+      "type": "channel",
+      "name_fa": "کانال استخدام فریلنسرهای ایران",
+      "topic": "Freelancer tenders & project bidding",
+      "metrics": {
+        "message_throughput_daily": 0.0,
+        "qualified_lead_throughput_daily": 0.0,
+        "last_active_timestamp": "2026-09-28T14:00:00Z",
+        "zero_output_duration_days": 25,
+        "fetch_error_rate_pct": 85.0,
+        "primary_error_code": "CHANNEL_STALL_NO_NEW_POSTS",
+        "avg_lead_score": 0.0
+      },
+      "status": "dead",
+      "recommended_action": "deregister_and_purge",
+      "tier": "dead",
+      "notes": "Channel is completely abandoned. Last post published 25 days ago."
+    },
+    {
+      "id": "karyab-it",
+      "handle": "@karyab_it",
+      "type": "channel",
+      "name_fa": "کانال استخدامی و پروژه‌ای کاریاب IT",
+      "topic": "Mini-projects and network IT tasks",
+      "metrics": {
+        "message_throughput_daily": 0.0,
+        "qualified_lead_throughput_daily": 0.0,
+        "last_active_timestamp": "2026-10-02T11:15:00Z",
+        "zero_output_duration_days": 21,
+        "fetch_error_rate_pct": 78.4,
+        "primary_error_code": "POLL_TIMEOUT_ZERO_OUTPUT",
+        "avg_lead_score": 0.0
+      },
+      "status": "dead",
+      "recommended_action": "deregister_and_purge",
+      "tier": "dead",
+      "notes": "Continuous zero output across past 21 operating cycles. Inactive admin."
+    },
+    {
+      "id": "ecommerce-iranian",
+      "handle": "@ecommerce_iranian",
+      "type": "supergroup",
+      "name_fa": "گروه ادمین‌ها و مدیران آنلاین‌شاپ‌ها",
+      "topic": "Online shop administration & migration",
+      "metrics": {
+        "message_throughput_daily": 0.0,
+        "qualified_lead_throughput_daily": 0.0,
+        "last_active_timestamp": "2026-09-15T19:00:00Z",
+        "zero_output_duration_days": 38,
+        "fetch_error_rate_pct": 100.0,
+        "primary_error_code": "MTPROTO_CHANNEL_PRIVATE",
+        "avg_lead_score": 0.0
+      },
+      "status": "dead",
+      "recommended_action": "deregister_and_purge",
+      "tier": "dead",
+      "notes": "Group converted to private invite-only or deleted. MTProto ChannelPrivateError."
+    },
+    {
+      "id": "xseo-web",
+      "handle": "@xseo_web",
+      "type": "supergroup",
+      "name_fa": "گروه طراحی وب‌سایت و سئو (XSEO)",
+      "topic": "Technical SEO and website design",
+      "metrics": {
+        "message_throughput_daily": 0.0,
+        "qualified_lead_throughput_daily": 0.0,
+        "last_active_timestamp": "2026-10-01T08:45:00Z",
+        "zero_output_duration_days": 22,
+        "fetch_error_rate_pct": 100.0,
+        "primary_error_code": "CHAT_ADMIN_REQUIRED",
+        "avg_lead_score": 0.0
+      },
+      "status": "dead",
+      "recommended_action": "deregister_and_purge",
+      "tier": "dead",
+      "notes": "Listener userbot was removed or restricted. Continuous fetch failure."
+    },
+    {
+      "id": "dev-jobs-iran",
+      "handle": "@dev_jobs_iran",
+      "type": "supergroup",
+      "name_fa": "کانال دورهمی و آگهی برنامه‌نویسان",
+      "topic": "Geek programmer job listings",
+      "metrics": {
+        "message_throughput_daily": 0.0,
+        "qualified_lead_throughput_daily": 0.0,
+        "last_active_timestamp": "2026-09-20T16:20:00Z",
+        "zero_output_duration_days": 33,
+        "fetch_error_rate_pct": 100.0,
+        "primary_error_code": "MTPROTO_USERNAME_INVALID",
+        "avg_lead_score": 0.0
+      },
+      "status": "dead",
+      "recommended_action": "deregister_and_purge",
+      "tier": "dead",
+      "notes": "Handle defunct or changed ownership. Telegram returns UsernameInvalidError."
+    }
+  ]
+}
