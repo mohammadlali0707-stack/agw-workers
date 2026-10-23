@@ -94,6 +94,8 @@ jobs:
             CANDIDATE=$(( (FAILED_ACCOUNT + OFFSET) % 9 ))
             # ACC6 is untrusted: it routes failovers but never executes them.
             [ "$CANDIDATE" = "6" ] && continue
+            # Notion AI 2026-10-23 owner rule: ACC1, ACC3, ACC7 are no longer Pro -- never give them work
+            case "$CANDIDATE" in 1|3|7) continue ;; esac
             case "$TRIED_PADDED" in
               *",${CANDIDATE},"*) ;;
               *) NEXT="$CANDIDATE"; break ;;

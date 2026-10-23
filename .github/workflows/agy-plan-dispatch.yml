@@ -151,6 +151,7 @@ jobs:
               raise SystemExit(1)
           pkgs = []
           accounts = []
+          orphans = []
           for p in found['packages']:
               try:
                   acc = int(p['account'])
@@ -161,9 +162,20 @@ jobs:
               goal = str(p.get('package_goal') or '').strip()
               if not goal:
                   continue
+              if acc in (1, 3, 7):   # Notion AI 2026-10-23 owner rule: ACC1, ACC3, ACC7 are no longer Pro -- never give them work
+                  orphans.append(goal)
+                  continue
               pkgs.append({'account': acc, 'package_goal': goal})
               if acc not in accounts:
                   accounts.append(acc)
+          for goal in orphans:   # re-home packages planned for disabled accounts
+              free = [a for a in (0, 2, 4, 5, 8) if a not in accounts]
+              if free:
+                  pkgs.append({'account': free[0], 'package_goal': goal}); accounts.append(free[0])
+              elif pkgs:
+                  pkgs[-1]['package_goal'] += '\n\n---\n\n' + goal
+          if orphans:
+              print('DISABLED: re-homed {0} package(s) from ACC1/ACC3/ACC7'.format(len(orphans)))
           if not pkgs:
               print('::error::Proposal had no valid packages (accounts 0-8 except 6)')
               raise SystemExit(1)
