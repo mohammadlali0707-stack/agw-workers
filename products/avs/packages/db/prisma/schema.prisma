@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum LedgerType {
+  CREDIT
+  DEBIT
+}
+
+model User {
+  id        String        @id @default(uuid())
+  email     String        @unique
+  name      String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  wallets   Wallet[]
+  templates Template[]
+  jobs      Job[]
+}
+
+model Wallet {
+  id            String        @id @default(uuid())
+  userId        String
+  address       String        @unique
+  balance       Decimal       @default(0)
+  currency      String        @default("USD")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerEntries LedgerEntry[]
+
+  @@index([userId])
+}
+
+model LedgerEntry {
+  id        String     @id @default(uuid())
+  walletId  String
+  amount    Decimal
+  type      LedgerType
+  reference String?
+  createdAt DateTime   @default(now())
+  wallet    Wallet     @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([createdAt])
+}
+
+model Template {
+  id          String   @id @default(uuid())
+  userId      String
+  name        String
+  description String?
+  config      Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs        Job[]
+
+  @@index([userId])
+}
+
+model Job {
+  id         String    @id @default(uuid())
+  userId     String
+  templateId String?
+  status     JobStatus @default(PENDING)
+  payload    Json?
+  result     Json?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template   Template? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([templateId])
+}
