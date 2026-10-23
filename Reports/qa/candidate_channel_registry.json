@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "registry_version": "2.0",
+  "updated_at": "2026-10-23T05:30:00+00:00",
+  "maintainer": "agw-ACC5-w03",
+  "context": {
+    "account": 5,
+    "issue": 91,
+    "task": "Approved Candidate Feeds Registry Integration",
+    "description": "Clean operational candidate feeds verified through QA smoke testing without test fixture contamination."
+  },
+  "summary": {
+    "total_candidates_approved": 4,
+    "pass_count": 3,
+    "conditional_count": 1,
+    "excluded_fail_count": 0
+  },
+  "channels": [
+    {
+      "candidate_id": "cand-tech-ai-01",
+      "handle": "@tech_ai_persian",
+      "title": "هوش مصنوعی و یادگیری عمیق به زبان فارسی",
+      "category": "ai_tech",
+      "operational_status": "active",
+      "tier": 2,
+      "polling_interval_minutes": 60,
+      "qa_status": "PASS",
+      "composite_qa_score": 99.4,
+      "feed_url": "https://t.me/s/tech_ai_persian",
+      "operational_endpoint": {
+        "protocol": "https",
+        "target": "https://t.me/s/tech_ai_persian",
+        "expected_status": 200,
+        "timeout_seconds": 3.0
+      }
+    },
+    {
+      "candidate_id": "cand-gamedev-godot-02",
+      "handle": "@godot_gamecraft_fa",
+      "title": "توسعه بازی با گودو و گرافیک سه‌بعدی",
+      "category": "game_development",
+      "operational_status": "active",
+      "tier": 2,
+      "polling_interval_minutes": 120,
+      "qa_status": "PASS",
+      "composite_qa_score": 99.5,
+      "feed_url": "https://t.me/s/godot_gamecraft_fa",
+      "operational_endpoint": {
+        "protocol": "https",
+        "target": "https://t.me/s/godot_gamecraft_fa",
+        "expected_status": 200,
+        "timeout_seconds": 3.0
+      }
+    },
+    {
+      "candidate_id": "cand-automation-cloud-03",
+      "handle": "@devops_automation_pro",
+      "title": "اتوماسیون زیرساخت و جریان‌های کاری مدرن",
+      "category": "automation_devops",
+      "operational_status": "active",
+      "tier": 2,
+      "polling_interval_minutes": 180,
+      "qa_status": "PASS",
+      "composite_qa_score": 99.3,
+      "feed_url": "https://t.me/s/devops_automation_pro",
+      "operational_endpoint": {
+        "protocol": "https",
+        "target": "https://t.me/s/devops_automation_pro",
+        "expected_status": 200,
+        "timeout_seconds": 3.0
+      }
+    },
+    {
+      "candidate_id": "cand-narrative-sound-07",
+      "handle": "@ambient_soundscapes_fa",
+      "title": "صداپیشگی، افکت صوتی و روایت صوتی",
+      "category": "narrative_audio",
+      "operational_status": "conditional_extended",
+      "tier": 3,
+      "polling_interval_minutes": 360,
+      "qa_status": "CONDITIONAL",
+      "composite_qa_score": 87.1,
+      "feed_url": "https://t.me/s/ambient_soundscapes_fa",
+      "operational_endpoint": {
+        "protocol": "https",
+        "target": "https://t.me/s/ambient_soundscapes_fa",
+        "expected_status": 200,
+        "timeout_seconds": 3.0
+      }
+    }
+  ]
+}

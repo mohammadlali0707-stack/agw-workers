@@ -44,6 +44,18 @@ SPAM_KEYWORDS = [
     r'فروش فیلترشکن', r'پنل نامحدود'
 ]
 
+# Standard File Paths for Operational Feeds and Separated Negative Fixtures
+DEFAULT_OPERATIONAL_CANDIDATES = "qa/candidates/candidate_feeds_operational.json"
+DEFAULT_SAMPLE_CANDIDATES = "qa/candidates/candidate_feeds_sample.json"
+DEFAULT_NEGATIVE_FIXTURES = "qa/candidates/negative_test_fixtures.json"
+DEFAULT_NEGATIVE_FIXTURES_ALT = "qa/fixtures/negative_test_fixtures.json"
+DEFAULT_CANDIDATE_SCHEMA = "qa/schemas/candidate_channel_schema.json"
+DEFAULT_MESSAGE_SCHEMA = "qa/schemas/channel_message_schema.json"
+DEFAULT_SMOKE_OUTPUT_JSON = "Reports/qa/smoke_test_results.json"
+DEFAULT_FIXTURES_OUTPUT_JSON = "Reports/qa/negative_fixtures_results.json"
+DEFAULT_REGISTRY_OUTPUT_JSON = "Reports/qa/candidate_channel_registry.json"
+
+
 
 def load_json(filepath: str) -> Any:
     """Load and parse JSON file from disk."""
@@ -344,22 +356,45 @@ def calculate_qa_score_and_status(
     }
 
 
+KNOWN_NEGATIVE_FIXTURE_IDS = {
+    "cand-dormant-legacy-04",
+    "cand-malformed-bot-05",
+    "cand-ad-spam-forwarder-06"
+}
+
+
 def run_candidate_smoke_tests(
-    candidates_path: str,
-    cand_schema_path: str,
-    msg_schema_path: str,
-    reference_time: datetime.datetime
+    candidates_input: Any,
+    cand_schema_path: str = DEFAULT_CANDIDATE_SCHEMA,
+    msg_schema_path: str = DEFAULT_MESSAGE_SCHEMA,
+    reference_time: datetime.datetime = None,
+    filter_negative_fixtures: bool = False,
+    suite_title: str = "FEED SMOKE TESTING & SCHEMA COMPATIBILITY ENGINE (Account 5 QA)"
 ) -> dict:
-    """Run full test suite across all candidate channels."""
-    candidates = load_json(candidates_path)
-    cand_schema = load_json(cand_schema_path)
-    msg_schema = load_json(msg_schema_path)
+    """Run full test suite across operational candidate channels."""
+    if isinstance(candidates_input, list):
+        candidates = candidates_input
+    else:
+        candidates = load_json(candidates_input)
+
+    cand_schema = load_json(cand_schema_path) if isinstance(cand_schema_path, str) else cand_schema_path
+    msg_schema = load_json(msg_schema_path) if isinstance(msg_schema_path, str) else msg_schema_path
+
+    if reference_time is None:
+        reference_time = datetime.datetime.fromisoformat("2026-10-23T05:30:00+00:00")
+
+    if filter_negative_fixtures:
+        filtered = [c for c in candidates if c.get("candidate_id") not in KNOWN_NEGATIVE_FIXTURE_IDS and not c.get("is_negative_fixture")]
+        if len(filtered) < len(candidates):
+            excluded_count = len(candidates) - len(filtered)
+            print(f"[*] Quarantined {excluded_count} negative test fixture(s) from operational feed evaluation.")
+        candidates = filtered
 
     results = []
     summary_counts = {"PASS": 0, "CONDITIONAL": 0, "FAIL": 0}
 
     print("=" * 80)
-    print("  FEED SMOKE TESTING & SCHEMA COMPATIBILITY ENGINE (Account 5 QA)")
+    print(f"  {suite_title}")
     print(f"  Evaluation Timestamp: {reference_time.isoformat()}")
     print("=" * 80)
 
@@ -422,28 +457,235 @@ def run_candidate_smoke_tests(
     }
 
 
+def run_fixture_smoke_tests(
+    fixtures_input: Any,
+    cand_schema_path: str = DEFAULT_CANDIDATE_SCHEMA,
+    msg_schema_path: str = DEFAULT_MESSAGE_SCHEMA,
+    reference_time: datetime.datetime = None
+) -> dict:
+    """Run verification suite across isolated negative test fixtures without polluting operational registry."""
+    if isinstance(fixtures_input, list):
+        fixtures = fixtures_input
+    else:
+        fixtures = load_json(fixtures_input)
+
+    cand_schema = load_json(cand_schema_path) if isinstance(cand_schema_path, str) else cand_schema_path
+    msg_schema = load_json(msg_schema_path) if isinstance(msg_schema_path, str) else msg_schema_path
+
+    if reference_time is None:
+        reference_time = datetime.datetime.fromisoformat("2026-10-23T05:30:00+00:00")
+
+    results = []
+    summary_counts = {"PASS": 0, "CONDITIONAL": 0, "FAIL": 0}
+
+    print("=" * 80)
+    print("  ISOLATED NEGATIVE TEST FIXTURES VERIFICATION (Account 5 QA)")
+    print(f"  Evaluation Timestamp: {reference_time.isoformat()}")
+    print("=" * 80)
+
+    for cand in fixtures:
+        cand_id = cand.get("candidate_id", "unknown")
+        handle = cand.get("handle", "unknown")
+        title = cand.get("title", "")
+
+        stability = test_operational_stability(cand)
+        schema = validate_candidate_messages_schema(cand, cand_schema, msg_schema)
+        cadence = evaluate_cadence_and_frequency(cand, reference_time)
+        noise = audit_zero_noise_and_duplicates(cand)
+
+        verdict = calculate_qa_score_and_status(stability, schema, cadence, noise)
+        status = verdict["status"]
+        summary_counts[status] += 1
+
+        cand_result = {
+            "candidate_id": cand_id,
+            "handle": handle,
+            "title": title,
+            "category": cand.get("category", ""),
+            "status": status,
+            "composite_score": verdict["composite_score"],
+            "expected_verdict": "FAIL",
+            "is_negative_fixture": True,
+            "metrics": {
+                "stability": stability,
+                "schema": schema,
+                "cadence": cadence,
+                "noise": noise
+            },
+            "critical_failures": verdict["critical_failures"],
+            "warnings": verdict["warnings"]
+        }
+        results.append(cand_result)
+
+        badge = "[EXPECTED FAIL]" if status == "FAIL" else "[UNEXPECTED PASS]"
+        print(f"\n{badge} {cand_id} ({handle}) - Score: {verdict['composite_score']}/100 -> {status}")
+        print(f"   Targeted Failure Mode Triggered: {'; '.join(verdict['critical_failures']) if verdict['critical_failures'] else 'None'}")
+
+    all_properly_rejected = all(f["status"] == "FAIL" for f in results)
+
+    print("\n" + "=" * 80)
+    print(f"  FIXTURES SUMMARY: {len(results)} evaluated | "
+          f"{summary_counts['FAIL']} correctly rejected as FAIL | "
+          f"Verification Status: {'PASSED' if all_properly_rejected else 'FAILED'}")
+    print("=" * 80)
+
+    return {
+        "evaluated_at": reference_time.isoformat(),
+        "total_fixtures": len(results),
+        "summary": summary_counts,
+        "all_fixtures_properly_rejected": all_properly_rejected,
+        "fixtures": results
+    }
+
+
+def build_candidate_registry(
+    smoke_test_results: dict,
+    candidates: list = None
+) -> dict:
+    """Structure approved candidates (PASS & CONDITIONAL) into standard registry JSON format,
+    strictly excluding any failed feeds or negative test fixtures.
+    Aligned with Stage 7 Handover of qa/criteria/qa_criteria_and_procedures.md.
+    """
+    raw_lookup = {}
+    if candidates:
+        for c in candidates:
+            raw_lookup[c.get("candidate_id")] = c
+
+    approved_channels = []
+    # Tier mapping aligned with Stage 7 Handover:
+    # PASS candidates go to Active Tier (poll 60-180m), CONDITIONAL to Extended Tier (poll 360m)
+    tier_map = {
+        "cand-tech-ai-01": {"tier": 2, "poll_interval_minutes": 60, "priority": "high"},
+        "cand-gamedev-godot-02": {"tier": 2, "poll_interval_minutes": 120, "priority": "standard"},
+        "cand-automation-cloud-03": {"tier": 2, "poll_interval_minutes": 180, "priority": "standard"},
+        "cand-narrative-sound-07": {"tier": 3, "poll_interval_minutes": 360, "priority": "extended_low_cadence"},
+    }
+
+    for cand_eval in smoke_test_results.get("candidates", []):
+        cand_id = cand_eval.get("candidate_id")
+        status = cand_eval.get("status")
+
+        # Exclude any FAIL status or critical failures
+        if status not in ("PASS", "CONDITIONAL") or cand_eval.get("critical_failures"):
+            continue
+
+        raw = raw_lookup.get(cand_id, {})
+        tier_info = tier_map.get(cand_id, {
+            "tier": 2 if status == "PASS" else 3,
+            "poll_interval_minutes": raw.get("poll_interval_minutes", 60 if status == "PASS" else 360),
+            "priority": "standard" if status == "PASS" else "low_cadence"
+        })
+
+        channel_entry = {
+            "candidate_id": cand_id,
+            "handle": cand_eval.get("handle") or raw.get("handle"),
+            "title": cand_eval.get("title") or raw.get("title"),
+            "category": cand_eval.get("category") or raw.get("category"),
+            "operational_status": "active" if status == "PASS" else "conditional_extended",
+            "tier": tier_info["tier"],
+            "polling_interval_minutes": tier_info["poll_interval_minutes"],
+            "qa_status": status,
+            "composite_qa_score": cand_eval.get("composite_score"),
+            "feed_url": raw.get("feed_url", f"https://t.me/s/{cand_eval.get('handle', '').lstrip('@')}"),
+            "operational_endpoint": raw.get("operational_endpoint", {
+                "protocol": "https",
+                "target": raw.get("feed_url", f"https://t.me/s/{cand_eval.get('handle', '').lstrip('@')}"),
+                "expected_status": 200
+            })
+        }
+        approved_channels.append(channel_entry)
+
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "registry_version": "2.0",
+        "updated_at": smoke_test_results.get("evaluated_at", datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        "maintainer": "agw-ACC5-w03",
+        "context": {
+            "account": 5,
+            "issue": 91,
+            "task": "Approved Candidate Feeds Registry Integration",
+            "description": "Clean operational candidate feeds verified through QA smoke testing without test fixture contamination."
+        },
+        "summary": {
+            "total_candidates_approved": len(approved_channels),
+            "pass_count": sum(1 for c in approved_channels if c["qa_status"] == "PASS"),
+            "conditional_count": sum(1 for c in approved_channels if c["qa_status"] == "CONDITIONAL"),
+            "excluded_fail_count": sum(1 for c in smoke_test_results.get("candidates", []) if c.get("status") == "FAIL")
+        },
+        "channels": approved_channels
+    }
+
+
+def export_candidate_registry(registry: dict, output_path: str):
+    """Save candidate registry JSON to disk."""
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(registry, f, ensure_ascii=False, indent=2)
+
+
 def main():
+    default_candidates = (
+        DEFAULT_OPERATIONAL_CANDIDATES
+        if os.path.isfile(DEFAULT_OPERATIONAL_CANDIDATES)
+        else DEFAULT_SAMPLE_CANDIDATES
+    )
+    default_fixtures = (
+        DEFAULT_NEGATIVE_FIXTURES
+        if os.path.isfile(DEFAULT_NEGATIVE_FIXTURES)
+        else DEFAULT_NEGATIVE_FIXTURES_ALT
+    )
+
     parser = argparse.ArgumentParser(description="Feed Smoke Testing & Schema Compatibility Engine")
-    parser.add_argument("--candidates", default="qa/candidates/candidate_feeds_sample.json", help="Path to candidate feeds JSON")
-    parser.add_argument("--candidate-schema", default="qa/schemas/candidate_channel_schema.json", help="Path to candidate channel schema")
-    parser.add_argument("--message-schema", default="qa/schemas/channel_message_schema.json", help="Path to channel message schema")
-    parser.add_argument("--output-json", default="Reports/qa/smoke_test_results.json", help="Output path for JSON results")
+    parser.add_argument("--candidates", default=default_candidates, help="Path to operational candidate feeds JSON")
+    parser.add_argument("--negative-fixtures", default=default_fixtures, help="Path to negative test fixtures JSON")
+    parser.add_argument("--candidate-schema", default=DEFAULT_CANDIDATE_SCHEMA, help="Path to candidate channel schema")
+    parser.add_argument("--message-schema", default=DEFAULT_MESSAGE_SCHEMA, help="Path to channel message schema")
+    parser.add_argument("--output-json", default=DEFAULT_SMOKE_OUTPUT_JSON, help="Output path for operational smoke test JSON results")
+    parser.add_argument("--fixtures-output-json", default=DEFAULT_FIXTURES_OUTPUT_JSON, help="Output path for negative test fixture JSON results")
+    parser.add_argument("--registry-output", default=DEFAULT_REGISTRY_OUTPUT_JSON, help="Output path for structured approved candidate registry JSON")
+    parser.add_argument("--evaluate-fixtures", action="store_true", help="Evaluate isolated negative test fixtures separately")
+    parser.add_argument("--export-registry", action="store_true", default=True, help="Export approved candidates to candidate registry JSON")
     parser.add_argument("--reference-time", default="2026-10-23T05:30:00Z", help="Reference ISO timestamp for evaluation")
     args = parser.parse_args()
 
     ref_dt = datetime.datetime.fromisoformat(args.reference_time.replace("Z", "+00:00"))
 
+    # 1. Run operational candidate smoke tests
+    print("\n>>> EVALUATING OPERATIONAL CANDIDATE FEEDS <<<")
     results = run_candidate_smoke_tests(
         args.candidates,
         args.candidate_schema,
         args.message_schema,
-        ref_dt
+        ref_dt,
+        filter_negative_fixtures=True
     )
 
     os.makedirs(os.path.dirname(args.output_json), exist_ok=True)
     with open(args.output_json, 'w', encoding='utf-8') as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f"\nDetailed JSON results exported to: {args.output_json}")
+    print(f"\nOperational JSON results exported to: {args.output_json}")
+
+    # 2. Export candidate registry if requested / enabled
+    if args.export_registry and args.registry_output:
+        raw_cands = load_json(args.candidates) if (isinstance(args.candidates, str) and os.path.isfile(args.candidates)) else []
+        registry = build_candidate_registry(results, raw_cands)
+        export_candidate_registry(registry, args.registry_output)
+        print(f"Approved candidate registry exported to: {args.registry_output}")
+
+    # 3. Evaluate negative test fixtures if requested or if flag set
+    if args.evaluate_fixtures or (args.negative_fixtures and os.path.isfile(args.negative_fixtures)):
+        print("\n>>> EVALUATING SEPARATED NEGATIVE TEST FIXTURES (ISOLATED) <<<")
+        fixture_results = run_fixture_smoke_tests(
+            args.negative_fixtures,
+            args.candidate_schema,
+            args.message_schema,
+            ref_dt
+        )
+        if args.fixtures_output_json:
+            os.makedirs(os.path.dirname(args.fixtures_output_json), exist_ok=True)
+            with open(args.fixtures_output_json, 'w', encoding='utf-8') as f:
+                json.dump(fixture_results, f, ensure_ascii=False, indent=2)
+            print(f"Negative fixture results exported to: {args.fixtures_output_json}")
 
 
 if __name__ == "__main__":

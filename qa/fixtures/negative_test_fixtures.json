@@ -1,0 +1,187 @@
+[
+  {
+    "candidate_id": "cand-dormant-legacy-04",
+    "handle": "@retro_archive_dormant",
+    "title": "آرشیو بازی‌های رترو و مقالات قدیمی",
+    "description": "کانال قدیمی بررسی عناوین کلاسیک دهه ۸۰ و ۹۰ میلادی (غیرفعال شده).",
+    "category": "game_development",
+    "primary_language": "fa",
+    "feed_url": "https://t.me/s/retro_archive_dormant",
+    "poll_interval_minutes": 720,
+    "operational_endpoint": {
+      "protocol": "https",
+      "target": "https://t.me/s/retro_archive_dormant",
+      "expected_status": 200,
+      "timeout_seconds": 3.0
+    },
+    "sample_messages": [
+      {
+        "message_id": 401,
+        "channel_id": "@retro_archive_dormant",
+        "timestamp": "2026-09-05T12:00:00Z",
+        "content_type": "text",
+        "text": "یادداشتی کوتاه درباره موتور بازی Doom و تکنیک‌های رندرینگ خطی دهه ۹۰.",
+        "views": 320,
+        "forwards": 2,
+        "is_forward": false,
+        "forward_from": null,
+        "language": "fa",
+        "has_links": false,
+        "links": [],
+        "tags": [
+          "#Retro",
+          "#Doom"
+        ]
+      }
+    ]
+  },
+  {
+    "candidate_id": "cand-malformed-bot-05",
+    "handle": "@broken_crypto_signals",
+    "title": "سیگنال‌های نوسان‌گیری کریپتو و ربات ترید",
+    "description": "ارسال خودکار پوزیشن‌های معاملاتی توسط اسکریپت آزمایشی.",
+    "category": "general_tech",
+    "primary_language": "fa",
+    "feed_url": "https://t.me/s/broken_crypto_signals",
+    "poll_interval_minutes": 30,
+    "operational_endpoint": {
+      "protocol": "https",
+      "target": "https://t.me/s/broken_crypto_signals",
+      "expected_status": 500,
+      "timeout_seconds": 3.0
+    },
+    "sample_messages": [
+      {
+        "message_id": "NOT_AN_INTEGER",
+        "channel_id": "invalid_handle_without_at",
+        "timestamp": "yesterday afternoon",
+        "content_type": "unknown_type_xxx",
+        "text": "",
+        "views": -5,
+        "is_forward": "not_a_boolean",
+        "language": "invalid_lang_code"
+      },
+      {
+        "channel_id": "@broken_crypto_signals",
+        "timestamp": "2026-10-22",
+        "content_type": "text",
+        "views": 10,
+        "is_forward": false,
+        "language": "fa"
+      }
+    ]
+  },
+  {
+    "candidate_id": "cand-ad-spam-forwarder-06",
+    "handle": "@vpn_promo_linkfarm",
+    "title": "فروش فیلترشکن پرسرعت و وی‌پی‌ان اختصاصی",
+    "description": "ارائه اکانت‌های تست رایگان، پروموشن روزانه و تبلیغات بازرگانی.",
+    "category": "general_tech",
+    "primary_language": "fa",
+    "feed_url": "https://t.me/s/vpn_promo_linkfarm",
+    "poll_interval_minutes": 15,
+    "operational_endpoint": {
+      "protocol": "https",
+      "target": "https://t.me/s/vpn_promo_linkfarm",
+      "expected_status": 200,
+      "timeout_seconds": 3.0
+    },
+    "sample_messages": [
+      {
+        "message_id": 601,
+        "channel_id": "@vpn_promo_linkfarm",
+        "timestamp": "2026-10-22T20:00:00Z",
+        "content_type": "text",
+        "text": "تخفیف ویژه ۵۰ درصدی سرورهای اختصاصی! خرید با کد تبلیغ #ad همین حالا کلیک کنید https://spam-promo.com/buy",
+        "views": 4800,
+        "forwards": 10,
+        "is_forward": true,
+        "forward_from": "@ad_agency_network",
+        "language": "fa",
+        "has_links": true,
+        "links": [
+          "https://spam-promo.com/buy"
+        ],
+        "tags": [
+          "#ad",
+          "#تبلیغ"
+        ]
+      },
+      {
+        "message_id": 602,
+        "channel_id": "@vpn_promo_linkfarm",
+        "timestamp": "2026-10-22T19:00:00Z",
+        "content_type": "text",
+        "text": "تخفیف ویژه ۵۰ درصدی سرورهای اختصاصی! خرید با کد تبلیغ #ad همین حالا کلیک کنید https://spam-promo.com/buy",
+        "views": 4720,
+        "forwards": 8,
+        "is_forward": true,
+        "forward_from": "@ad_agency_network",
+        "language": "fa",
+        "has_links": true,
+        "links": [
+          "https://spam-promo.com/buy"
+        ],
+        "tags": [
+          "#ad",
+          "#تبلیغ"
+        ]
+      },
+      {
+        "message_id": 603,
+        "channel_id": "@vpn_promo_linkfarm",
+        "timestamp": "2026-10-22T18:00:00Z",
+        "content_type": "text",
+        "text": "جایزه میلیونی در قرعه‌کشی امشب کانال اسپانسر! برای شرکت عضو شوید: https://lottery-fake.org/join #sponsored",
+        "views": 5100,
+        "forwards": 5,
+        "is_forward": true,
+        "forward_from": "@lottery_sponsor",
+        "language": "fa",
+        "has_links": true,
+        "links": [
+          "https://lottery-fake.org/join"
+        ],
+        "tags": [
+          "#sponsored",
+          "#قرعه_کشی"
+        ]
+      },
+      {
+        "message_id": 604,
+        "channel_id": "@vpn_promo_linkfarm",
+        "timestamp": "2026-10-22T16:00:00Z",
+        "content_type": "text",
+        "text": "اخبار کوتاه آی‌تی: تغییرات جدید قوانین استورهای نرم‌افزاری در اروپا.",
+        "views": 2100,
+        "forwards": 12,
+        "is_forward": false,
+        "forward_from": null,
+        "language": "fa",
+        "has_links": false,
+        "links": [],
+        "tags": [
+          "#TechNews"
+        ]
+      },
+      {
+        "message_id": 605,
+        "channel_id": "@vpn_promo_linkfarm",
+        "timestamp": "2026-10-22T14:30:00Z",
+        "content_type": "text",
+        "text": "خرید پنل نامحدود با تحویل آنی. تماس با آیدی پشتیبانی فروش #تبلیغات",
+        "views": 3900,
+        "forwards": 4,
+        "is_forward": false,
+        "forward_from": null,
+        "language": "fa",
+        "has_links": false,
+        "links": [],
+        "tags": [
+          "#تبلیغات",
+          "#فروش"
+        ]
+      }
+    ]
+  }
+]
