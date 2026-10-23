@@ -27,7 +27,7 @@ jobs:
         run: |
           import os, json, re, io, zipfile, urllib.request, urllib.error, collections, datetime
           ACC = [(0,"Mohammadlali"),(1,"momonakikugava-pixel"),(2,"lali94m-max"),(3,"ngocgminh5-debug"),(4,"hmmletssee7-design"),(5,"kidding602"),(6,"mohammadlali0707-stack"),(7,"mohammad97okk"),(8,"moradzahra85-png")]
-          since = (datetime.datetime.utcnow() - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+          since = "2026-10-23T09:00:00Z"  # re-check after fixes 85b268c/8e45e15/0dd29c1
           def g(tok, path, raw=False):
               r = urllib.request.Request("https://api.github.com/" + path, headers={"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json", "User-Agent": "audit"})
               b = urllib.request.urlopen(r, timeout=60).read()
