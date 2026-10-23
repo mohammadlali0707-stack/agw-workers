@@ -431,7 +431,7 @@ jobs:
             echo "::warning::this worker committed NOTHING to the checkout. If its output describes files it created, they were written outside ${AGENT_REPO} and are gone."
           fi
           push_with_retry() {
-            local max_retries=3
+            local max_retries=7   # Notion AI 2026-10-23: 3 retries x 2s lost races when 5-9 workers finish together
             local total_attempts=$((max_retries + 1))
             local attempt=1
             while [ "$attempt" -le "$total_attempts" ]; do
@@ -449,7 +449,7 @@ jobs:
                 echo "Retry $attempt of $max_retries: fetching origin/$BRANCH fresh and rebasing..."
                 if ! git -c "http.https://${GH_HOST}/.extraHeader=$AUTH_HEADER" fetch origin "$BRANCH"; then
                   echo "Error: fetch failed on retry $attempt." >&2
-                  sleep 2
+                  sleep $((5 + RANDOM % 20))
                   attempt=$((attempt + 1))
                   continue
                 fi
@@ -462,17 +462,21 @@ jobs:
                   fi
                   echo "::warning::Rebase conflict on retry $attempt. Keeping agent version for: $CONFLICTED"
                   echo "$CONFLICTED" | while IFS= read -r f; do
-                    git checkout --ours -- "$f" 2>/dev/null || true
+                    # during a rebase --theirs is the commit being replayed (the agent's); --ours is origin. Was --ours (kept origin, emptied the commit).
+                    git checkout --theirs -- "$f" 2>/dev/null || git checkout --ours -- "$f" 2>/dev/null || true
                     git add -- "$f"
                     echo "  resolved (ours): $f"
                   done
                   if ! GIT_EDITOR=true git rebase --continue; then
-                    echo "Error: rebase --continue failed after conflict resolution on retry $attempt." >&2
-                    git rebase --abort 2>/dev/null || true
-                    return 1
+                    # commit became empty after resolution -> skip it instead of failing the whole run
+                    if ! GIT_EDITOR=true git rebase --skip; then
+                      echo "Error: rebase --continue/--skip failed after conflict resolution on retry $attempt." >&2
+                      git rebase --abort 2>/dev/null || true
+                      return 1
+                    fi
                   fi
                 fi
-                sleep 2
+                sleep $((3 + RANDOM % 15))   # jitter so parallel workers stop colliding
               fi
               attempt=$((attempt + 1))
             done

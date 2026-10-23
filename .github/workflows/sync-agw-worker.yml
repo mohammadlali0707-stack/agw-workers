@@ -2,6 +2,9 @@ name: Sync agw-worker.yml to all worker repos
 
 on:
   workflow_dispatch:
+  push:   # Notion AI 2026-10-23: auto-sync account copies whenever the worker changes on main
+    branches: [main]
+    paths: [".github/workflows/agw-worker.yml"]
 
 jobs:
   sync:
@@ -22,7 +25,7 @@ jobs:
         run: |
           set -e
           CONTENT=$(base64 -w0 .github/workflows/agw-worker.yml)
-          COMMIT_MSG="fix: add callback_repo input so comment posts to correct control repo"
+          COMMIT_MSG="sync: agw-worker.yml from mohammadlali0707-stack/agw-workers@${GITHUB_SHA::7}"
 
           sync_to_repo() {
             local REPO="$1"

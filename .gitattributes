@@ -1,0 +1,5 @@
+# Notion AI 2026-10-23: append-only shared logs merge by union so parallel fleet workers stop failing on rebase conflicts
+Team/MAP.md merge=union
+CHANGELOG.md merge=union
+**/CHANGELOG.md merge=union
+Reports/** merge=union
