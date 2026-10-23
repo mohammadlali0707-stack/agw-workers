@@ -84,6 +84,8 @@ func _on_target_tree_exited() -> void:
 	_set_focused_target(null)
 
 func get_focused_target() -> Node3D:
+	if focused_target != null and not is_instance_valid(focused_target):
+		_set_focused_target(null)
 	return focused_target
 
 func is_on_cooldown() -> bool:
