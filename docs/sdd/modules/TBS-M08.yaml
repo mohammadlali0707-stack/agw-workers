@@ -1,0 +1,24 @@
+id: TBS-M08
+name: interaction
+version: "1.0"
+layer: feature
+path: godot3d/modules/interaction/
+depends_on: [TBS-M00@1]
+listens: [player_moved, interact_requested]
+emits: [interactable_focused]
+node: Area3D (SphereShape3D r=1.5)
+params: { interact_radius: 1.5, cooldown_sec: 0.25 }
+behaviour:
+  - "دریافت player_moved → به‌روزرسانی موقعیت سنسور و ارزیابی اشیاء عضو گروه interactable در شعاع ۱٫۵m"
+  - "انتخاب نزدیک‌ترین شیء قابل‌تعامل و انتشار interactable_focused(target_id, prompt_text) فقط هنگام تغییر هدف"
+  - "خروج تمام اشیاء از شعاع ۱٫۵m → انتشار interactable_focused(null, \"\")"
+  - "دریافت interact_requested در زمان فوکوس معتبر → اجرای on_interact() روی شیء هدف با رعایت cooldown_sec"
+mocks: [mocks/mock_interactable.gd]
+errors:
+  - { code: E_NO_TARGET, when: "interact_requested بدون شیء فوکوس‌شده یا در حین کول‌داون → نادیده گرفتن ایمن" }
+  - { code: E_FREED_TARGET, when: "حذف ناگهانی نود هدف از صحنه → پاک‌سازی فوکوس و ارسال null" }
+acceptance:
+  - "فوکوس نزدیک‌ترین شیء در شعاع ۱٫۵m (تست headless با دو شیء در فواصل ۱٫۴m و ۰٫۸m → انتخاب شیء ۰٫۸m)"
+  - "دور شدن بازیکن به فاصله‌ی > ۱٫۵m → انتشار interactable_focused(null, \"\") در همان فریم"
+  - "ارسال interact_requested روی شیء فوکوس‌شده → فراخوانی دقیقاً یک‌بار on_interact() و مسدود شدن درخواست تکراری تا پایان cooldown_sec"
+budget: { max_files: 4, max_changed_lines: 250 }
