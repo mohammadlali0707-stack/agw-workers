@@ -1,0 +1,21 @@
+{
+  "name": "@avs/monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AVS workspace monorepo foundation",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "lint": "pnpm -r --if-present run lint",
+    "test": "pnpm -r --if-present run test",
+    "clean": "pnpm -r --if-present run clean"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

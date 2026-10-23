@@ -1,0 +1,76 @@
+name: Products AVS CI
+
+on:
+  push:
+    paths:
+      - 'products/avs/**'
+      - '.github/workflows/products-avs-ci.yml'
+  pull_request:
+    paths:
+      - 'products/avs/**'
+      - '.github/workflows/products-avs-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  avs-ci:
+    name: AVS Lint & Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: avs
+          POSTGRES_PASSWORD: avspassword
+          POSTGRES_DB: avs_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U avs -d avs_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: products/avs
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Verify service connectivity
+        run: |
+          echo "Verifying PostgreSQL connectivity..."
+          pg_isready -h localhost -p 5432 -U avs -d avs_db
+          echo "Verifying Redis connectivity..."
+          nc -z -v -w5 localhost 6379
+
+      - name: Run lint
+        working-directory: products/avs
+        run: pnpm run lint
+
+      - name: Run tests
+        working-directory: products/avs
+        env:
+          DATABASE_URL: postgresql://avs:avspassword@localhost:5432/avs_db
+          REDIS_URL: redis://localhost:6379
+        run: pnpm run test
