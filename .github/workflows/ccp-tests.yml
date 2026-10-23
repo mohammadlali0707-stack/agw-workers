@@ -1,0 +1,99 @@
+name: CCP tests (V81 + Godot module tests)
+# Owner 2026-10-23: Actions minutes of the private game repo are billing-blocked, so its tests run here (public repo, free minutes).
+# Checks out Claud-Cloud-Project with ACC6_PAT, runs V81 pytest + verify_pois and every Godot module headless test,
+# writes a commit status "agw/ccp-tests" on the tested CCP commit, and on failure opens/updates one fleet issue per day.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/ccp-tests.yml']
+  repository_dispatch:
+    types: [ccp-tests, ccp-change, ccp-godot3d, godot3d-change, notion-task, tbs-godot3d-ci]
+  schedule:
+    - cron: '17 */2 * * *'
+concurrency:
+  group: ccp-tests
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.ACC6_PAT }}
+      CCP: mohammadlali0707-stack/Claud-Cloud-Project
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+          ref: main
+          path: ccp
+      - name: Skip if this CCP commit was already tested (schedule only)
+        id: gate
+        shell: bash
+        run: |
+          SHA=$(git -C ccp rev-parse HEAD); echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          done=$(gh api "repos/$CCP/commits/$SHA/statuses" --jq '[.[] | select(.context=="agw/ccp-tests")] | length' 2>/dev/null || echo 0)
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "${done:-0}" != "0" ]; then echo "run=no" >> "$GITHUB_OUTPUT"; echo "already tested $SHA"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'yes'
+        with:
+          python-version: '3.12'
+      - name: V81 tests
+        id: v81
+        if: steps.gate.outputs.run == 'yes'
+        shell: bash
+        working-directory: ccp
+        run: |
+          if [ ! -d v81/tests ]; then echo "result=skip" >> "$GITHUB_OUTPUT"; exit 0; fi
+          pip install -q pytest jsonschema
+          set +e
+          python3 v81/tools/verify_pois.py --offline > ../v81.log 2>&1; a=$?
+          python3 -m pytest -q v81/tests >> ../v81.log 2>&1; b=$?
+          tail -25 ../v81.log
+          if [ $a -eq 0 ] && [ $b -eq 0 ]; then echo "result=pass" >> "$GITHUB_OUTPUT"; else echo "result=fail" >> "$GITHUB_OUTPUT"; fi
+          echo "##CCPTEST## v81 verify=$a pytest=$b $(grep -Eo '[0-9]+ (passed|failed)' ../v81.log | tr '\n' ' ')"
+      - name: Install Godot 4.3
+        if: steps.gate.outputs.run == 'yes'
+        shell: bash
+        run: |
+          curl -fsSL --retry 4 -o /tmp/godot.zip https://github.com/godotengine/godot/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot && sudo install -m 0755 /tmp/godot/Godot_v4.3-stable_linux.x86_64 /usr/local/bin/godot && godot --version
+      - name: Godot module tests (headless)
+        id: gd
+        if: steps.gate.outputs.run == 'yes'
+        shell: bash
+        run: |
+          cd ccp/godot3d
+          timeout 300 godot --headless --import --path . > /tmp/import.log 2>&1 || true
+          pass=0; fail=0; : > ../../gd.log
+          for t in $(ls modules/*/tests/test_*.tscn 2>/dev/null | sort); do
+            out=$(timeout 180 godot --headless --path . "res://$t" 2>&1); rc=$?
+            if [ $rc -eq 0 ] && ! grep -qE "SCRIPT ERROR|Parse Error|\[FAIL\]|FAILED" <<<"$out"; then pass=$((pass+1)); s=PASS; else fail=$((fail+1)); s="FAIL(rc=$rc)"; fi
+            echo "##CCPTEST## godot $s $t" | tee -a ../../gd.log
+            [ "$s" = PASS ] || { echo "$out" | grep -E "SCRIPT ERROR|ERROR|FAIL|at:" | head -12 | sed 's/^/      | /' | tee -a ../../gd.log; }
+          done
+          echo "##CCPTEST## godot total pass=$pass fail=$fail"
+          echo "result=$([ $fail -eq 0 ] && echo pass || echo fail)" >> "$GITHUB_OUTPUT"; echo "summary=pass=$pass fail=$fail" >> "$GITHUB_OUTPUT"
+      - name: Report (commit status + issue on failure)
+        if: always() && steps.gate.outputs.run == 'yes'
+        shell: bash
+        env:
+          V81: ${{ steps.v81.outputs.result }}
+          GD: ${{ steps.gd.outputs.result }}
+          GDS: ${{ steps.gd.outputs.summary }}
+          SHA: ${{ steps.gate.outputs.sha }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          state=failure
+          if [ "$V81" != fail ] && [ "$GD" = pass ]; then state=success; fi
+          gh api "repos/$CCP/statuses/$SHA" -f state=$state -f context=agw/ccp-tests -f target_url="$RUN" -f description="v81=$V81 godot=$GDS" >/dev/null || echo "status write failed"
+          echo "##CCPTEST## result $state v81=$V81 godot=$GDS sha=${SHA:0:7}"
+          if [ "$state" = failure ]; then
+            day=$(date -u +%F); title="[CCP tests] failing — $day"
+            body=$(printf "CCP commit \`%s\` failed the tests in agw-workers.\n\n- V81: %s\n- Godot: %s\n- Run: %s\n\n\`\`\`\n%s\n%s\n\`\`\`\n\nFix the failing tests in Claud-Cloud-Project (small commits, no \`.github/\`). Never use ACC1, ACC3 or ACC7.\n\nccp @agy-plan" "${SHA:0:7}" "$V81" "$GDS" "$RUN" "$(tail -15 v81.log 2>/dev/null)" "$(grep -A12 FAIL gd.log 2>/dev/null | head -40)")
+            n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number' 2>/dev/null)
+            if [ -n "$n" ]; then gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "Still failing at \`${SHA:0:7}\`: v81=$V81 godot=$GDS — $RUN"; else gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body "$body" >/dev/null; fi
+          fi
