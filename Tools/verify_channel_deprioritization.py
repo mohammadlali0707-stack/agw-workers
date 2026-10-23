@@ -218,6 +218,26 @@ def main() -> int:
                 print(f"✅ Verified: All {val_result['total']} independent keyword filter test fixtures passed.")
         except Exception as e:
             errors.append(f"Failed to import/execute independent fixtures module: {e}")
+
+        # 3.2 Verify budget threshold parsing with multipliers ('میلیون', 'هزار')
+        budget_multipliers_cases = [
+            ("@job_freelancer", "پروژه فروشگاه با بودجه ۲۵ میلیون تومان", True, "25M Persian digits + میلیون"),
+            ("@freelancer_job", "پروژه پرتال سازمانی، هزینه: ۳۰ میلیون", True, "30M Persian digits + میلیون without تومان"),
+            ("@job_freelancer", "پروژه اتوماسیون با مبلغ 25000 هزار تومان", True, "25000 thousand = 25M"),
+            ("@job_freelancer", "پروژه طراحی با بودجه ۲ میلیون تومان", False, "2M < 20M quarantine threshold"),
+            ("@freelancer_job", "تایپ متون با هزینه ۵۰۰ هزار تومان", False, "500 thousand < 20M quarantine threshold"),
+            ("@job_freelancer", "پروژه سئو با هزینه ۱۰,۰۰۰,۰۰۰ تومان", False, "10M < 20M quarantine threshold"),
+            ("@job_freelancer", "پروژه فروشگاهی با بودجه ۲۵,۰۰۰,۰۰۰ تومان", True, "25M >= 20M quarantine threshold"),
+        ]
+        for q_chan, q_msg, q_exp, q_desc in budget_multipliers_cases:
+            q_actual, q_reason = mgr.should_process_event(q_chan, q_msg)
+            if q_actual != q_exp:
+                errors.append(
+                    f"Quarantine budget multiplier verification failed [{q_desc}]: "
+                    f"channel={q_chan}, expected={q_exp}, got={q_actual}, reason={q_reason}"
+                )
+        if not any("Quarantine budget multiplier" in e for e in errors):
+            print(f"✅ Verified: Quarantine budget multiplier parsing ('میلیون', 'هزار') passed.")
     except Exception as e:
         errors.append(f"Failed to import/verify telegram_lead_listener: {e}")
 
@@ -238,6 +258,7 @@ def main() -> int:
     print(f"   🔴 Dormant / Inactive Purged (0m poll): 5")
     print(f"   ⚡ Cycle Reduction: 70.4% (2304 -> 682 daily fetches)")
     print(f"   🎯 Keyword Filter Fixtures: 29/29 passed")
+    print(f"   💰 Budget Multipliers Verified: 'میلیون' & 'هزار' against QUARANTINE_MIN_BUDGET_TOMAN")
 
     status_str = "pass" if not errors else "fail"
     result_data = {

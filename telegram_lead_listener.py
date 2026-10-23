@@ -132,7 +132,7 @@ TIER_3_KEYWORD_REGEX = re.compile("|".join(TIER_3_REQUIRED_KEYWORDS), re.IGNOREC
 # Minimum budget requirement for quarantined channels (20,000,000 Tomans)
 QUARANTINE_MIN_BUDGET_TOMAN = 20_000_000
 BUDGET_EXTRACTION_REGEX = re.compile(
-    r"(?:بودجه|مبلغ|هزینه)\s*[:=\-]?\s*(\d[\d,\.]{4,12})\s*(?:تومان|میلیون|هزار)",
+    r"(?:بودجه|مبلغ|هزینه)\s*[:=\-]?\s*(\d[\d,\.]*)\s*(میلیون|هزار|تومان)?(?:\s*تومان)?",
     re.IGNORECASE | re.UNICODE
 )
 
@@ -280,11 +280,25 @@ class ChannelSchedulingManager:
         # Quarantine Tier: Muted; requires high budget verification
         if tier == "quarantine":
             match = BUDGET_EXTRACTION_REGEX.search(message_text)
-            if not match:
+            if not match or not match.group(1):
                 return False, "Quarantined channel: suppressed due to missing explicit commercial budget."
-            raw_val = match.group(1).replace(",", "").replace(".", "")
+            raw_val = match.group(1).replace(",", "").replace("،", "")
+            unit = match.group(2)
+            multiplier = 1
+            if unit == "میلیون":
+                multiplier = 1_000_000
+            elif unit == "هزار":
+                multiplier = 1_000
+
             try:
-                budget = int(raw_val)
+                if "." in raw_val:
+                    if multiplier > 1 and raw_val.count(".") == 1:
+                        budget = int(float(raw_val) * multiplier)
+                    else:
+                        budget = int(raw_val.replace(".", "")) * multiplier
+                else:
+                    budget = int(raw_val) * multiplier
+
                 if budget >= QUARANTINE_MIN_BUDGET_TOMAN:
                     return True, f"Quarantine exemption granted: verified budget >= {QUARANTINE_MIN_BUDGET_TOMAN} Toman."
             except ValueError:
