@@ -1,31 +1,46 @@
 # Candidate Feed QA Validation & Smoke Testing Report
 
-**Task:** QA Criteria and Feed Smoke Testing  
+**Task:** QA Criteria, Feed Smoke Testing & Test Fixtures Segregation  
 **Executor:** `agw-ACC5-w02` (Account 5 Quality Assurance & Feed Verification)  
 **Parent Plan:** `issue-91-acc5-3d88bb5ac734` (Issue #91: *"کاهش اولویت کانال‌های تلگرامی بدون خروجی و جستجو برای سورس‌های جدید"*)  
-**Execution Timestamp:** 2026-10-23T05:30:00Z  
-**Verification Tooling:** [`Tools/smoke_test_candidate_feeds.py`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/Tools/smoke_test_candidate_feeds.py)  
-**Artifacts Generated:**  
-- Criteria & Procedures: [`qa/criteria/qa_criteria_and_procedures.md`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/criteria/qa_criteria_and_procedures.md)  
-- Candidate Schema: [`qa/schemas/candidate_channel_schema.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/schemas/candidate_channel_schema.json)  
-- Message Schema: [`qa/schemas/channel_message_schema.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/schemas/channel_message_schema.json)  
-- Test Suite Probes: [`Tools/test_feed_smoke_testing.py`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/Tools/test_feed_smoke_testing.py)  
-- Structured Results: [`Reports/qa/smoke_test_results.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/Reports/qa/smoke_test_results.json)  
+**Execution Timestamp:** 2026-10-23T07:00:00Z  
+**Verification Tooling:** [`Tools/smoke_test_candidate_feeds.py`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/Tools/smoke_test_candidate_feeds.py)  
+**Artifacts Generated & Maintained:**  
+- Criteria & Procedures: [`qa/criteria/qa_criteria_and_procedures.md`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/criteria/qa_criteria_and_procedures.md)  
+- Candidate Schema: [`qa/schemas/candidate_channel_schema.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/schemas/candidate_channel_schema.json)  
+- Message Schema: [`qa/schemas/channel_message_schema.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/schemas/channel_message_schema.json)  
+- Clean Operational Candidate Feeds: [`qa/candidates/candidate_feeds_sample.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/candidates/candidate_feeds_sample.json)  
+- Segregated Negative Test Fixtures: [`qa/candidates/test_fixtures/negative_test_feeds.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/candidates/test_fixtures/negative_test_feeds.json)  
+- Operational Smoke Test Results: [`Reports/qa/smoke_test_results.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/Reports/qa/smoke_test_results.json)  
+- Negative Fixture Test Results: [`Reports/qa/negative_test_results.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/Reports/qa/negative_test_results.json)  
+- Test Suite Probes: [`Tools/test_feed_smoke_testing.py`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/Tools/test_feed_smoke_testing.py)  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Audit Overview
 
-Under the directives of Issue #91, the fleet is replacing stale, zero-output Telegram channels with high-yield, stable sources. As the QA gatekeeper of Account 5, **`agw-ACC5-w02`** established formal acceptance thresholds, deployed automated schema compatibility validators, and performed comprehensive smoke testing across candidate feeds.
+Under the directives of Issue #91, the fleet is replacing stale, zero-output Telegram channels with high-yield, stable sources. As the QA gatekeeper of Account 5, **`agw-ACC5-w02`** established formal acceptance thresholds, deployed automated schema compatibility validators, and conducted a thorough audit and cleanup of candidate feeds.
+
+### Dataset Audit and Test Fixture Segregation
+An audit of the initial sample revealed that synthetic failure probes and negative test fixtures were co-mingled with live candidate channels. To guarantee that production ingestion pipelines remain clean and free of experimental artifacts, a strict architectural segregation was executed:
+1. **Operational Clean Feeds (`candidate_feeds_sample.json`):** Now contains **exclusively** legitimate, operational candidates submitted for production registry consideration.
+2. **Negative Test Fixtures (`test_fixtures/negative_test_feeds.json`):** All synthetic probes (`cand-dormant-legacy-04`, `cand-malformed-bot-05`, and `cand-ad-spam-forwarder-06`) were definitively relocated into a dedicated test fixtures directory to serve as baseline validation fixtures for the smoke testing suite.
 
 ### Headline Results
-- **Total Candidate Channels Evaluated:** 7
-- **Qualified for Production (PASS):** 3 (42.9%)
-- **Conditional / Low-Priority Tier (CONDITIONAL):** 1 (14.3%)
-- **Disqualified / Blocked (FAIL):** 3 (42.9%)
-- **Critical Failure Types Caught:** Stale/Dormant Feed (1), Schema Incompatibility / Endpoint 500 (1), Excessive Commercial Ads & Duplicates (1).
 
-The automated verification gate successfully prevented non-viable sources from polluting the downstream source registry, guaranteeing operational stability, schema consistency, healthy update rhythms, and zero-noise performance.
+#### Clean Operational Candidate Feeds (`candidate_feeds_sample.json`)
+- **Total Operational Channels Evaluated:** 4
+- **Qualified for Production (PASS):** 3 (75.0%)
+- **Conditional / Low-Priority Tier (CONDITIONAL):** 1 (25.0%)
+- **Disqualified / Blocked (FAIL):** 0 (0.0%)
+
+#### Negative Test Fixtures Suite (`test_fixtures/negative_test_feeds.json`)
+- **Total Injected Negative Fixtures Evaluated:** 3
+- **Correctly Caught & Disqualified by Gates (FAIL):** 3 (100.0%)
+- **Target Failure Modes Verified:**
+  - *Stale / Dormant Channel Breach:* `cand-dormant-legacy-04` (Staleness: 1145.5h vs. 168.0h threshold)
+  - *Endpoint Error & Schema Malformation:* `cand-malformed-bot-05` (HTTP 500 & 0% message schema pass rate)
+  - *Zero-Noise & Broadcast Duplication:* `cand-ad-spam-forwarder-06` (Ad ratio: 80.0% vs. 5.0% threshold & 20% duplicate rate)
 
 ---
 
@@ -64,7 +79,7 @@ $$S_{composite} = 0.25 \cdot S_{stability} + 0.30 \cdot S_{schema} + 0.25 \cdot 
 
 The test methodology combines static analysis, schema compilation, and dynamic behavioral simulation:
 
-1. **Schema Compilation**: The engine compiles [`candidate_channel_schema.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/schemas/candidate_channel_schema.json) and [`channel_message_schema.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/schemas/channel_message_schema.json) using Draft-07 JSON Schema rules.
+1. **Schema Compilation**: The engine compiles [`candidate_channel_schema.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/schemas/candidate_channel_schema.json) and [`channel_message_schema.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/schemas/channel_message_schema.json) using Draft-07 JSON Schema rules.
 2. **Operational Smoke Probe**: Tests the declared endpoint protocol (`https`, `telegram_mtproto`, `rss_bridge`), status code resolution, and response latency.
 3. **Cadence Profiler**: Parses message timestamps, computes chronological spans, measures publishing velocity (posts/day), and calculates elapsed hours since the latest post relative to evaluation reference time `2026-10-23T05:30:00Z`.
 4. **Zero-Noise & Spam Scanner**:
@@ -75,23 +90,28 @@ The test methodology combines static analysis, schema compilation, and dynamic b
 
 ## 4. Comprehensive Validation Results
 
-### Candidate Evaluation Summary Table
+### 4.1 Clean Operational Candidate Channels (`candidate_feeds_sample.json`)
 
 | Candidate ID | Telegram Handle | Topic / Domain Category | Stability | Schema Pass | Cadence (Posts/Day) | Ad Ratio | Dupes | Composite Score | Final Status |
 |---|---|---|---|---|---|---|---|---|---|
 | `cand-tech-ai-01` | `@tech_ai_persian` | `ai_tech` | 100.0 | 100% (5/5) | 1.33 (10.0h ago) | 0.0% | 0 | **99.4** | 🟢 **PASS** |
 | `cand-gamedev-godot-02` | `@godot_gamecraft_fa` | `game_development` | 100.0 | 100% (4/4) | 0.87 (8.5h ago) | 0.0% | 0 | **99.5** | 🟢 **PASS** |
 | `cand-automation-cloud-03` | `@devops_automation_pro` | `automation_devops` | 100.0 | 100% (3/3) | 0.89 (12.3h ago) | 0.0% | 0 | **99.3** | 🟢 **PASS** |
-| `cand-dormant-legacy-04` | `@retro_archive_dormant` | `game_development` | 100.0 | 100% (1/1) | 0.02 (1145.5h ago) | 0.0% | 0 | **75.0** | 🔴 **FAIL** |
-| `cand-malformed-bot-05` | `@broken_crypto_signals` | `general_tech` | 0.0 (500) | 0% (0/2) | 0.81 (29.5h ago) | 0.0% | 0 | **43.2** | 🔴 **FAIL** |
-| `cand-ad-spam-forwarder-06` | `@vpn_promo_linkfarm` | `general_tech` | 100.0 | 100% (5/5) | 5.00 (9.5h ago) | 80.0% | 1 | **82.6** | 🔴 **FAIL** |
 | `cand-narrative-sound-07` | `@ambient_soundscapes_fa` | `narrative_audio` | 100.0 | 100% (2/2) | 0.15 (39.5h ago) | 0.0% | 0 | **87.1** | 🟡 **CONDITIONAL** |
+
+### 4.2 Segregated Negative Test Fixtures Suite (`qa/candidates/test_fixtures/negative_test_feeds.json`)
+
+| Fixture ID | Telegram Handle | Target Test Dimension | Stability | Schema Pass | Cadence (Posts/Day) | Ad / Dupe Ratio | Composite Score | Gating Verdict | Target Failure Mode Caught |
+|---|---|---|---|---|---|---|---|---|---|
+| `cand-dormant-legacy-04` | `@retro_archive_dormant` | Cadence & Staleness | 100.0 | 100% (1/1) | 0.02 (1145.5h ago) | 0.0% / 0 | 75.0 | 🔴 **FAIL (Expected)** | Critical Staleness Breach (1145.5h > 168.0h threshold) |
+| `cand-malformed-bot-05` | `@broken_crypto_signals` | Operational & Schema | 0.0 (500) | 0% (0/2) | 0.81 (29.5h ago) | 0.0% / 0 | 43.2 | 🔴 **FAIL (Expected)** | HTTP 500 Endpoint Failure & Message Schema Violations |
+| `cand-ad-spam-forwarder-06` | `@vpn_promo_linkfarm` | Zero-Noise & Spam | 100.0 | 100% (5/5) | 5.00 (9.5h ago) | 80.0% / 20.0% | 82.6 | 🔴 **FAIL (Expected)** | Commercial Ad Ratio (80% > 5%) & Broadcast Duplicate Spam |
 
 ---
 
 ## 5. Candidate Status Deep-Dive & Audit Findings
 
-### 🟢 Approved Candidates (PASS)
+### 🟢 Approved Production Candidates (PASS)
 
 #### 1. `cand-tech-ai-01` (`@tech_ai_persian`) — Score: 99.4/100
 - **Category:** AI & Machine Learning (`ai_tech`)
@@ -130,27 +150,32 @@ The test methodology combines static analysis, schema compilation, and dynamic b
 
 ---
 
-### 🔴 Disqualified Candidates (FAIL)
+### 🔴 Segregated Negative Test Fixtures Suite (FAIL - Injected Test Probes)
+
+These channels were audited, cataloged, and moved to [`qa/candidates/test_fixtures/negative_test_feeds.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/candidates/test_fixtures/negative_test_feeds.json) to serve as dedicated regression fixtures:
 
 #### 5. `cand-dormant-legacy-04` (`@retro_archive_dormant`) — Score: 75.0/100 -> **FAIL**
-- **Disqualification Reason:** **CRITICAL STALENESS BREACH**.
+- **Test Objective:** Verification of Staleness and Inactivity Thresholds.
+- **Target Breach:** **CRITICAL STALENESS BREACH**.
 - **Audit Findings:** The feed's last message was published 1145.5 hours ago (~47.7 days ago), severely breaching the maximum staleness threshold of 168.0 hours (7 days).
-- **Decision:** **REJECTED**. Directly matches the target problem described in Issue #91 (zero-output legacy channels). Must not enter the production registry.
+- **Segregation Status:** Relocated to test fixtures. Excluded from production candidate feeds.
 
 #### 6. `cand-malformed-bot-05` (`@broken_crypto_signals`) — Score: 43.2/100 -> **FAIL**
-- **Disqualification Reason:** **OPERATIONAL FAILURE & TOTAL SCHEMA INCOMPATIBILITY**.
+- **Test Objective:** Verification of Endpoint Error Detection and JSON Schema Guardrails.
+- **Target Breach:** **OPERATIONAL FAILURE & TOTAL SCHEMA INCOMPATIBILITY**.
 - **Audit Findings:**
   - Operational endpoint returned HTTP 500 Internal Server Error.
   - 0% message schema pass rate (0/2 valid messages).
   - Schema violations: `message_id` is a string instead of integer; `timestamp` is invalid non-ISO string; `content_type` contains unrecognized enum; `text` is empty; `views` is negative (-5); `is_forward` is string rather than boolean.
-- **Decision:** **REJECTED**. Malformed payloads would cause pipeline crashes and unhandled exceptions in the downstream dispatcher.
+- **Segregation Status:** Relocated to test fixtures. Excluded from production candidate feeds.
 
 #### 7. `cand-ad-spam-forwarder-06` (`@vpn_promo_linkfarm`) — Score: 82.6/100 -> **FAIL**
-- **Disqualification Reason:** **ZERO-NOISE VIOLATION & DUPLICATE BROADCAST SPAM**.
+- **Test Objective:** Verification of Commercial Spam Regex and Broadcast Duplicate Hash Matching.
+- **Target Breach:** **ZERO-NOISE VIOLATION & DUPLICATE BROADCAST SPAM**.
 - **Audit Findings:**
   - 80.0% of messages contained commercial advertising and referral tags (`#ad`, `#تبلیغ`, `#sponsored`, affiliate links), exceeding the 5.0% threshold by 16x.
   - Detected exact duplicate message text broadcast across multiple hours (20.0% duplicate rate).
-- **Decision:** **REJECTED**. Induces downstream pipeline clutter, false positive notification events, and poll resource waste.
+- **Segregation Status:** Relocated to test fixtures. Excluded from production candidate feeds.
 
 ---
 
@@ -158,12 +183,14 @@ The test methodology combines static analysis, schema compilation, and dynamic b
 
 Subordinate **`agw-ACC5-w03`** (*Source Registry Assembly and Pipeline Integration*) should ingest the validated output as follows:
 
-1. **Registry Composition**: Register only the 3 PASS candidates and 1 CONDITIONAL candidate:
+1. **Registry Source File**: Ingest **exclusively** from [`qa/candidates/candidate_feeds_sample.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/candidates/candidate_feeds_sample.json), which has been audited and cleaned of all negative test fixtures.
+2. **Registry Composition**: Register only the 3 PASS candidates and 1 CONDITIONAL candidate:
    - Primary Active Tier (High Cadence):
      - `@tech_ai_persian` (`cand-tech-ai-01`): poll interval = `60m`
      - `@godot_gamecraft_fa` (`cand-gamedev-godot-02`): poll interval = `120m`
      - `@devops_automation_pro` (`cand-automation-cloud-03`): poll interval = `180m`
    - Secondary Extended Tier (Low Cadence):
      - `@ambient_soundscapes_fa` (`cand-narrative-sound-07`): poll interval = `360m`
-2. **Schema Integration**: Enforce [`qa/schemas/channel_message_schema.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/schemas/channel_message_schema.json) as the mandatory validation gate in the production ingestion pipeline prior to message persistence.
-3. **Automated Weekly Smoke Check**: Schedule [`Tools/smoke_test_candidate_feeds.py`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/Tools/smoke_test_candidate_feeds.py) as a weekly diagnostic workflow to continuously prune degrading sources.
+3. **CI/CD Regression Probes**: Use [`qa/candidates/test_fixtures/negative_test_feeds.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/candidates/test_fixtures/negative_test_feeds.json) in automated pipeline tests to continuously verify that rejection gates prevent faulty channels from entering the registry.
+4. **Schema Enforcement**: Enforce [`qa/schemas/channel_message_schema.json`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/qa/schemas/channel_message_schema.json) as the mandatory validation gate in the production ingestion pipeline prior to message persistence.
+5. **Automated Weekly Smoke Check**: Schedule [`Tools/smoke_test_candidate_feeds.py`](file:///home/runner/work/_temp/agent-repo-39914493123-1-run-agy/Tools/smoke_test_candidate_feeds.py) as a weekly diagnostic workflow to continuously prune degrading sources.

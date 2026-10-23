@@ -119,6 +119,46 @@ class TestFeedSmokeEngine(unittest.TestCase):
         v_fail = calculate_qa_score_and_status(stab_fail, sch, cad, noise)
         self.assertEqual(v_fail["status"], "FAIL")
 
+    def test_operational_candidate_feeds_segregation(self):
+        """Verify candidate_feeds_sample.json contains only clean operational feeds."""
+        import os
+        from Tools.smoke_test_candidate_feeds import run_candidate_smoke_tests
+        cand_path = "qa/candidates/candidate_feeds_sample.json"
+        self.assertTrue(os.path.exists(cand_path), f"Missing {cand_path}")
+
+        results = run_candidate_smoke_tests(
+            cand_path,
+            "qa/schemas/candidate_channel_schema.json",
+            "qa/schemas/channel_message_schema.json",
+            self.ref_time
+        )
+        self.assertEqual(results["total_candidates"], 4)
+        self.assertEqual(results["summary"]["FAIL"], 0)
+        self.assertEqual(results["summary"]["PASS"], 3)
+        self.assertEqual(results["summary"]["CONDITIONAL"], 1)
+
+    def test_negative_test_fixtures_segregation(self):
+        """Verify negative_test_feeds.json isolates failing test fixtures with 100% rejection."""
+        import os
+        from Tools.smoke_test_candidate_feeds import run_candidate_smoke_tests
+        fixtures_path = "qa/candidates/test_fixtures/negative_test_feeds.json"
+        self.assertTrue(os.path.exists(fixtures_path), f"Missing {fixtures_path}")
+
+        results = run_candidate_smoke_tests(
+            fixtures_path,
+            "qa/schemas/candidate_channel_schema.json",
+            "qa/schemas/channel_message_schema.json",
+            self.ref_time
+        )
+        self.assertEqual(results["total_candidates"], 3)
+        self.assertEqual(results["summary"]["FAIL"], 3)
+        self.assertEqual(results["summary"]["PASS"], 0)
+        self.assertEqual(results["summary"]["CONDITIONAL"], 0)
+
+        fixture_ids = {c["candidate_id"] for c in results["candidates"]}
+        expected_ids = {"cand-dormant-legacy-04", "cand-malformed-bot-05", "cand-ad-spam-forwarder-06"}
+        self.assertEqual(fixture_ids, expected_ids)
+
 
 if __name__ == "__main__":
     unittest.main()
