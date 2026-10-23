@@ -58,7 +58,17 @@ DEFAULT_REGISTRY_OUTPUT_JSON = "Reports/qa/candidate_channel_registry.json"
 
 
 def load_json(filepath: str) -> Any:
-    """Load and parse JSON file from disk."""
+    """Load and parse JSON or YAML file from disk."""
+    if filepath.endswith((".yaml", ".yml")):
+        import yaml
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+            if isinstance(data, dict):
+                if "candidate_channels" in data:
+                    return data["candidate_channels"]
+                if "channels" in data:
+                    return data["channels"]
+            return data
     with open(filepath, 'r', encoding='utf-8') as f:
         return json.load(f)
 

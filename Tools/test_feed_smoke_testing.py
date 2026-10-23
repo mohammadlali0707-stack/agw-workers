@@ -7,13 +7,20 @@ Author: agw-ACC5-w02
 """
 
 import datetime
+import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from Tools.smoke_test_candidate_feeds import (
     validate_schema,
     test_operational_stability,
     evaluate_cadence_and_frequency,
     audit_zero_noise_and_duplicates,
     calculate_qa_score_and_status,
+    run_candidate_smoke_tests,
+    run_fixture_smoke_tests,
     load_json,
     THRESHOLD_MAX_STALENESS_HOURS,
     THRESHOLD_MAX_AD_RATIO
@@ -119,45 +126,73 @@ class TestFeedSmokeEngine(unittest.TestCase):
         v_fail = calculate_qa_score_and_status(stab_fail, sch, cad, noise)
         self.assertEqual(v_fail["status"], "FAIL")
 
-    def test_operational_candidate_feeds_segregation(self):
-        """Verify candidate_feeds_sample.json contains only clean operational feeds."""
-        import os
-        from Tools.smoke_test_candidate_feeds import run_candidate_smoke_tests
-        cand_path = "qa/candidates/candidate_feeds_sample.json"
-        self.assertTrue(os.path.exists(cand_path), f"Missing {cand_path}")
+    def test_candidate_channels_schema_conformance(self):
+        """Verify candidate channels in acquisition/sources.yaml and qa/candidates strictly conform to schema."""
+        required_props = [
+            "candidate_id", "handle", "title", "category",
+            "primary_language", "feed_url", "poll_interval_minutes",
+            "operational_endpoint", "sample_messages"
+        ]
+        sources = [
+            ("acquisition/sources.yaml", load_json("acquisition/sources.yaml")),
+            ("qa/candidates/candidate_feeds_operational.json", load_json("qa/candidates/candidate_feeds_operational.json")),
+            ("qa/candidates/candidate_feeds_sample.json", load_json("qa/candidates/candidate_feeds_sample.json"))
+        ]
+        for src_name, candidates in sources:
+            self.assertTrue(len(candidates) >= 4, f"Expected >= 4 candidates in {src_name}")
+            for cand in candidates:
+                for prop in required_props:
+                    self.assertIn(prop, cand, f"Candidate {cand.get('candidate_id')} in {src_name} missing: {prop}")
+                valid, errors = validate_schema(cand, self.cand_schema)
+                self.assertTrue(valid, f"Candidate {cand.get('candidate_id')} in {src_name} failed schema: {errors}")
 
-        results = run_candidate_smoke_tests(
-            cand_path,
-            "qa/schemas/candidate_channel_schema.json",
-            "qa/schemas/channel_message_schema.json",
-            self.ref_time
-        )
-        self.assertEqual(results["total_candidates"], 4)
-        self.assertEqual(results["summary"]["FAIL"], 0)
-        self.assertEqual(results["summary"]["PASS"], 3)
-        self.assertEqual(results["summary"]["CONDITIONAL"], 1)
+    def test_operational_candidate_feeds_segregation(self):
+        """Verify operational candidate feeds contain only clean feeds and no negative fixtures."""
+        cand_paths = [
+            "qa/candidates/candidate_feeds_operational.json",
+            "qa/candidates/candidate_feeds_sample.json"
+        ]
+        for cand_path in cand_paths:
+            self.assertTrue(os.path.exists(cand_path), f"Missing {cand_path}")
+            results = run_candidate_smoke_tests(
+                cand_path,
+                "qa/schemas/candidate_channel_schema.json",
+                "qa/schemas/channel_message_schema.json",
+                self.ref_time
+            )
+            self.assertEqual(results["total_candidates"], 4)
+            self.assertEqual(results["summary"]["FAIL"], 0)
+            self.assertEqual(results["summary"]["PASS"], 3)
+            self.assertEqual(results["summary"]["CONDITIONAL"], 1)
+
+            cand_ids = {c["candidate_id"] for c in results["candidates"]}
+            fixture_ids = {"cand-dormant-legacy-04", "cand-malformed-bot-05", "cand-ad-spam-forwarder-06"}
+            self.assertTrue(fixture_ids.isdisjoint(cand_ids), f"Fixture leaked into {cand_path}")
 
     def test_negative_test_fixtures_segregation(self):
-        """Verify negative_test_feeds.json isolates failing test fixtures with 100% rejection."""
-        import os
-        from Tools.smoke_test_candidate_feeds import run_candidate_smoke_tests
-        fixtures_path = "qa/candidates/test_fixtures/negative_test_feeds.json"
-        self.assertTrue(os.path.exists(fixtures_path), f"Missing {fixtures_path}")
+        """Verify negative test fixtures isolate failing test fixtures with 100% rejection."""
+        fixture_paths = [
+            "qa/candidates/negative_test_fixtures.json",
+            "qa/fixtures/negative_test_fixtures.json",
+            "qa/candidates/test_fixtures/negative_test_feeds.json"
+        ]
+        for fixtures_path in fixture_paths:
+            self.assertTrue(os.path.exists(fixtures_path), f"Missing {fixtures_path}")
+            results = run_fixture_smoke_tests(
+                fixtures_path,
+                "qa/schemas/candidate_channel_schema.json",
+                "qa/schemas/channel_message_schema.json",
+                self.ref_time
+            )
+            self.assertEqual(results["total_fixtures"], 3)
+            self.assertEqual(results["summary"]["FAIL"], 3)
+            self.assertEqual(results["summary"]["PASS"], 0)
+            self.assertEqual(results["summary"]["CONDITIONAL"], 0)
+            self.assertTrue(results["all_fixtures_properly_rejected"])
 
-        results = run_candidate_smoke_tests(
-            fixtures_path,
-            "qa/schemas/candidate_channel_schema.json",
-            "qa/schemas/channel_message_schema.json",
-            self.ref_time
-        )
-        self.assertEqual(results["total_candidates"], 3)
-        self.assertEqual(results["summary"]["FAIL"], 3)
-        self.assertEqual(results["summary"]["PASS"], 0)
-        self.assertEqual(results["summary"]["CONDITIONAL"], 0)
-
-        fixture_ids = {c["candidate_id"] for c in results["candidates"]}
-        expected_ids = {"cand-dormant-legacy-04", "cand-malformed-bot-05", "cand-ad-spam-forwarder-06"}
-        self.assertEqual(fixture_ids, expected_ids)
+            fixture_ids = {c["candidate_id"] for c in results["fixtures"]}
+            expected_ids = {"cand-dormant-legacy-04", "cand-malformed-bot-05", "cand-ad-spam-forwarder-06"}
+            self.assertEqual(fixture_ids, expected_ids)
 
 
 if __name__ == "__main__":
