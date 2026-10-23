@@ -65,7 +65,9 @@ policies:
       - "استخدام برنامه‌نویس"
       - "همکاری پروژه‌ای"
       - "توسعه‌دهنده"
+      - "قرارداد"
       - "قراردادی"
+      - "سفارش کار"
 
   quarantine:
     priority_level: 4
@@ -102,7 +104,7 @@ summary:
   deprioritized_tier3_count: 8
   quarantined_count: 2
   dormant_dead_count: 5
-  active_polling_channels_count: 17
+  active_polling_channels_count: 19
   eliminated_dead_channels_count: 5
   daily_fetch_cycles_before: 2304
   daily_fetch_cycles_after: 682
@@ -573,6 +575,7 @@ channels:
     name_fa: "کانال استخدام فریلنسرهای ایران"
     topic: "Freelancer tenders & project bidding"
     tier: "dormant"
+    is_dormant: true
     operational_status: "dormant"
     active: false
     polling_enabled: false
@@ -597,6 +600,7 @@ channels:
     name_fa: "کانال استخدامی و پروژه‌ای کاریاب IT"
     topic: "Mini-projects and network IT tasks"
     tier: "dormant"
+    is_dormant: true
     operational_status: "dormant"
     active: false
     polling_enabled: false
@@ -621,6 +625,7 @@ channels:
     name_fa: "گروه ادمین‌ها و مدیران آنلاین‌شاپ‌ها"
     topic: "Online shop administration & migration"
     tier: "dormant"
+    is_dormant: true
     operational_status: "dormant"
     active: false
     polling_enabled: false
@@ -645,6 +650,7 @@ channels:
     name_fa: "گروه طراحی وب‌سایت و سئو (XSEO)"
     topic: "Technical SEO and website design"
     tier: "dormant"
+    is_dormant: true
     operational_status: "dormant"
     active: false
     polling_enabled: false
@@ -669,6 +675,7 @@ channels:
     name_fa: "کانال دورهمی و آگهی برنامه‌نویسان"
     topic: "Geek programmer job listings"
     tier: "dormant"
+    is_dormant: true
     operational_status: "dormant"
     active: false
     polling_enabled: false

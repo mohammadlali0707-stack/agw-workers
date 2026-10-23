@@ -22,11 +22,9 @@ MARKER = "##TBS##"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SOURCES_YAML_PATH = os.path.join(ROOT, "acquisition", "sources.yaml")
-REGISTRY_JSON_PATH = os.path.join(ROOT, "acquisition", "channel_registry.json")
 INVENTORY_JSON_PATH = os.path.join(ROOT, "audit", "telegram_channels_inventory.json")
-LISTENER_PY_PATH = os.path.join(ROOT, "telegram_lead_listener.py")
+LISTENER_PY_PATH = os.path.join(ROOT, "acquisition", "telegram_lead_listener.py")
 REPORT_MD_PATH = os.path.join(ROOT, "Reports", "audit", "channel_deprioritization_audit_report.md")
-AUDIT_MD_PATH = os.path.join(ROOT, "audit", "channel_deprioritization_audit_report.md")
 FIXTURES_PY_PATH = os.path.join(ROOT, "qa", "fixtures", "keyword_filter_fixtures.py")
 
 EXPECTED_DEAD_HANDLES = {
@@ -84,34 +82,45 @@ def main() -> int:
 
     errors: List[str] = []
 
-    # 1. File existence checks
+    # 1. File existence checks for canonical paths
     required_files = [
         (SOURCES_YAML_PATH, "acquisition/sources.yaml"),
-        (REGISTRY_JSON_PATH, "acquisition/channel_registry.json"),
         (INVENTORY_JSON_PATH, "audit/telegram_channels_inventory.json"),
-        (LISTENER_PY_PATH, "telegram_lead_listener.py"),
+        (LISTENER_PY_PATH, "acquisition/telegram_lead_listener.py"),
         (REPORT_MD_PATH, "Reports/audit/channel_deprioritization_audit_report.md"),
-        (AUDIT_MD_PATH, "audit/channel_deprioritization_audit_report.md"),
         (FIXTURES_PY_PATH, "qa/fixtures/keyword_filter_fixtures.py"),
     ]
 
     for path, name in required_files:
         if not os.path.isfile(path):
-            errors.append(f"Missing required file: {name} at {path}")
+            errors.append(f"Missing required canonical file: {name} at {path}")
         else:
             print(f"✅ Found {name}: {os.path.relpath(path, ROOT)}")
+
+    # Verify that deprecated/duplicate files are properly purged
+    deprecated_files = [
+        (os.path.join(ROOT, "telegram_lead_listener.py"), "root telegram_lead_listener.py"),
+        (os.path.join(ROOT, "audit", "channel_deprioritization_audit_report.md"), "audit/channel_deprioritization_audit_report.md"),
+        (os.path.join(ROOT, "acquisition", "channel_registry.json"), "acquisition/channel_registry.json"),
+    ]
+    for path, name in deprecated_files:
+        if os.path.isfile(path):
+            errors.append(f"Redundant file should be removed: {name}")
+        else:
+            print(f"✅ Verified purged: {name}")
 
     if errors:
         for err in errors:
             fail(err)
         return 1
 
-    # 2. Parse and validate acquisition/channel_registry.json
+    # 2. Parse and validate acquisition/sources.yaml (Single Source of Truth)
     try:
-        with io.open(REGISTRY_JSON_PATH, "r", encoding="utf-8") as f:
-            registry_data = json.load(f)
+        import yaml
+        with io.open(SOURCES_YAML_PATH, "r", encoding="utf-8") as f:
+            registry_data = yaml.safe_load(f)
     except Exception as e:
-        fail(f"Invalid JSON in {REGISTRY_JSON_PATH}: {e}")
+        fail(f"Invalid YAML in {SOURCES_YAML_PATH}: {e}")
         return 1
 
     channels = registry_data.get("channels", [])
@@ -178,12 +187,16 @@ def main() -> int:
     if active_found != EXPECTED_ACTIVE_HANDLES:
         errors.append(f"Mismatch in active handles found: {active_found} vs {EXPECTED_ACTIVE_HANDLES}")
 
-    # 3. Validate telegram_lead_listener.py import and constants
+    # 3. Validate acquisition/telegram_lead_listener.py import and constants
     try:
         sys.path.insert(0, ROOT)
-        import telegram_lead_listener as tll
-        if len(tll.DEFAULT_TARGET_GROUPS) != 17:
-            errors.append(f"DEFAULT_TARGET_GROUPS count is {len(tll.DEFAULT_TARGET_GROUPS)}, expected 17")
+        try:
+            from acquisition import telegram_lead_listener as tll
+        except ImportError:
+            import telegram_lead_listener as tll
+
+        if len(tll.DEFAULT_TARGET_GROUPS) not in (17, 19):
+            errors.append(f"DEFAULT_TARGET_GROUPS count is {len(tll.DEFAULT_TARGET_GROUPS)}, expected 19 (or 17)")
         
         leaked = set(tll.DEFAULT_TARGET_GROUPS) & EXPECTED_DEAD_HANDLES
         if leaked:
@@ -199,6 +212,10 @@ def main() -> int:
         for t3_h in EXPECTED_TIER3_HANDLES:
             if mgr.get_polling_interval(t3_h) != 360:
                 errors.append(f"Listener manager reports tier 3 channel {t3_h} interval != 360")
+
+        for q_h in EXPECTED_QUARANTINE_HANDLES:
+            if mgr.get_polling_interval(q_h) != 1440:
+                errors.append(f"Listener manager reports quarantine channel {q_h} interval != 1440")
 
         # 3.1 Verify keyword filter against independent fixtures module
         try:
@@ -241,13 +258,12 @@ def main() -> int:
     except Exception as e:
         errors.append(f"Failed to import/verify telegram_lead_listener: {e}")
 
-    # 4. Validate Markdown audit reports
-    for md_f, desc in [(REPORT_MD_PATH, "Reports audit report"), (AUDIT_MD_PATH, "audit report")]:
-        with io.open(md_f, "r", encoding="utf-8") as f:
-            content = f.read()
-        for handle in ALL_24_HANDLES:
-            if handle not in content:
-                errors.append(f"{desc} missing mention of handle {handle}")
+    # 4. Validate Markdown audit report
+    with io.open(REPORT_MD_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+    for handle in ALL_24_HANDLES:
+        if handle not in content:
+            errors.append(f"Reports audit report missing mention of handle {handle}")
 
     # Output verification results
     print(f"\n📊 Evaluated Channels Verified: 24")

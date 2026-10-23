@@ -20,13 +20,7 @@
     "dead_percentage": 20.8,
     "immediate_deprioritization_targets": 15,
     "immediate_purge_targets": 5,
-    "dormant_dead_channels_count": 5,
-    "deprioritized_tier3_count": 8,
-    "quarantined_channels_count": 2,
-    "pre_deprioritization_fetch_cycles": 2304,
-    "post_deprioritization_fetch_cycles": 682,
-    "estimated_compute_bandwidth_savings_pct": 70.4,
-    "wasted_cycles_eliminated_pct": 100.0
+    "single_source_of_truth": "acquisition/sources.yaml"
   },
   "channels": [
     {
@@ -45,14 +39,8 @@
         "avg_lead_score": 88.5
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_1",
-      "polling_interval_minutes": 15,
-      "fetch_frequency_daily": 96,
-      "immediate_webhook": true,
       "notes": "High yield official channel. Low noise, consistent commercial leads."
     },
     {
@@ -71,14 +59,8 @@
         "avg_lead_score": 85.0
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_1",
-      "polling_interval_minutes": 15,
-      "fetch_frequency_daily": 96,
-      "immediate_webhook": true,
       "notes": "Direct client project postings with verified budget brackets."
     },
     {
@@ -97,14 +79,8 @@
         "avg_lead_score": 81.0
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_1",
-      "polling_interval_minutes": 15,
-      "fetch_frequency_daily": 96,
-      "immediate_webhook": true,
       "notes": "Reliable contractor listings from private software businesses."
     },
     {
@@ -123,14 +99,8 @@
         "avg_lead_score": 84.0
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_1",
-      "polling_interval_minutes": 15,
-      "fetch_frequency_daily": 96,
-      "immediate_webhook": true,
       "notes": "High contract conversion rate. Well-formatted client requirements."
     },
     {
@@ -149,14 +119,8 @@
         "avg_lead_score": 82.0
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_1",
-      "polling_interval_minutes": 15,
-      "fetch_frequency_daily": 96,
-      "immediate_webhook": true,
       "notes": "Frequent landing page and eCommerce rescue requests."
     },
     {
@@ -175,14 +139,8 @@
         "avg_lead_score": 83.5
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_1",
-      "polling_interval_minutes": 15,
-      "fetch_frequency_daily": 96,
-      "immediate_webhook": true,
       "notes": "Direct shop owner inquiries needing payment gateway and CRM bridge."
     },
     {
@@ -201,14 +159,8 @@
         "avg_lead_score": 79.0
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_2",
-      "polling_interval_minutes": 60,
-      "fetch_frequency_daily": 24,
-      "immediate_webhook": false,
       "notes": "High message volume requires keyword filtering before LLM scoring."
     },
     {
@@ -227,14 +179,8 @@
         "avg_lead_score": 77.0
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_2",
-      "polling_interval_minutes": 60,
-      "fetch_frequency_daily": 24,
-      "immediate_webhook": false,
       "notes": "Moderate volume, high corporate validity."
     },
     {
@@ -253,14 +199,8 @@
         "avg_lead_score": 86.0
       },
       "status": "active",
-      "operational_status": "active",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "retain_priority",
       "tier": "tier_2",
-      "polling_interval_minutes": 60,
-      "fetch_frequency_daily": 24,
-      "immediate_webhook": false,
       "notes": "Selective postings with high standard of compensation."
     },
     {
@@ -279,14 +219,8 @@
         "avg_lead_score": 52.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "High noise ratio (>98% pure technical chatter). Low commercial yield. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -305,14 +239,8 @@
         "avg_lead_score": 48.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "Massive chat volume consumes parser memory with minimal actionable leads. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -331,14 +259,8 @@
         "avg_lead_score": 45.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "Predominantly agency sales and influencer exchanges rather than technical leads. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -357,14 +279,8 @@
         "avg_lead_score": 42.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "Unfunded idea-stage proposals lacking concrete budgets. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -383,14 +299,8 @@
         "avg_lead_score": 58.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "Mostly developer exchange rather than buyer inquiries. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -409,14 +319,8 @@
         "avg_lead_score": 35.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "Very low qualified lead frequency. Degraded performance across past 7 days. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -435,14 +339,8 @@
         "avg_lead_score": 50.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "Sporadic app project requests interspersed with high noise. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -461,14 +359,8 @@
         "avg_lead_score": 45.0
       },
       "status": "degraded",
-      "operational_status": "deprioritized",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "deprioritize_tier",
       "tier": "tier_3",
-      "polling_interval_minutes": 360,
-      "fetch_frequency_daily": 4,
-      "immediate_webhook": false,
       "notes": "Designers showcasing portfolios with infrequent developer hiring. Downgraded to Tier 3 (360m poll interval)."
     },
     {
@@ -487,14 +379,8 @@
         "avg_lead_score": 15.0
       },
       "status": "degraded",
-      "operational_status": "quarantined",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "mute_and_quarantine",
       "tier": "quarantine",
-      "polling_interval_minutes": 1440,
-      "fetch_frequency_daily": 1,
-      "immediate_webhook": false,
       "notes": "High message volume, 100% spam/affiliate junk. Zero qualified outputs in 8 days. Quarantined, muted, poll interval set to 1440m."
     },
     {
@@ -513,14 +399,8 @@
         "avg_lead_score": 10.0
       },
       "status": "degraded",
-      "operational_status": "quarantined",
-      "active": true,
-      "is_dormant": false,
       "recommended_action": "mute_and_quarantine",
       "tier": "quarantine",
-      "polling_interval_minutes": 1440,
-      "fetch_frequency_daily": 1,
-      "immediate_webhook": false,
       "notes": "Extreme noise and low-grade pyramid/ad spam. Zero valid leads. Quarantined, muted, poll interval set to 1440m."
     },
     {
@@ -539,14 +419,8 @@
         "avg_lead_score": 0.0
       },
       "status": "dead",
-      "operational_status": "dormant",
-      "active": false,
-      "is_dormant": true,
       "recommended_action": "deregister_and_purge",
       "tier": "dead",
-      "polling_interval_minutes": 0,
-      "fetch_frequency_daily": 0,
-      "immediate_webhook": false,
       "notes": "Channel is completely abandoned. Last post published 25 days ago. Confirmed dead, marked dormant/inactive, removed from polling cycles."
     },
     {
@@ -565,14 +439,8 @@
         "avg_lead_score": 0.0
       },
       "status": "dead",
-      "operational_status": "dormant",
-      "active": false,
-      "is_dormant": true,
       "recommended_action": "deregister_and_purge",
       "tier": "dead",
-      "polling_interval_minutes": 0,
-      "fetch_frequency_daily": 0,
-      "immediate_webhook": false,
       "notes": "Continuous zero output across past 21 operating cycles. Inactive admin. Confirmed dead, marked dormant/inactive, removed from polling cycles."
     },
     {
@@ -591,14 +459,8 @@
         "avg_lead_score": 0.0
       },
       "status": "dead",
-      "operational_status": "dormant",
-      "active": false,
-      "is_dormant": true,
       "recommended_action": "deregister_and_purge",
       "tier": "dead",
-      "polling_interval_minutes": 0,
-      "fetch_frequency_daily": 0,
-      "immediate_webhook": false,
       "notes": "Group converted to private invite-only or deleted. MTProto ChannelPrivateError. Confirmed dead, marked dormant/inactive, removed from polling cycles."
     },
     {
@@ -617,14 +479,8 @@
         "avg_lead_score": 0.0
       },
       "status": "dead",
-      "operational_status": "dormant",
-      "active": false,
-      "is_dormant": true,
       "recommended_action": "deregister_and_purge",
       "tier": "dead",
-      "polling_interval_minutes": 0,
-      "fetch_frequency_daily": 0,
-      "immediate_webhook": false,
       "notes": "Listener userbot was removed or restricted. Continuous fetch failure. Confirmed dead, marked dormant/inactive, removed from polling cycles."
     },
     {
@@ -643,15 +499,10 @@
         "avg_lead_score": 0.0
       },
       "status": "dead",
-      "operational_status": "dormant",
-      "active": false,
-      "is_dormant": true,
       "recommended_action": "deregister_and_purge",
       "tier": "dead",
-      "polling_interval_minutes": 0,
-      "fetch_frequency_daily": 0,
-      "immediate_webhook": false,
       "notes": "Handle defunct or changed ownership. Telegram returns UsernameInvalidError. Confirmed dead, marked dormant/inactive, removed from polling cycles."
     }
-  ]
+  ],
+  "canonical_source_of_truth": "acquisition/sources.yaml"
 }
