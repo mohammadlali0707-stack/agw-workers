@@ -60,7 +60,7 @@ jobs:
                                   urllib.request.build_opener(NR).open(urllib.request.Request(f"https://api.github.com/repos/{o}/agw-workers/actions/jobs/{j['id']}/logs", headers={"Authorization": "Bearer " + tok, "User-Agent": "audit"}), timeout=60); loc = ""
                               except urllib.error.HTTPError as e: loc = e.headers.get("Location", "")
                               log = urllib.request.urlopen(loc, timeout=60).read().decode("utf-8", "replace")
-                              keys = [l[29:].strip()[:220] for l in log.splitlines() if re.search(r"error|Error|ERROR|fatal|denied|quota|exceeded|not found|rejected|! \\[|hint:|401|403|429|exit code|Permission|refusing|conflict|non-fast-forward", l)]
+                              keys = [l[29:].strip()[:220] for l in log.splitlines() if re.search(r"error|Error|ERROR|fatal|denied|quota|exceeded|not found|rejected|hint:|401|403|429|exit code|Permission|refusing|conflict|non-fast-forward", l)]
                               for l in keys[-10:]: print("##AUDIT##      |", l)
                           except Exception as e: print("##AUDIT##      log ERR", str(e)[:120])
                           break
