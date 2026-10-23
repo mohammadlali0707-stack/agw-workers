@@ -686,3 +686,307 @@ channels:
       fetch_error_rate_pct: 100.0
       primary_error_code: "MTPROTO_USERNAME_INVALID"
       avg_lead_score: 0.0
+
+# ------------------------------------------------------------------------------
+# Candidate Sources Registry (Trial Polling for Verified Discovered Feeds)
+# ------------------------------------------------------------------------------
+candidate_sources:
+  - id: "cand-aipost"
+    handle: "@aipost"
+    title: "AI Post — Artificial Intelligence"
+    name: "AI Post — Artificial Intelligence"
+    feed_url: "https://t.me/aipost"
+    category: "ai_tech"
+    topic: "Artificial Intelligence, LLM Breakthroughs, Frontier Lab Releases"
+    audience_count: 676000
+    verified_posting_cadence: "5–12 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "30m"
+    polling_interval_minutes: 30
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified multi-daily high velocity; uninterrupted global AI breakthroughs and benchmark coverage."
+
+  - id: "cand-neuralzone"
+    handle: "@NeuralZone"
+    title: "NeuralZone | AI Apps"
+    name: "NeuralZone | AI Apps"
+    feed_url: "https://t.me/NeuralZone"
+    category: "ai_tech"
+    topic: "Applied AI, Model Deployments, Autonomous Agents & Multimodal Tools"
+    audience_count: 374000
+    verified_posting_cadence: "1–3 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "60m"
+    polling_interval_minutes: 60
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified daily active; hands-on benchmarks of generative models and autonomous agent frameworks."
+
+  - id: "cand-best-ai-tools"
+    handle: "@Best_AI_tools"
+    title: "AI Tools & Prompts"
+    name: "AI Tools & Prompts"
+    feed_url: "https://t.me/Best_AI_tools"
+    category: "ai_tech"
+    topic: "Utility AI, Developer Toolchains, Prompt Engineering, Automation Scripts"
+    audience_count: 168000
+    verified_posting_cadence: "2–4 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "30m"
+    polling_interval_minutes: 30
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; actionable developer utilities, workflow scripts, and prompt scaffolding templates."
+
+  - id: "cand-aiwiremoney"
+    handle: "@AiWireMoney"
+    title: "AIWire | AI Tools & Opportunities"
+    name: "AIWire | AI Tools & Opportunities"
+    feed_url: "https://t.me/AiWireMoney"
+    category: "ai_tech"
+    topic: "Generative Automation, Creative Coding, Open-Source ML Assets"
+    audience_count: 426000
+    verified_posting_cadence: "3–5 posts/week"
+    tier: "tier_2"
+    trial_polling_interval: "120m"
+    polling_interval_minutes: 120
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; curates open-source creative coding libraries, WebGL, and serverless agent pipelines."
+
+  - id: "cand-opendatascience"
+    handle: "@OpenDataScience"
+    title: "Data Science by ODS.ai"
+    name: "Data Science by ODS.ai"
+    feed_url: "https://t.me/OpenDataScience"
+    category: "ai_tech"
+    topic: "Machine Learning Research, Data Science Engineering, Academic Papers"
+    audience_count: 38200
+    verified_posting_cadence: "1–3 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "60m"
+    polling_interval_minutes: 60
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; backed by ODS.ai network; verified technical research and sparse attention workshops."
+
+  - id: "cand-machinelearning-ru"
+    handle: "@machinelearning_ru"
+    title: "Машинное обучение RU"
+    name: "Машинное обучение RU"
+    feed_url: "https://t.me/machinelearning_ru"
+    category: "ai_tech"
+    topic: "Open-Weights LLMs, Quantization, Efficient Training & Architecture"
+    audience_count: 18300
+    verified_posting_cadence: "1–2 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "120m"
+    polling_interval_minutes: 120
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; monitors HuggingFace open models, quantization, LoRA/QLoRA, and KV-cache compression."
+
+  - id: "cand-cvision"
+    handle: "@cvision"
+    title: "Tensorflow & Computer Vision"
+    name: "Tensorflow & Computer Vision"
+    feed_url: "https://t.me/cvision"
+    category: "ai_tech"
+    topic: "Computer Vision, Deep Learning Frameworks (TensorFlow/PyTorch), Python Internals"
+    audience_count: 15100
+    verified_posting_cadence: "1–2 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "120m"
+    polling_interval_minutes: 120
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; practical code exercises, image segmentation, GPU tensor batching, and vision transformers."
+
+  - id: "cand-ai-python"
+    handle: "@ai_python"
+    title: "DLeX: AI Python"
+    name: "DLeX: AI Python"
+    feed_url: "https://t.me/ai_python"
+    category: "automation_devops"
+    topic: "Python Programming, AI Ecosystem, Backend Infrastructure & Security"
+    audience_count: 21300
+    verified_posting_cadence: "1–3 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "90m"
+    polling_interval_minutes: 90
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; bridges software engineering, vulnerability remediation, and async Python LLM stream patterns."
+
+  - id: "cand-homeai"
+    handle: "@HomeAI"
+    title: "مجله هوش مصنوعی (HomeAI)"
+    name: "مجله هوش مصنوعی (HomeAI)"
+    feed_url: "https://t.me/HomeAI"
+    category: "ai_tech"
+    topic: "Persian AI Updates, Model Comparisons, Practical Educational Guides"
+    audience_count: 32900
+    verified_posting_cadence: "2–3 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "90m"
+    polling_interval_minutes: 90
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; regional translations of frontier AI, Ollama local inference tutorials, and model benchmarks."
+
+  - id: "cand-kdnuggets"
+    handle: "@kdnuggets"
+    title: "KDnuggets AI & Machine Learning"
+    name: "KDnuggets AI & Machine Learning"
+    feed_url: "https://t.me/kdnuggets"
+    category: "ai_tech"
+    topic: "Data Science Digests, Machine Learning Tutorials, Cheatsheets"
+    audience_count: 23100
+    verified_posting_cadence: "1 post/week"
+    tier: "tier_3"
+    trial_polling_interval: "720m"
+    polling_interval_minutes: 720
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active weekly digest; foundational ML cheatsheets, industry surveys, and multi-agent preprint reviews."
+
+  - id: "cand-thehackernews"
+    handle: "@thehackernews"
+    title: "The Hacker News"
+    name: "The Hacker News"
+    feed_url: "https://t.me/thehackernews"
+    category: "automation_devops"
+    topic: "Cybersecurity, Zero-Day Vulnerabilities, Infrastructure Exploits & Patches"
+    audience_count: 164000
+    verified_posting_cadence: "3–6 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "30m"
+    polling_interval_minutes: 30
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active high-yield; premier cybersecurity news, CVE disclosures, and cloud hardening updates."
+
+  - id: "cand-linuxgram"
+    handle: "@linuxgram"
+    title: "Linuxgram"
+    name: "Linuxgram"
+    feed_url: "https://t.me/linuxgram"
+    category: "automation_devops"
+    topic: "Linux Kernel, Open-Source Infrastructure, Sysadmin Tools, DevOps"
+    audience_count: 72500
+    verified_posting_cadence: "2–5 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "45m"
+    polling_interval_minutes: 45
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; rapid updates on Linux kernel releases, systemd, container runtimes, and sysadmin utilities."
+
+  - id: "cand-programmingtip"
+    handle: "@ProgrammingTip"
+    title: "Programming & AI Tips"
+    name: "Programming & AI Tips"
+    feed_url: "https://t.me/ProgrammingTip"
+    category: "general_tech"
+    topic: "Modern Software Engineering, AI Coding Tools, Git Internals & Cloud Architecture"
+    audience_count: 46100
+    verified_posting_cadence: "1–3 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "90m"
+    polling_interval_minutes: 90
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; practical engineering ergonomics, automated code agents, CI/CD pipeline tips, and Git internals."
+
+  - id: "cand-github-repos"
+    handle: "@github_repos"
+    title: "GitHub Repos"
+    name: "GitHub Repos"
+    feed_url: "https://t.me/github_repos"
+    category: "automation_devops"
+    topic: "Open-Source Repositories, Trending GitHub Tools, Security PoCs"
+    audience_count: 27800
+    verified_posting_cadence: "4–8 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "30m"
+    polling_interval_minutes: 30
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active high-yield; stream of trending GitHub repositories, developer utilities, and security PoCs."
+
+  - id: "cand-proglibrary"
+    handle: "@proglibrary"
+    title: "Библиотека программиста (Proglibrary)"
+    name: "Библиотека программиста (Proglibrary)"
+    feed_url: "https://t.me/proglibrary"
+    category: "general_tech"
+    topic: "Software Architecture, Algorithm Design, Technical Career Education"
+    audience_count: 77900
+    verified_posting_cadence: "3–5 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "60m"
+    polling_interval_minutes: 60
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; deep architectural patterns, distributed caching, algorithm designs, and developer roadmaps."
+
+  - id: "cand-habr-com-news"
+    handle: "@habr_com_news"
+    title: "Хабр Новости (Habr News)"
+    name: "Хабр Новости (Habr News)"
+    feed_url: "https://t.me/habr_com_news"
+    category: "general_tech"
+    topic: "Deep Tech Engineering, IT Industry Developments, Hardware & Embedded Systems"
+    audience_count: 12600
+    verified_posting_cadence: "2–4 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "90m"
+    polling_interval_minutes: 90
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; long-form tech engineering essays, RISC-V hardware developments, and community trends."
+
+  - id: "cand-thezoomit"
+    handle: "@thezoomit"
+    title: "Zoomit | زومیت"
+    name: "Zoomit | زومیت"
+    feed_url: "https://t.me/thezoomit"
+    category: "general_tech"
+    topic: "Consumer Tech, Hardware Benchmarks, Robotics, Visual Displays & AI"
+    audience_count: 132000
+    verified_posting_cadence: "10–20 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "15m"
+    polling_interval_minutes: 15
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified high-velocity yield; top regional tech publisher covering hardware teardowns, robotics, and consumer tech."
+
+  - id: "cand-digiato"
+    handle: "@digiato"
+    title: "Digiato | دیجیاتو"
+    name: "Digiato | دیجیاتو"
+    feed_url: "https://t.me/digiato"
+    category: "general_tech"
+    topic: "Digital Culture, Tech Industry, Software Updates, Digital Economy"
+    audience_count: 115000
+    verified_posting_cadence: "8–15 posts/day"
+    tier: "tier_1"
+    trial_polling_interval: "20m"
+    polling_interval_minutes: 20
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified high-velocity yield; broad tech journalism covering digital media, software updates, and market trends."
+
+  - id: "cand-peivast"
+    handle: "@peivast"
+    title: "Peivast | پیوست"
+    name: "Peivast | پیوست"
+    feed_url: "https://t.me/peivast"
+    category: "general_tech"
+    topic: "ICT Policy, Digital Economy, Telecommunications, Fiber Infrastructure & Governance"
+    audience_count: 9340
+    verified_posting_cadence: "3–6 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "60m"
+    polling_interval_minutes: 60
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; enterprise ICT policy, telecommunications infrastructure, FTTH fiber, and digital economy governance."
+
+  - id: "cand-gamedev"
+    handle: "@gamedev"
+    title: "GameDev Pulse"
+    name: "GameDev Pulse"
+    feed_url: "https://t.me/gamedev"
+    category: "general_tech"
+    topic: "Game Engine Architecture, Visual Shader Development, Digital Audio & Interactive Media"
+    audience_count: 4330
+    verified_posting_cadence: "1–3 posts/day"
+    tier: "tier_2"
+    trial_polling_interval: "120m"
+    polling_interval_minutes: 120
+    operational_status: "trial_candidate"
+    validation_notes: "Empirical probe verified active; real-time graphics pipelines, shader compilation, game engine netcode, and interactive audio."
