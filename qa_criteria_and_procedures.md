@@ -72,8 +72,8 @@ flowchart TD
    - `general_tech`: Operating systems, networks, developer infrastructure.
 
 ### Stage 2: Static Schema Conformance Check
-1. Validate candidate definition against [`candidate_channel_schema.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/schemas/candidate_channel_schema.json).
-2. Validate all historical sample messages against [`channel_message_schema.json`](file:///home/runner/work/_temp/agent-repo-39906372522-1-run-agy/qa/schemas/channel_message_schema.json).
+1. Validate candidate definition against [`candidate_channel_schema.json`](qa/schemas/candidate_channel_schema.json).
+2. Validate all historical sample messages against [`channel_message_schema.json`](qa/schemas/channel_message_schema.json).
 3. Any missing required attribute (`message_id`, `timestamp`, `content_type`, `text`, `views`) immediately triggers a **CRITICAL FAILURE**.
 
 ### Stage 3: Operational Smoke Test

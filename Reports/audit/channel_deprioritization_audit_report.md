@@ -8,11 +8,11 @@
 > **تاریخ اعمال و ثبت ممیزی:** 2026-10-23T05:55:00Z  
 > **وضعیت نهایی اجرا:** 🟢 **تأییدشده و فعال در رجیستری پروداکشن (PASS)**  
 > **فایل‌های کانفیگ اصلاح‌شده:**  
-> - [`acquisition/sources.yaml`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/acquisition/sources.yaml)  
-> - [`acquisition/channel_registry.json`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/acquisition/channel_registry.json)  
-> - [`audit/telegram_channels_inventory.json`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/audit/telegram_channels_inventory.json)  
-> - [`telegram_lead_listener.py`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/telegram_lead_listener.py)  
-> - [`Tools/verify_channel_deprioritization.py`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/Tools/verify_channel_deprioritization.py)  
+> - [`acquisition/sources.yaml`](acquisition/sources.yaml)  
+> - [`acquisition/channel_registry.json`](acquisition/channel_registry.json)  
+> - [`audit/telegram_channels_inventory.json`](audit/telegram_channels_inventory.json)  
+> - [`telegram_lead_listener.py`](telegram_lead_listener.py)  
+> - [`Tools/verify_channel_deprioritization.py`](Tools/verify_channel_deprioritization.py)  
 
 ---
 
@@ -148,25 +148,25 @@ pie title توزیع تخصیص سطوح زمان‌بندی (Scheduling Tiers)
 
 اقدامات زیر در فایل‌های مخزن انجام و به طور کامل صحه‌گذاری شده‌اند:
 
-1. **ایجاد رجیستری نوین YAML: [`acquisition/sources.yaml`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/acquisition/sources.yaml)**
+1. **ایجاد رجیستری نوین YAML: [`acquisition/sources.yaml`](acquisition/sources.yaml)**
    - تعریف سیاست‌های ۵ سطح زمان‌بندی (Tier 1, Tier 2, Tier 3, Quarantine, Dormant).
    - ثبت کلیه ۲۴ منبع به همراه متادیتا، بازه استعلام، بسامد روزانه، وضعیت عملیاتی و فیلترهای امنیتی.
    - ثبت ۵ کانال مرده با وضعیت `operational_status: "dormant"`، `active: false` و `polling_interval_minutes: 0`.
 
-2. **ایجاد مانیفست ساختاریافته JSON: [`acquisition/channel_registry.json`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/acquisition/channel_registry.json)**
+2. **ایجاد مانیفست ساختاریافته JSON: [`acquisition/channel_registry.json`](acquisition/channel_registry.json)**
    - منطبق بر متادیتای رجیستری پروداکشن نسخه ۲.۰ برای مصرف کلاینت‌های پایتون و ابزارهای اتوماسیون.
 
-3. **به‌روزرسانی مانیفست ممیزی: [`audit/telegram_channels_inventory.json`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/audit/telegram_channels_inventory.json)**
+3. **به‌روزرسانی مانیفست ممیزی: [`audit/telegram_channels_inventory.json`](audit/telegram_channels_inventory.json)**
    - غنی‌سازی رکوردهای ممیزی با فیلدهای `operational_status`، `polling_interval_minutes`، `fetch_frequency_daily` و `is_dormant`.
    - حفظ سازگاری ۱۰۰٪ با اسکریپت ممیزی قبلی (`Tools/verify_channels_audit.py`).
 
-4. **ایجاد ماژول اجرایی و شنودگر هوشمند: [`telegram_lead_listener.py`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/telegram_lead_listener.py)**
+4. **ایجاد ماژول اجرایی و شنودگر هوشمند: [`telegram_lead_listener.py`](telegram_lead_listener.py)**
    - حذف کامل ۵ هندل کانال‌های مرده از `DEFAULT_TARGET_GROUPS` (تعداد تارگت‌های فعال از ۲۴ به ۱۷ کاهش یافت).
    - تعریف نگاشت تفکیکی `GOLDEN_TIER_1_GROUPS`, `STANDARD_TIER_2_GROUPS`, `DEPRIORITIZED_TIER_3_GROUPS`, `QUARANTINED_GROUPS` و `DORMANT_DEAD_GROUPS`.
    - پیاده‌سازی کلاس `ChannelSchedulingManager` برای استخراج بازه استعلام و ارزیابی فیلتر متنی پیام‌ها.
    - گیت عبارات منظم کارفرمایی برای Tier 3 و شرط بودجه بالای ۲۰ میلیون تومان برای قرنطینه.
 
-5. **توسعه اسکریپت آزمون و ارزیابی خودکار: [`Tools/verify_channel_deprioritization.py`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/Tools/verify_channel_deprioritization.py)**
+5. **توسعه اسکریپت آزمون و ارزیابی خودکار: [`Tools/verify_channel_deprioritization.py`](Tools/verify_channel_deprioritization.py)**
    - اعتبارسنجی یکپارچگی فایل‌های YAML، JSON، ماژول پایتون و گزارش ممیزی.
    - آزمون عدم نشت (No-Leak Check) کانال‌های مرده به حلقه فعال شنود.
    - چاپ خروجی پروب استاندارد ناوگان (`##TBS##{"probe": "channel_deprioritization_verification", "status": "pass", ...}`).
@@ -247,10 +247,10 @@ pie title توزیع تخصیص سطوح زمان‌بندی (Scheduling Tiers)
 این گزارش و مانیفست‌های رجیستری زمینه عملیاتی لازم را برای تیم‌های همکار در اکانت‌های دیگر به شرح زیر مهیا می‌سازد:
 
 1. **ارتباط با اکانت ۸ (`agw-ACC8-w02`):**
-   با پالایش و آزادسازی ۵ اسلات کانال‌های مرده، منابع جدید کشف‌شده توسط اکانت ۸ در کاتالوگ [`Reports/agy/acc8/discovered_sources_raw.md`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/Reports/agy/acc8/discovered_sources_raw.md) (شامل کانال‌های هوش مصنوعی، دواپس و توسعه بازی) آماده جایگزینی و تزریق به ناوگان هستند.
+   با پالایش و آزادسازی ۵ اسلات کانال‌های مرده، منابع جدید کشف‌شده توسط اکانت ۸ در کاتالوگ [`Reports/agy/acc8/discovered_sources_raw.md`](Reports/agy/acc8/discovered_sources_raw.md) (شامل کانال‌های هوش مصنوعی، دواپس و توسعه بازی) آماده جایگزینی و تزریق به ناوگان هستند.
 
 2. **ارتباط با اکانت ۵ (`agw-ACC5-w02` و `agw-ACC5-w03`):**
-   قواعد تعریف‌شده در این سند با سیاست‌های کنترل کیفیت و اسموک‌تست اکانت ۵ در [`candidate_feed_validation_report.md`](file:///home/runner/work/_temp/agent-repo-39907381521-1-run-agy/candidate_feed_validation_report.md) کاملاً هماهنگ است. کانال‌های تازه تأییدشده نظیر `@tech_ai_persian` (۶۰ دقیقه) و `@godot_gamecraft_fa` (۱۲۰ دقیقه) می‌توانند مستقیماً در Tier 1 و Tier 2 ساختار `acquisition/sources.yaml` رجیستر شوند.
+   قواعد تعریف‌شده در این سند با سیاست‌های کنترل کیفیت و اسموک‌تست اکانت ۵ در [`candidate_feed_validation_report.md`](candidate_feed_validation_report.md) کاملاً هماهنگ است. کانال‌های تازه تأییدشده نظیر `@tech_ai_persian` (۶۰ دقیقه) و `@godot_gamecraft_fa` (۱۲۰ دقیقه) می‌توانند مستقیماً در Tier 1 و Tier 2 ساختار `acquisition/sources.yaml` رجیستر شوند.
 
 3. **عدم بازگشت کانال‌های مرده به سیستم:**
    ۵ منبع متوقف شامل `@freelance_projects_ir`, `@karyab_it`, `@ecommerce_iranian`, `@xseo_web` و `@dev_jobs_iran` به عنوان **Dormant** علامت‌گذاری شده و هرگونه لاجیک خودکار بازنشانی تا زمان صدور تأییدیه دستی لید اکانت ۲ مسدود خواهد بود.

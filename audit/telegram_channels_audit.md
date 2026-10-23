@@ -5,7 +5,7 @@
 > **شناسه پلن:** `3d88bb5ac734` (بسته کاری اکانت ۲)  
 > **تاریخ ممیزی:** 2026-10-23T05:40:00Z  
 > **مخزن هدف:** `mohammadlali0707-stack/agw-workers`  
-> **فایل داده ساختاریافته:** [`audit/telegram_channels_inventory.json`](file:///home/runner/work/_temp/agent-repo-39906345426-1-run-agy/audit/telegram_channels_inventory.json)  
+> **فایل داده ساختاریافته:** [`audit/telegram_channels_inventory.json`](audit/telegram_channels_inventory.json)  
 
 ---
 
