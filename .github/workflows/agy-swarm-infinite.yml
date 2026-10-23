@@ -84,9 +84,13 @@ jobs:
           if [ -n "$HF_TOKEN" ]; then
             AUTH_HEADER="Authorization: Bearer $HF_TOKEN"
           fi
-          curl -s -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
-            "https://huggingface.co/datasets/mohammadlali/agx/resolve/main/antigravity.tar.gz" \
-            -o /tmp/agx/antigravity.tar.gz
+          # Notion AI 2026-10-23: -s without -f saved HF error pages (429/5xx) as the tarball -> "tar: Error is not recoverable"
+          for i in 1 2 3 4 5; do
+            curl -sS -L --fail --retry 4 --retry-delay 6 --retry-all-errors ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+              "https://huggingface.co/datasets/mohammadlali/agx/resolve/main/antigravity.tar.gz" \
+              -o /tmp/agx/antigravity.tar.gz && gzip -t /tmp/agx/antigravity.tar.gz && break
+            echo "AGY CLI download attempt $i failed, retrying..."; sleep $((10 * i))
+          done
           tar -xzf /tmp/agx/antigravity.tar.gz -C /tmp/agx/
           CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
           install -m 0755 "$CLI_BIN" /tmp/agy-bin/agy
