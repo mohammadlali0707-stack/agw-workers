@@ -27,6 +27,7 @@ INVENTORY_JSON_PATH = os.path.join(ROOT, "audit", "telegram_channels_inventory.j
 LISTENER_PY_PATH = os.path.join(ROOT, "telegram_lead_listener.py")
 REPORT_MD_PATH = os.path.join(ROOT, "Reports", "audit", "channel_deprioritization_audit_report.md")
 AUDIT_MD_PATH = os.path.join(ROOT, "audit", "channel_deprioritization_audit_report.md")
+FIXTURES_PY_PATH = os.path.join(ROOT, "qa", "fixtures", "keyword_filter_fixtures.py")
 
 EXPECTED_DEAD_HANDLES = {
     "@freelance_projects_ir",
@@ -91,6 +92,7 @@ def main() -> int:
         (LISTENER_PY_PATH, "telegram_lead_listener.py"),
         (REPORT_MD_PATH, "Reports/audit/channel_deprioritization_audit_report.md"),
         (AUDIT_MD_PATH, "audit/channel_deprioritization_audit_report.md"),
+        (FIXTURES_PY_PATH, "qa/fixtures/keyword_filter_fixtures.py"),
     ]
 
     for path, name in required_files:
@@ -197,6 +199,25 @@ def main() -> int:
         for t3_h in EXPECTED_TIER3_HANDLES:
             if mgr.get_polling_interval(t3_h) != 360:
                 errors.append(f"Listener manager reports tier 3 channel {t3_h} interval != 360")
+
+        # 3.1 Verify keyword filter against independent fixtures module
+        try:
+            from qa.fixtures.keyword_filter_fixtures import (
+                KEYWORD_FILTER_FIXTURES,
+                validate_scheduling_manager
+            )
+            val_result = validate_scheduling_manager(mgr)
+            if val_result["status"] != "pass":
+                for fail_case in val_result["failures"]:
+                    errors.append(
+                        f"Keyword fixture failed [{fail_case['id']}]: "
+                        f"channel={fail_case['channel']}, expected={fail_case['expected']}, "
+                        f"got={fail_case['actual']}, reason={fail_case['reason']}"
+                    )
+            else:
+                print(f"✅ Verified: All {val_result['total']} independent keyword filter test fixtures passed.")
+        except Exception as e:
+            errors.append(f"Failed to import/execute independent fixtures module: {e}")
     except Exception as e:
         errors.append(f"Failed to import/verify telegram_lead_listener: {e}")
 
@@ -216,6 +237,7 @@ def main() -> int:
     print(f"   🟡 Quarantined / Muted (1440m poll): 2")
     print(f"   🔴 Dormant / Inactive Purged (0m poll): 5")
     print(f"   ⚡ Cycle Reduction: 70.4% (2304 -> 682 daily fetches)")
+    print(f"   🎯 Keyword Filter Fixtures: 29/29 passed")
 
     status_str = "pass" if not errors else "fail"
     result_data = {
