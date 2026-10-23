@@ -1,0 +1,62 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-98-acc8-b2f879158190-w02","commits":1,"files_changed":1,"checkout":"/home/runner/work/_temp/agent-repo-39916833441-1-run-agy"}}
+Worker committed 1 commit(s), 1 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read `Reports/agy/acc8/discovered_sources_raw.md`** using `view_file` to inspect the 20 verified candidate sources, their metadata (handles, titles, URLs, categories, audience counts, cadences, tiers, and probe validation notes).
+2. **Read `acquisition/sources.yaml`** using `view_file` to review existing sections (`channels`, `policies`, `summary`) and existing schema formatting conventions.
+3. **Edit `acquisition/sources.yaml`** using `replace_file_content` to append the dedicated `candidate_sources` section containing all 20 candidates with complete metadata (`id`, `handle`, `name`, `feed_url`, `topic`/`category`, `audience_count`, `verified_posting_cadence`, `polling_interval`, `operational_status: trial_candidate`, and empirical probe `notes`), preserving all existing sections.
+4. **Run Python validation** using `run_command` with `python3 -c "import yaml; ..."` to verify `acquisition/sources.yaml` syntax via `yaml.safe_load`, and check `git diff --stat` to verify changes remain within the <=400 lines limit.
+5. **Commit the changes** using `run_command` with `git add acquisition/sources.yaml` and `git commit` to finalize requirement 1 for Issue #91.
+### Execution Summary
+
+All 20 verified high-signal candidate Telegram sources from [Reports/agy/acc8/discovered_sources_raw.md](file:///home/runner/work/_temp/agent-repo-39916833441-1-run-agy/Reports/agy/acc8/discovered_sources_raw.md) have been integrated into [acquisition/sources.yaml](file:///home/runner/work/_temp/agent-repo-39916833441-1-run-agy/acquisition/sources.yaml) under a dedicated `candidate_sources` section for trial polling.
+
+---
+
+### Work Plan & Execution Review
+
+1. **Read & Analyzed Catalog:**
+   - Evaluated [Reports/agy/acc8/discovered_sources_raw.md](file:///home/runner/work/_temp/agent-repo-39916833441-1-run-agy/Reports/agy/acc8/discovered_sources_raw.md) to extract all 20 active candidate channels, empirical probe metrics, audience tiers, and validation notes.
+2. **Inspected Schema & Existing Dependencies:**
+   - Examined [acquisition/sources.yaml](file:///home/runner/work/_temp/agent-repo-39916833441-1-run-agy/acquisition/sources.yaml) and parser references in [acquisition/telegram_lead_listener.py](file:///home/runner/work/_temp/agent-repo-39916833441-1-run-agy/acquisition/telegram_lead_listener.py) and [Tools/verify_channel_deprioritization.py](file:///home/runner/work/_temp/agent-repo-39916833441-1-run-agy/Tools/verify_channel_deprioritization.py) to preserve `channels`, `policies`, and `summary` sections without regression.
+3. **Integrated `candidate_sources` Section:**
+   - Appended a structured `candidate_sources` registry with full metadata across all 20 channels.
+4. **Validated YAML Syntax & System Compatibility:**
+   - Verified YAML validity with `yaml.safe_load`.
+   - Executed [Tools/verify_channel_deprioritization.py](file:///home/runner/work/_temp/agent-repo-39916833441-1-run-agy/Tools/verify_channel_deprioritization.py) (29/29 fixtures passed, existing 24 channel configurations unaffected).
+   - Confirmed total modifications (`+304 lines, 1 file`) remained strictly within limits (<=400 lines, <=10 files).
+5. **Committed Changes:**
+   - Staged and committed changes directly in the repository checkout (`dd492f0`).
+
+---
+
+### Integrated Candidate Sources (20 Feeds)
+
+| ID | Handle | Channel Name | Category | Tier | Trial Interval | Audience |
+|---|---|---|---|---|---|---|
+| `cand-aipost` | `@aipost` | AI Post — Artificial Intelligence | `ai_tech` | Tier 1 | 30m | 676,000 |
+| `cand-neuralzone` | `@NeuralZone` | NeuralZone \| AI Apps | `ai_tech` | Tier 1 | 60m | 374,000 |
+| `cand-best-ai-tools` | `@Best_AI_tools` | AI Tools & Prompts | `ai_tech` | Tier 1 | 30m | 168,000 |
+| `cand-aiwiremoney` | `@AiWireMoney` | AIWire \| AI Tools & Opportunities | `ai_tech` | Tier 2 | 120m | 426,000 |
+| `cand-opendatascience` | `@OpenDataScience` | Data Science by ODS.ai | `ai_tech` | Tier 2 | 60m | 38,200 |
+| `cand-machinelearning-ru` | `@machinelearning_ru` | Машинное обучение RU | `ai_tech` | Tier 2 | 120m | 18,300 |
+| `cand-cvision` | `@cvision` | Tensorflow & Computer Vision | `ai_tech` | Tier 2 | 120m | 15,100 |
+| `cand-ai-python` | `@ai_python` | DLeX: AI Python | `automation_devops` | Tier 2 | 90m | 21,300 |
+| `cand-homeai` | `@HomeAI` | مجله هوش مصنوعی (HomeAI) | `ai_tech` | Tier 2 | 90m | 32,900 |
+| `cand-kdnuggets` | `@kdnuggets` | KDnuggets AI & Machine Learning | `ai_tech` | Tier 3 | 720m | 23,100 |
+| `cand-thehackernews` | `@thehackernews` | The Hacker News | `automation_devops` | Tier 1 | 30m | 164,000 |
+| `cand-linuxgram` | `@linuxgram` | Linuxgram | `automation_devops` | Tier 1 | 45m | 72,500 |
+| `cand-programmingtip` | `@ProgrammingTip` | Programming & AI Tips | `general_tech` | Tier 2 | 90m | 46,100 |
+| `cand-github-repos` | `@github_repos` | GitHub Repos | `automation_devops` | Tier 1 | 30m | 27,800 |
+| `cand-proglibrary` | `@proglibrary` | Библиотека программиста (Proglibrary) | `general_tech` | Tier 2 | 60m | 77,900 |
+| `cand-habr-com-news` | `@habr_com_news` | Хабр Новости (Habr News) | `general_tech` | Tier 2 | 90m | 12,600 |
+| `cand-thezoomit` | `@thezoomit` | Zoomit \| زومیت | `general_tech` | Tier 1 | 15m | 132,000 |
+| `cand-digiato` | `@digiato` | Digiato \| دیجیاتو | `general_tech` | Tier 1 | 20m | 115,000 |
+| `cand-peivast` | `@peivast` | Peivast \| پیوست | `general_tech` | Tier 2 | 60m | 9,340 |
+| `cand-gamedev` | `@gamedev` | GameDev Pulse | `general_tech` | Tier 2 | 120m | 4,330 |
+
+All candidate entries include `feed_url`, `operational_status: trial_candidate`, posting cadence, and empirical probe `validation_notes`.
