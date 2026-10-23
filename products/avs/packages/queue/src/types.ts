@@ -81,4 +81,5 @@ export interface WorkerConfig {
   providersRouter?: ProviderRouter;
   ledger?: LedgerClient;
   jobStore?: JobStore;
+  concurrency?: number;
 }

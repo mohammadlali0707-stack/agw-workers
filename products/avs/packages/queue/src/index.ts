@@ -147,6 +147,6 @@ export function createWorker(queueName = 'avs-jobs', config: WorkerConfig = {}):
     async (job: Job) => processJob(job.data as JobData, {
       providersRouter, ledger, jobStore, pollIntervalMs: config.pollIntervalMs, timeoutMs: config.timeoutMs,
     }),
-    { connection }
+    { connection, concurrency: config.concurrency || 20 }
   );
 }
