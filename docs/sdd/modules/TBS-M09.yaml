@@ -1,0 +1,24 @@
+id: TBS-M09
+name: performance_profile
+version: '1.0'
+layer: infra
+path: godot3d/modules/performance_profile/
+depends_on: [TBS-M00@1]
+listens: []
+emits: [performance_settings_applied]
+node: Node
+params: { target_fps: 60, render_scale: 0.8, shadow_atlas_size: 1024, msaa: 0 }
+behaviour:
+  - 'اعتبارسنجی مقادیر ورودی params (بررسی بازهی مجاز برای target_fps، render_scale، shadow_atlas_size و msaa) پیش از اعمال تنظیمات'
+  - 'اعمال قفل فریمریت در زمان اجرا از طریق تنظیم Engine.max_fps برابر با مقدار target_fps'
+  - 'کاهش بار رندرینگ از طریق تنظیم مقیاس رزولوشن سهبعدی (Viewport.scaling_3d_scale = render_scale) و تنظیم سطح هموارسازی لبهها (Viewport.msaa_3d = msaa) روی Viewport اصلی'
+  - 'بهینهسازی سایهها در زمان اجرا از طریق تنظیم Viewport.positional_shadow_atlas_size و فراخوانی RenderingServer.directional_shadow_atlas_set_size بر اساس shadow_atlas_size'
+  - 'انتشار رویداد performance_settings_applied از طریق سیستم رویداد (TBS-M00@1) بلافاصله پس از اعمال کامل تنظیمات'
+mocks: []
+errors:
+  - { code: E_PROFILE_FAIL, when: 'مقادیر ورودی params خارج از بازهی مجاز باشند (مانند render_scale <= 0 یا target_fps < 0) یا دسترسی به Viewport اصلی در زمان اجرا امکانپذیر نباشد' }
+acceptance:
+  - 'اجرای هدلس (Headless) و مقداردهی ماژول با params پیشفرض → برابر بودن Engine.max_fps با ۶۰، Viewport.scaling_3d_scale با ۰.۸، Viewport.positional_shadow_atlas_size با ۱۰۲۴ و Viewport.msaa_3d با ۰'
+  - 'تست یکپارچگی در حالت Headless پس از اعمال تنظیمات → دریافت رویداد performance_settings_applied در باس رویداد (TBS-M00@1) همراه با مقادیر پروفایل فعال'
+  - 'ارسال مقادیر نامعتبر در params (مانند render_scale: -0.5) در حالت Headless → رخ دادن خطای E_PROFILE_FAIL و عدم انتشار رویداد performance_settings_applied'
+budget: { max_files: 3, max_changed_lines: 150 }
