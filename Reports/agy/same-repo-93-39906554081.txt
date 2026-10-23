@@ -1,0 +1,77 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"same-repo-93-39906554081","commits":1,"files_changed":3,"checkout":"/home/runner/work/_temp/agent-repo-39906577545-1-run-agy"}}
+Worker committed 1 commit(s), 3 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read repository architecture and conventions**:
+   - Read `project.godot` using `view_file` to understand Godot version, autoloads, and project configuration.
+   - Read existing module definitions in `docs/sdd/modules/` (e.g., `TBS-M00.yaml`) using `view_file` to check event bus interfaces and patterns.
+   - Read existing module implementations in `godot3d/modules/` and test suites in `tests/` using `view_file` to follow existing conventions.
+
+2. **Create SDD Contract File**:
+   - Create `docs/sdd/modules/TBS-M09.yaml` with the exact YAML contract specification provided in Issue #93 using `write_to_file`.
+
+3. **Implement Performance Profile Module**:
+   - Create `godot3d/modules/performance_profile/performance_profile.gd` using `write_to_file` adhering to the contract:
+     - Node type: `Node`
+     - Default params: `target_fps: 60`, `render_scale: 0.8`, `shadow_atlas_size: 1024`, `msaa: 0`
+     - Validation: validate params (`target_fps > 0` or `>= 0`, `render_scale > 0.0`, valid `shadow_atlas_size`, `msaa >= 0`); emit error `E_PROFILE_FAIL` if invalid or if main Viewport is inaccessible.
+     - Runtime application: `Engine.max_fps = target_fps`, `Viewport.scaling_3d_scale = render_scale`, `Viewport.msaa_3d = msaa`, `Viewport.positional_shadow_atlas_size = shadow_atlas_size`, `RenderingServer.directional_shadow_atlas_set_size(shadow_atlas_size, true)`.
+     - Event emission: emit `performance_settings_applied` with active profile values via event system `TBS-M00@1`.
+     - Keep code within budget (≤ 150 changed lines, ≤ 3 files total).
+
+4. **Implement Headless Tests**:
+   - Create test script for `performance_profile` matching the existing project test framework (e.g., GUT or headless runner) to test:
+     - Headless initialization with default params verifies `Engine.max_fps == 60`, `scaling_3d_scale == 0.8`, `positional_shadow_atlas_size == 1024`, `msaa_3d == 0`.
+     - Integration test receiving `performance_settings_applied` on the event bus with active profile values.
+     - Invalid params (e.g. `render_scale: -0.5`) producing `E_PROFILE_FAIL` and not emitting `performance_settings_applied`.
+
+5. **Verify Tests**:
+   - Run the headless test suite using `run_command` to ensure CI tests pass cleanly.
+
+6. **Git Add and Commit**:
+   - Run `git add` and `git commit` using `run_command` with message `feat(perf): implement TBS-M09 performance profile and tests` meeting the size and file constraints.
+I have launched a check to locate the Godot binary and will examine git history and existing module tests once it finishes.
+root agent idle; waiting up to 28m0s for 2 background task(s)
+I have launched the headless test verification in Godot to validate the performance profile logic and acceptance criteria.
+I will now wait for the test verification task to finish.
+### Implementation Summary for Issue #93: TBS-M09 · Performance Profile
+
+#### Contract Specification
+- **SDD Contract**: [docs/sdd/modules/TBS-M09.yaml](file:///home/runner/work/_temp/agent-repo-39906577545-1-run-agy/docs/sdd/modules/TBS-M09.yaml)
+  - ID: `TBS-M09`
+  - Name: `performance_profile`
+  - Layer: `infra`
+  - Path: `godot3d/modules/performance_profile/`
+  - Depends On: `[TBS-M00@1]`
+  - Emits: `[performance_settings_applied]`
+  - Node: `Node`
+  - Default Params: `{ target_fps: 60, render_scale: 0.8, shadow_atlas_size: 1024, msaa: 0 }`
+
+#### Module Implementation
+- **Script**: [godot3d/modules/performance_profile/performance_profile.gd](file:///home/runner/work/_temp/agent-repo-39906577545-1-run-agy/godot3d/modules/performance_profile/performance_profile.gd)
+  - Extends `Node` with class name [`PerformanceProfile`](file:///home/runner/work/_temp/agent-repo-39906577545-1-run-agy/godot3d/modules/performance_profile/performance_profile.gd#L1).
+  - Validates parameter boundaries (`target_fps >= 0`, `0.0 < render_scale <= 2.0`, `shadow_atlas_size >= 0`, `0 <= msaa <= 4`, and Viewport accessibility).
+  - Sets runtime properties:
+    - `Engine.max_fps = target_fps`
+    - `Viewport.scaling_3d_scale = render_scale`
+    - `Viewport.msaa_3d = msaa`
+    - `Viewport.positional_shadow_atlas_size = shadow_atlas_size`
+    - `RenderingServer.directional_shadow_atlas_set_size(shadow_atlas_size, true)`
+  - Emits `performance_settings_applied` signal locally and across `/root/EventBus` (`TBS-M00@1`).
+  - Sets `last_error = E_PROFILE_FAIL` and returns `false` on invalid parameters or inaccessible viewport without emitting events.
+
+#### Headless Test Suite & Acceptance Verification
+- **Test File**: [godot3d/modules/performance_profile/test_performance_profile.gd](file:///home/runner/work/_temp/agent-repo-39906577545-1-run-agy/godot3d/modules/performance_profile/test_performance_profile.gd)
+  - **Acceptance 1**: Default initialization in headless mode verified (`Engine.max_fps == 60`, `scaling_3d_scale == 0.8`, `positional_shadow_atlas_size == 1024`, `msaa_3d == 0`).
+  - **Acceptance 2**: Integration test verifies receipt of `performance_settings_applied` on `EventBus` with matching profile values.
+  - **Acceptance 3**: Invalid parameters (`render_scale: -0.5`, `target_fps: -10`, `shadow_atlas_size: -100`, `msaa: -1`, and unparented nodes) verified to yield `E_PROFILE_FAIL` without emitting `performance_settings_applied`.
+
+#### Budget & Constraints Compliance
+- **Total Changed Files**: 3 / 3 maximum (PR limit ≤ 10)
+- **Total Changed Lines**: 103 / 150 maximum (PR limit ≤ 400)
+- **Workflow Changes**: 0 files in `.github/`
+- **Git Commit**: `feat(perf): implement TBS-M09 performance profile and tests (closes #93)` committed directly inside the checkout.
