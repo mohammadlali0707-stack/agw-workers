@@ -1,0 +1,16 @@
+{
+  "name": "@avs/ledger",
+  "version": "0.1.0",
+  "description": "Core Credit Ledger package with atomic Prisma transactions",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "peerDependencies": {
+    "@prisma/client": ">=5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
