@@ -1,0 +1,21 @@
+diff --git a/.github/workflows/hq-gemini.yml b/.github/workflows/hq-gemini.yml
+index e50c635..3df28ca 100644
+--- a/.github/workflows/hq-gemini.yml
++++ b/.github/workflows/hq-gemini.yml
+@@ -81,6 +81,7 @@ jobs:
+           RES_PAT: ${{ secrets.ACC6_PAT }}
+           COOKIE_PAT: ${{ secrets[format('ACC{0}_PAT', inputs.acc)] }}
+           ENGINE: ${{ inputs.engine }}
++          ACC_IDX: ${{ inputs.acc }}
+         run: |
+           set +e
+           curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip
+@@ -92,7 +93,7 @@ jobs:
+           python3 -m venv /tmp/gv
+           /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5 pynacl
+           mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
+-          export PUB_REPO="$GITHUB_REPOSITORY" ACC_IDX="${{ inputs.acc }}" GEMINI_COOKIE_PATH=/tmp/gwcache
++          export PUB_REPO="$GITHUB_REPOSITORY" ACC_IDX="$ACC_IDX" GEMINI_COOKIE_PATH=/tmp/gwcache
+           TO=2100; [ "$ENGINE" = task ] && TO=19000
+           GWEB_PROXY=http://127.0.0.1:10809 PYTHONPATH=/tmp/gwlib timeout $TO /tmp/gv/bin/python tools/hqjob.py >/dev/null 2>/tmp/hqjob_err.txt
+           echo "gemini finished rc=$?"
