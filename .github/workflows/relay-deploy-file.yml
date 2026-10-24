@@ -58,7 +58,7 @@ jobs:
             [7]="mohammad97okk"
             [8]="moradzahra85-png"
           )
-          for IDX in 0 1 2 3 4 5 7 8; do
+          for IDX in 0 2 4 5 8; do   # owner 2026-10-24: ACC1/3/7 out of every rotation
             OWNER="${OWNERS[$IDX]}"
             PAT_NAME="ACC${IDX}_PAT"
             TOKEN="${!PAT_NAME}"
