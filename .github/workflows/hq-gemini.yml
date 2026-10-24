@@ -92,6 +92,7 @@ jobs:
           mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
           GWEB_PROXY=http://127.0.0.1:10809 PYTHONPATH=/tmp/gwlib timeout 2100 /tmp/gv/bin/python tools/hqjob.py >/dev/null 2>/tmp/hqjob_err.txt
           echo "gemini finished rc=$?"
+          tail -c 4000 /tmp/hqjob_err.txt > /tmp/out/err.txt 2>/dev/null; tail -c 1500 /tmp/xray.log >> /tmp/out/diag.txt 2>/dev/null
 
       - name: Save to private repo
         if: always()
