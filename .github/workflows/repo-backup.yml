@@ -19,13 +19,10 @@ jobs:
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
           P0: ${{ secrets.ACC0_PAT }}
-          P1: ${{ secrets.ACC1_PAT }}
           P2: ${{ secrets.ACC2_PAT }}
-          P3: ${{ secrets.ACC3_PAT }}
           P4: ${{ secrets.ACC4_PAT }}
           P5: ${{ secrets.ACC5_PAT }}
           P6: ${{ secrets.ACC6_PAT }}
-          P7: ${{ secrets.ACC7_PAT }}
           P8: ${{ secrets.ACC8_PAT }}
           P9: ${{ secrets.ACC9_PAT }}
           KEEP_DAYS: '14'
@@ -37,7 +34,7 @@ jobs:
           [ -z "$REMOTE" ] && { echo "no Google Drive remote in RCLONE_CONF"; rclone listremotes --long | awk '{print "remote type:", $2}'; exit 1; }
           echo "drive remote found"; rclone about "$REMOTE" 2>/dev/null | grep -E "Total|Used|Free" || true
           DAY=$(date -u +%F); DEST="${REMOTE}GitHub-Backups/$DAY"; W=/tmp/bk; ok=0; fail=0; bytes=0
-          for a in 0 1 2 3 4 5 6 7 8 9; do
+          for a in 0 2 4 5 6 8 9; do   # ACC1/3/7 removed (owner 2026-10-24)
             v=P$a; PAT="${!v:-}"; [ -z "$PAT" ] && continue
             LOGIN=$(curl -sf -H "Authorization: Bearer $PAT" https://api.github.com/user | python3 -c 'import sys,json;print(json.load(sys.stdin)["login"])' 2>/dev/null) || { echo "acc$a: token invalid, skipped"; continue; }
             page=1; : > /tmp/repos.txt
