@@ -1,0 +1,98 @@
+name: HQ Gemini
+
+# One AI call for the HQ gemini-proxy. Nothing sensitive passes through this public repo:
+# the job (prompt, refs) is read from the PRIVATE repo hq-ai-results and the answer/media are written back there;
+# the proxy deletes this run (logs) afterwards. engine: agy (Flash 3.8 High via Antigravity CLI) | web | vision | media (Gemini website).
+run-name: hq ${{ inputs.callback_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      callback_id:
+        required: true
+        type: string
+      engine:
+        required: true
+        type: string
+      acc:
+        description: 'account index (0,2,4,5,6,8)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RES_REPO: mohammadlali0707-stack/hq-ai-results
+      CID: ${{ inputs.callback_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+
+      - name: Fetch job
+        env:
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          mkdir -p /tmp/out/files
+          curl -sSf -H "Authorization: Bearer $RES_PAT" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/$RES_REPO/contents/jobs/$CID/job.json" -o /tmp/job.json
+          echo "job fetched"
+
+      - name: AGY Flash 3.8 High
+        if: inputs.engine == 'agy'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TOKEN_B64: ${{ secrets[format('AGW_TOKEN_ACC{0}', inputs.acc)] }}
+          INSTALL_ID: ${{ secrets[format('AGW_INSTALL_ID_ACC{0}', inputs.acc)] }}
+        run: |
+          set +e
+          curl -sSL -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx && tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name antigravity -o -name agy \) | head -1)
+          [ -z "$CLI_BIN" ] && CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          install -m 0755 "$CLI_BIN" /tmp/agy
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          printf '%s' "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          printf '%s' "$INSTALL_ID" > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+          python3 -c "import json;j=json.load(open('/tmp/job.json'));open('/tmp/prompt.txt','w').write('You are being used as a plain chat model by an API. Reply ONLY with the answer text the request below asks for (keep any requested format such as JSON exactly). Do not create or edit files and do not run commands unless the request explicitly requires it.\n\n---\n\n'+j['prompt'])"
+          mkdir -p /tmp/work && cd /tmp/work
+          timeout 1700 /tmp/agy --model gemini-3.8-flash-high --dangerously-skip-permissions --print-timeout 1680s -p "$(cat /tmp/prompt.txt)" > /tmp/out/answer.txt 2>&1
+          RC=$? python3 - <<'PY'
+          import json, os, re
+          rc = int(os.environ.get("RC", "1")); t = open("/tmp/out/answer.txt", errors="replace").read().strip()
+          bad = re.search(r"too many requests|rate.?limit|\b429\b|quota|unauthorized|authentication failed|invalid (api key|token)|not logged in|timed? ?out|invalid model selection", t, re.I)
+          ok = rc == 0 and bool(t) and not (len(t) < 600 and bad)
+          json.dump({"ok": ok, "files": [], **({} if ok else {"error": f"agy rc={rc} " + t[-300:]})}, open("/tmp/out/result.json", "w"))
+          PY
+          echo "agy finished"
+
+      - name: Gemini website
+        if: inputs.engine != 'agy'
+        env:
+          GEMINI_WEB_COOKIES: ${{ secrets[format('GEMINI_WEB_COOKIES_ACC{0}', inputs.acc)] }}
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+        run: |
+          set +e
+          curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip
+          unzip -qo /tmp/xray.zip -d /tmp/xray
+          printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
+          (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          python3 -m venv /tmp/gv
+          /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5
+          mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
+          GWEB_PROXY=http://127.0.0.1:10809 PYTHONPATH=/tmp/gwlib timeout 2100 /tmp/gv/bin/python tools/hqjob.py >/dev/null 2>/tmp/hqjob_err.txt
+          echo "gemini finished rc=$?"
+
+      - name: Save to private repo
+        if: always()
+        env:
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+        run: python3 tools/ressave.py
