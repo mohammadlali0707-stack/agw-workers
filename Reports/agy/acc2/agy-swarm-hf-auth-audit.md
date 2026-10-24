@@ -110,7 +110,7 @@ Across all operational workflows in the repository (`agw-worker.yml`, `agy-lead-
    In strict adherence to repository security rules, no workflow files under `.github/workflows/` have been modified directly in this checkout. The patch is staged in `Reports/agy/acc2/agy-swarm-infinite.patch` and posted directly to issue #103 for Notion AI to apply.
 
 4. **Issue Notification:**
-   The full technical diagnostic and exact unified diff patch have been posted to issue #103 on `mohammadlali0707-stack/agw-workers` (Comment ID: 6389783896).
+   The full technical diagnostic and exact unified diff patch have been posted to issue #103 on `mohammadlali0707-stack/agw-workers` (Comment ID: [6389906655](https://github.com/mohammadlali0707-stack/agw-workers/issues/103#issuecomment-6389906655)).
 
 ---
 
