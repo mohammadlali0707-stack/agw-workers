@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       acc:
-        description: 'account index (0,2,4,5,6,8)'
+        description: 'account index 0-8 (web/media/task/keepalive run in the repo of the same GitHub account)'
         required: true
         type: string
 
@@ -24,7 +24,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.engine == 'task' && 330 || 45 }}
     env:
       RES_REPO: mohammadlali0707-stack/hq-ai-results
       CID: ${{ inputs.callback_id }}
@@ -47,7 +47,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TOKEN_B64: ${{ secrets[format('AGW_TOKEN_ACC{0}', inputs.acc)] }}
-          INSTALL_ID: ${{ secrets[format('AGW_INSTALL_ID_ACC{0}', inputs.acc)] }}
+          INSTALL_ID: ${{ secrets[format('AGW_INSTALL_ID_ACC{0}', inputs.acc)] || secrets.AGW_INSTALL_ID_ACC6 || secrets.AGW_INSTALL_ID_ACC0 || secrets.AGW_INSTALL_ID_ACC1 || secrets.AGW_INSTALL_ID_ACC2 || secrets.AGW_INSTALL_ID_ACC3 || secrets.AGW_INSTALL_ID_ACC4 || secrets.AGW_INSTALL_ID_ACC5 || secrets.AGW_INSTALL_ID_ACC7 || secrets.AGW_INSTALL_ID_ACC8 }}
         run: |
           set +e
           curl -sSL -H "Authorization: Bearer $HF_TOKEN" \
@@ -79,6 +79,8 @@ jobs:
           GEMINI_WEB_COOKIES: ${{ secrets[format('GEMINI_WEB_COOKIES_ACC{0}', inputs.acc)] }}
           XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
           RES_PAT: ${{ secrets.ACC6_PAT }}
+          COOKIE_PAT: ${{ secrets[format('ACC{0}_PAT', inputs.acc)] }}
+          ENGINE: ${{ inputs.engine }}
         run: |
           set +e
           curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip
@@ -91,7 +93,8 @@ jobs:
           /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5 pynacl
           mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
           export PUB_REPO="$GITHUB_REPOSITORY" ACC_IDX="${{ inputs.acc }}" GEMINI_COOKIE_PATH=/tmp/gwcache
-          GWEB_PROXY=http://127.0.0.1:10809 PYTHONPATH=/tmp/gwlib timeout 2100 /tmp/gv/bin/python tools/hqjob.py >/dev/null 2>/tmp/hqjob_err.txt
+          TO=2100; [ "$ENGINE" = task ] && TO=19000
+          GWEB_PROXY=http://127.0.0.1:10809 PYTHONPATH=/tmp/gwlib timeout $TO /tmp/gv/bin/python tools/hqjob.py >/dev/null 2>/tmp/hqjob_err.txt
           echo "gemini finished rc=$?"
           tail -c 4000 /tmp/hqjob_err.txt > /tmp/out/err.txt 2>/dev/null; tail -c 1500 /tmp/xray.log >> /tmp/out/diag.txt 2>/dev/null
 
