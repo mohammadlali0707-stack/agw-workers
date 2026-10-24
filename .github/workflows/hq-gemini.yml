@@ -88,8 +88,9 @@ jobs:
           sleep 2
           { echo "xray: $(/tmp/xray/xray version | head -1)"; echo "egress: $(curl -s -m 20 -x http://127.0.0.1:10809 https://ipinfo.io/country) / direct: $(curl -s -m 10 https://ipinfo.io/country)"; tail -c 1500 /tmp/xray.log; } > /tmp/out/diag.txt 2>&1
           python3 -m venv /tmp/gv
-          /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5
+          /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5 pynacl
           mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
+          export PUB_REPO="$GITHUB_REPOSITORY" ACC_IDX="${{ inputs.acc }}" GEMINI_COOKIE_PATH=/tmp/gwcache
           GWEB_PROXY=http://127.0.0.1:10809 PYTHONPATH=/tmp/gwlib timeout 2100 /tmp/gv/bin/python tools/hqjob.py >/dev/null 2>/tmp/hqjob_err.txt
           echo "gemini finished rc=$?"
           tail -c 4000 /tmp/hqjob_err.txt > /tmp/out/err.txt 2>/dev/null; tail -c 1500 /tmp/xray.log >> /tmp/out/diag.txt 2>/dev/null
