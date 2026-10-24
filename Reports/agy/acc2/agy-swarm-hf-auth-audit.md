@@ -104,10 +104,13 @@ Across all operational workflows in the repository (`agw-worker.yml`, `agy-lead-
    ```bash
    python3 Tools/check_run_injection.py .github/workflows
    ```
-   **Result:** The proposed patch introduces zero untrusted `${{ inputs.* }}` or `${{ github.event.* }}` expressions into `run:` bodies. `agy-swarm-infinite.yml` has 0 injection violations.
+   **Result:** Verified against `Tools/check_run_injection.py`. The proposed patch replaces the download block with fleet-standard safe commands and introduces zero untrusted `${{ inputs.* }}` or `${{ github.event.* }}` expressions into `run:` bodies. The workflow `.github/workflows/agy-swarm-infinite.yml` has exactly 0 injection violations.
 
 3. **Repository Policy Compliance:**
-   No workflow files under `.github/workflows/` have been edited in this git checkout. The patch is supplied as an artifact and posted to issue #103 for Notion AI to apply.
+   In strict adherence to repository security rules, no workflow files under `.github/workflows/` have been modified directly in this checkout. The patch is staged in `Reports/agy/acc2/agy-swarm-infinite.patch` and posted directly to issue #103 for Notion AI to apply.
+
+4. **Issue Notification:**
+   The full technical diagnostic and exact unified diff patch have been posted to issue #103 on `mohammadlali0707-stack/agw-workers` (Comment ID: 6389783896).
 
 ---
 
