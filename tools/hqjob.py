@@ -2,6 +2,12 @@
 import asyncio, json, os, sys, urllib.request, uuid
 from gemini_webapi import GeminiClient
 from gemini_webapi.client import REQ_OVERRIDES
+from curl_cffi.requests import AsyncSession as _AS
+_orig_request = _AS.request
+async def _request(self, method, url, *a, **kw):
+    if os.environ.get("GWEB_PROXY"): kw["allow_redirects"] = True   # curl_cffi SAFE redirect mode rejects the local proxy IP
+    return await _orig_request(self, method, url, *a, **kw)
+_AS.request = _request
 CANON = {6: "gemini-flash-lite", 1: "gemini-flash", 3: "gemini-pro", 8: "gemini-argon"}
 OUT = "/tmp/out"; os.makedirs(OUT + "/files", exist_ok=True)
 job = json.load(open("/tmp/job.json"))
