@@ -1,0 +1,65 @@
+name: Repo backup to Google Drive
+# Daily: mirror every repo owned by the fleet's GitHub accounts and upload git bundles to Google Drive.
+# Logs show only counts/sizes (no repo names), because this repo is public.
+on:
+  schedule:
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: repo-backup
+  cancel-in-progress: false
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - name: Backup
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+          P0: ${{ secrets.ACC0_PAT }}
+          P1: ${{ secrets.ACC1_PAT }}
+          P2: ${{ secrets.ACC2_PAT }}
+          P3: ${{ secrets.ACC3_PAT }}
+          P4: ${{ secrets.ACC4_PAT }}
+          P5: ${{ secrets.ACC5_PAT }}
+          P6: ${{ secrets.ACC6_PAT }}
+          P7: ${{ secrets.ACC7_PAT }}
+          P8: ${{ secrets.ACC8_PAT }}
+          P9: ${{ secrets.ACC9_PAT }}
+          KEEP_DAYS: '14'
+        run: |
+          set -u
+          curl -s https://rclone.org/install.sh | sudo bash >/dev/null 2>&1
+          mkdir -p ~/.config/rclone && printf '%s' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
+          REMOTE=$(rclone listremotes --long | awk '$2=="drive"{print $1; exit}')
+          [ -z "$REMOTE" ] && { echo "no Google Drive remote in RCLONE_CONF"; rclone listremotes --long | awk '{print "remote type:", $2}'; exit 1; }
+          echo "drive remote found"; rclone about "$REMOTE" 2>/dev/null | grep -E "Total|Used|Free" || true
+          DAY=$(date -u +%F); DEST="${REMOTE}GitHub-Backups/$DAY"; W=/tmp/bk; ok=0; fail=0; bytes=0
+          for a in 0 1 2 3 4 5 6 7 8 9; do
+            v=P$a; PAT="${!v:-}"; [ -z "$PAT" ] && continue
+            LOGIN=$(curl -sf -H "Authorization: Bearer $PAT" https://api.github.com/user | python3 -c 'import sys,json;print(json.load(sys.stdin)["login"])' 2>/dev/null) || { echo "acc$a: token invalid, skipped"; continue; }
+            page=1; : > /tmp/repos.txt
+            while :; do
+              n=$(curl -sf -H "Authorization: Bearer $PAT" "https://api.github.com/user/repos?affiliation=owner&per_page=100&page=$page" | python3 -c 'import sys,json;d=json.load(sys.stdin);[print(r["full_name"]) for r in d];print(len(d),file=sys.stderr)' 2>&1 >>/tmp/repos.txt) || break
+              [ "$n" -lt 100 ] && break; page=$((page+1))
+            done
+            cnt=$(wc -l < /tmp/repos.txt); aok=0
+            while read -r full; do
+              rm -rf $W && mkdir -p $W
+              name=${full#*/}
+              if timeout 1200 git clone -q --mirror "https://x-access-token:$PAT@github.com/$full.git" $W/repo.git 2>/dev/null; then
+                if [ -z "$(git -C $W/repo.git rev-parse --all 2>/dev/null | head -1)" ]; then aok=$((aok+1)); ok=$((ok+1)); continue; fi
+                git -C $W/repo.git bundle create $W/$name.bundle --all -q 2>/dev/null
+                s=$(stat -c %s $W/$name.bundle 2>/dev/null || echo 0)
+                if rclone copyto -q $W/$name.bundle "$DEST/$LOGIN/$name.bundle" --retries 5; then aok=$((aok+1)); ok=$((ok+1)); bytes=$((bytes+s)); else fail=$((fail+1)); fi
+              else fail=$((fail+1)); fi
+            done < /tmp/repos.txt
+            echo "acc$a: $aok/$cnt repos backed up"
+          done
+          rm -rf $W
+          echo "TOTAL ok=$ok failed=$fail size=$((bytes/1048576)) MB -> GitHub-Backups/$DAY"
+          rclone delete "${REMOTE}GitHub-Backups" --min-age ${KEEP_DAYS}d -q || true
+          rclone rmdirs "${REMOTE}GitHub-Backups" --leave-root -q || true
+          [ "$fail" -eq 0 ]
