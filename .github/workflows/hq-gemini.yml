@@ -85,6 +85,8 @@ jobs:
           unzip -qo /tmp/xray.zip -d /tmp/xray
           printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
           (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          sleep 2
+          { echo "xray: $(/tmp/xray/xray version | head -1)"; echo "egress: $(curl -s -m 20 -x http://127.0.0.1:10809 https://ipinfo.io/country) / direct: $(curl -s -m 10 https://ipinfo.io/country)"; tail -c 1500 /tmp/xray.log; } > /tmp/out/diag.txt 2>&1
           python3 -m venv /tmp/gv
           /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5
           mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
