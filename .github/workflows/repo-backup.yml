@@ -30,7 +30,7 @@ jobs:
           P9: ${{ secrets.ACC9_PAT }}
           KEEP_DAYS: '14'
         run: |
-          set -u
+          set +e -u
           curl -s https://rclone.org/install.sh | sudo bash >/dev/null 2>&1
           mkdir -p ~/.config/rclone && printf '%s' "$RCLONE_CONF" > ~/.config/rclone/rclone.conf
           REMOTE=$(rclone listremotes --long | awk '$2=="drive"{print $1; exit}')
@@ -51,10 +51,10 @@ jobs:
               name=${full#*/}
               if timeout 1200 git clone -q --mirror "https://x-access-token:$PAT@github.com/$full.git" $W/repo.git 2>/dev/null; then
                 if [ -z "$(git -C $W/repo.git rev-parse --all 2>/dev/null | head -1)" ]; then aok=$((aok+1)); ok=$((ok+1)); continue; fi
-                git -C $W/repo.git bundle create $W/$name.bundle --all -q 2>/dev/null
+                git -C $W/repo.git bundle create -q $W/$name.bundle --all 2>/dev/null || { fail=$((fail+1)); echo "  bundle failed (repo $((aok+1)))"; continue; }
                 s=$(stat -c %s $W/$name.bundle 2>/dev/null || echo 0)
                 if rclone copyto -q $W/$name.bundle "$DEST/$LOGIN/$name.bundle" --retries 5; then aok=$((aok+1)); ok=$((ok+1)); bytes=$((bytes+s)); else fail=$((fail+1)); fi
-              else fail=$((fail+1)); fi
+              else fail=$((fail+1)); echo "  clone failed (repo $((aok+1)))"; fi
             done < /tmp/repos.txt
             echo "acc$a: $aok/$cnt repos backed up"
           done
