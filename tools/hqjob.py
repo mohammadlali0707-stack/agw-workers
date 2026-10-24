@@ -1,5 +1,5 @@
 """HQ Gemini-website job on a GitHub runner (engine web | vision | media). Job: /tmp/job.json. Output: /tmp/out/."""
-import asyncio, json, os, sys, urllib.request, uuid
+import asyncio, json, os, sys, time, urllib.request, uuid
 from gemini_webapi import GeminiClient
 from gemini_webapi.client import REQ_OVERRIDES
 from curl_cffi.requests import AsyncSession as _AS
@@ -33,7 +33,7 @@ async def writeback(c, orig):
     try:
         from nacl import encoding, public
         import base64 as b64
-        repo, tok, idx = os.environ["PUB_REPO"], os.environ["RES_PAT"], os.environ["ACC_IDX"]
+        repo, tok, idx = os.environ["PUB_REPO"], os.environ.get("COOKIE_PAT") or os.environ["RES_PAT"], os.environ["ACC_IDX"]
         H = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"}
         k = json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=H), timeout=60).read())
         enc = b64.b64encode(public.SealedBox(public.PublicKey(k["key"].encode(), encoding.Base64Encoder())).encrypt(json.dumps(new).encode())).decode()
@@ -75,6 +75,27 @@ async def main():
         try: await c.close()
         except Exception: pass
 
+async def poll_task(c, chat_id, stall=1800):
+    """Task mode runs asynchronously on Google's side: poll the conversation until the answer is stable."""
+    prev, stable, sig, last_chg, errs = None, 0, None, time.time(), 0
+    while True:
+        await asyncio.sleep(10)
+        try: h = await asyncio.wait_for(c.read_chat(chat_id), 60); errs = 0
+        except Exception:
+            errs += 1
+            if errs >= 12: raise RuntimeError("task status could not be read 12 times in a row")
+            continue
+        mts = [x for x in (h.turns if h else []) if x.role == "model"]
+        cur = mts[0].text if mts else ""
+        try: th = str(getattr(mts[0].model_output, "thoughts", "")) if mts else ""
+        except Exception: th = ""
+        nsig = (cur, th, len(h.turns) if h else 0)
+        if nsig != sig: sig, last_chg = nsig, time.time()
+        elif time.time() - last_chg > stall: raise RuntimeError(f"task made no progress for {stall // 60} minutes")
+        stable = stable + 1 if (cur and cur == prev) else 0
+        prev = cur
+        if cur and stable >= 2: return cur.strip()
+
 async def run_job(c, alias):
     eng, prompt = job["engine"], job["prompt"]
     if eng == "keepalive": open(OUT + "/answer.txt", "w").write(""); return result(True, files=[])
@@ -83,11 +104,16 @@ async def run_job(c, alias):
     if wm not in alias: return result(False, error=f"model {wm} not available on this account")
     try:
         files = [fetch_ref(r, i) for i, r in enumerate(job.get("refs") or [])] or None
-        if eng == "web":
-            REQ_OVERRIDES.set({"inner": {80: level}, "think": level}); out = []
+        if eng in ("web", "task"):
+            ov = {"inner": {80: level}, "think": level}
+            if eng == "task": ov["inner"][49] = 40   # Gemini "Task" (agent) mode, US exit via Xray
+            REQ_OVERRIDES.set(ov); out = []; meta = None
             async for ch in c.generate_content_stream(prompt, model=alias[wm], extended_thinking=(level != 1)):
+                meta = ch.metadata or meta
                 if ch.text_delta: out.append(ch.text_delta)
             text = "".join(out).strip()
+            if eng == "task" and not text and meta:
+                text = await poll_task(c, meta[0])
             if not text: return result(False, error="empty answer")
             open(OUT + "/answer.txt", "w").write(text); return result(True, files=[])
         REQ_OVERRIDES.set(None)
