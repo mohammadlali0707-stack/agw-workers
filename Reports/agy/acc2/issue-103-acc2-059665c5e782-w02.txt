@@ -1,0 +1,97 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-103-acc2-059665c5e782-w02","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-40100835223-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read `.github/workflows/hq-gemini.yml` and `Tools/check_run_injection.py`** using `view_file` to examine line 95, identify the unescaped `${{ inputs.acc }}` expression in the `run:` block, and understand the validation logic in the injection checker.
+2. **Run `python3 Tools/check_run_injection.py .github/workflows`** using `run_command` to reproduce and confirm the gate-yaml-lint injection failure on the current workflow.
+3. **Test the minimal patch locally** by editing `.github/workflows/hq-gemini.yml` to define `ACC_IDX: ${{ inputs.acc }}` in the step's `env:` block and reference `$ACC_IDX` in the bash script, verify that `python3 Tools/check_run_injection.py .github/workflows` passes cleanly, generate the unified diff, and revert `.github/workflows/hq-gemini.yml` in accordance with repository policy.
+4. **Create the audit and patch report** in `Reports/agy/acc2/gate-yaml-lint-audit.md` using `write_to_file`, detailing the audit across all six agw-workers repos, the root cause analysis, local probe verification results, and the exact minimal unified diff.
+5. **Commit the audit report** with `git add Reports/agy/acc2/` and `git commit -m "Audit gate-yaml-lint injection failure and craft hq-gemini patch"`.
+
+---
+### Audit & Patch Summary: `gate-yaml-lint` Injection Failure
+
+**Agent:** `agw-ACC2-w02` (Account 2)  
+**Task:** Audit `gate-yaml-lint.yml` injection failure across all `agw-workers` repositories and craft minimal `hq-gemini` patch.
+
+---
+
+### 1. Root Cause Confirmation
+
+The CI gate failure in [.github/workflows/gate-yaml-lint.yml](file:///home/runner/work/_temp/agent-repo-40100835223-1-run-agy/.github/workflows/gate-yaml-lint.yml#L282-L283) (step `No new untrusted expression in a run body`) runs:
+```bash
+python3 Tools/check_run_injection.py .github/workflows
+```
+
+* **Triggering Line:** [.github/workflows/hq-gemini.yml#L95](file:///home/runner/work/_temp/agent-repo-40100835223-1-run-agy/.github/workflows/hq-gemini.yml#L95):
+  ```bash
+  export PUB_REPO="$GITHUB_REPOSITORY" ACC_IDX="${{ inputs.acc }}" GEMINI_COOKIE_PATH=/tmp/gwcache
+  ```
+* **Vulnerability:** `${{ inputs.acc }}` is evaluated by GitHub Actions expression expansion directly inside the inline `run:` shell script string prior to `bash` execution. Evaluating untrusted workflow inputs directly inside script bodies is a command/script injection vector (CWE-78).
+* **Detector Behavior:** [Tools/check_run_injection.py](file:///home/runner/work/_temp/agent-repo-40100835223-1-run-agy/Tools/check_run_injection.py) parses workflow YAML files for `${{ inputs.* }}` and `${{ github.event.* }}` in `run:` blocks. Because `hq-gemini.yml::inputs.acc` is not recorded in [Tools/injection_baseline.json](file:///home/runner/work/_temp/agent-repo-40100835223-1-run-agy/Tools/injection_baseline.json), it was flagged as a newly introduced violation:
+  ```
+  ::error file=.github/workflows/hq-gemini.yml::NEW untrusted expression in a run: body -- inputs.acc. GitHub pastes this into the script text before bash runs it. Pass it through a step-level env: and use the variable instead.
+  ##TBS##{"data": {"fixed": 0, "grown": [], "locations": 28, "new": ["hq-gemini.yml::inputs.acc"], "occurrences": 56}, "probe": "run_injection", "status": "fail", "v": 1}
+  ```
+* **Fleet Scope:** Because [.github/workflows/hq-gemini.yml](file:///home/runner/work/_temp/agent-repo-40100835223-1-run-agy/.github/workflows/hq-gemini.yml) was pushed across the worker fleet (`mohammadlali0707-stack`, `Mohammadlali`, `lali94m-max`, `hmmletssee7-design`, `kidding602`, `moradzahra85-png`), Gate 1 fails on all repository runs.
+
+---
+
+### 2. Exact Minimal Unified Diff Patch
+
+The fix maps `ACC_IDX: ${{ inputs.acc }}` into the `Gemini website` step's `env:` block and references `$ACC_IDX` in the bash script:
+
+```diff
+diff --git a/.github/workflows/hq-gemini.yml b/.github/workflows/hq-gemini.yml
+index e50c635..3df28ca 100644
+--- a/.github/workflows/hq-gemini.yml
++++ b/.github/workflows/hq-gemini.yml
+@@ -81,6 +81,7 @@ jobs:
+           RES_PAT: ${{ secrets.ACC6_PAT }}
+           COOKIE_PAT: ${{ secrets[format('ACC{0}_PAT', inputs.acc)] }}
+           ENGINE: ${{ inputs.engine }}
++          ACC_IDX: ${{ inputs.acc }}
+         run: |
+           set +e
+           curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip
+@@ -92,7 +93,7 @@ jobs:
+           python3 -m venv /tmp/gv
+           /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5 pynacl
+           mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
+-          export PUB_REPO="$GITHUB_REPOSITORY" ACC_IDX="${{ inputs.acc }}" GEMINI_COOKIE_PATH=/tmp/gwcache
++          export PUB_REPO="$GITHUB_REPOSITORY" ACC_IDX="$ACC_IDX" GEMINI_COOKIE_PATH=/tmp/gwcache
+           TO=2100; [ "$ENGINE" = task ] && TO=19000
+           GWEB_PROXY=http://127.0.0.1:10809 PYTHONPATH=/tmp/gwlib timeout $TO /tmp/gv/bin/python tools/hqjob.py >/dev/null 2>/tmp/hqjob_err.txt
+           echo "gemini finished rc=$?"
+```
+
+---
+
+### 3. Empirical Probe Verification
+
+* **Patch Probe Run:**
+  ```bash
+  $ python3 Tools/check_run_injection.py .github/workflows
+  27 location(s), 55 occurrence(s); 0 new, 0 grown, 0 fixed
+  ##TBS##{"data": {"fixed": 0, "grown": [], "locations": 27, "new": [], "occurrences": 55}, "probe": "run_injection", "status": "pass", "v": 1}
+  ```
+  *(Exit code: 0)*
+* **Context Safety:** `python3 Tools/check_job_env_contexts.py .github/workflows` verified passing cleanly (`71 workflow file(s) scanned, 0 violation(s)`).
+* **Git Apply Compatibility:** `git apply --check Reports/agy/acc2/hq-gemini.patch` verified passing with zero conflicts.
+
+---
+
+### 4. Policy Compliance & Committed Deliverables
+
+In accordance with policy, **no changes were committed directly to `.github/workflows/`**; the workflow directory remains pristine on `main`. Diagnostic results and the unified diff patch were committed under `Reports/agy/acc2/`:
+
+1. [Reports/agy/acc2/gate-yaml-lint-audit.md](file:///home/runner/work/_temp/agent-repo-40100835223-1-run-agy/Reports/agy/acc2/gate-yaml-lint-audit.md) — Comprehensive technical audit, fleet root cause analysis, probe reproduction records, and remediation guide.
+2. [Reports/agy/acc2/hq-gemini.patch](file:///home/runner/work/_temp/agent-repo-40100835223-1-run-agy/Reports/agy/acc2/hq-gemini.patch) — Standalone minimal unified diff ready for application.
+
+**Git Commit:**
+- Hash: `7412dff17a288cf7425fe2713700903865326e7e`
+- Message: `Audit gate-yaml-lint injection failure and craft hq-gemini patch`
