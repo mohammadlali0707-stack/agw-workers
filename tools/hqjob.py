@@ -13,6 +13,35 @@ OUT = "/tmp/out"; os.makedirs(OUT + "/files", exist_ok=True)
 job = json.load(open("/tmp/job.json"))
 def result(ok, **kw):
     json.dump(dict(ok=ok, **kw), open(OUT + "/result.json", "w")); return 0 if ok else 3
+def _jar(c):
+    sess = getattr(c, "_live_client", None) or c.client
+    out = {}
+    for ck in (sess.cookies.jar if sess else []):
+        d = (ck.domain or "").lstrip(".").lower()
+        if (d == "google.com" or d.endswith(".google.com")) and ck.value:
+            if ck.name not in out or d == "google.com": out[ck.name] = ck.value
+    return out
+async def writeback(c, orig):
+    """Rotate __Secure-1PSIDTS and store the refreshed session back into this account's secret."""
+    try:
+        from gemini_webapi.utils.rotate_1psidts import rotate_1psidts
+        await rotate_1psidts(getattr(c, "_live_client", None) or c.client)
+    except Exception as e:
+        print("rotate failed", type(e).__name__, file=sys.stderr)
+    new = dict(orig); new.update(_jar(c))
+    if not new.get("__Secure-1PSID") or new == orig: return "unchanged"
+    try:
+        from nacl import encoding, public
+        import base64 as b64
+        repo, tok, idx = os.environ["PUB_REPO"], os.environ["RES_PAT"], os.environ["ACC_IDX"]
+        H = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"}
+        k = json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=H), timeout=60).read())
+        enc = b64.b64encode(public.SealedBox(public.PublicKey(k["key"].encode(), encoding.Base64Encoder())).encrypt(json.dumps(new).encode())).decode()
+        urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/GEMINI_WEB_COOKIES_ACC{idx}",
+            data=json.dumps({"encrypted_value": enc, "key_id": k["key_id"]}).encode(), method="PUT", headers=H), timeout=60)
+        return "saved"
+    except Exception as e:
+        return f"save failed {type(e).__name__}"
 def fetch_ref(r, i):
     p = f"/tmp/ref{i}" + os.path.splitext(r.split("?")[0])[1][:6]
     if r.startswith("repo:"):
@@ -37,7 +66,18 @@ async def main():
     except Exception as e: return result(False, error=f"init {type(e).__name__}: {str(e)[:200]}")
     alias = {CANON.get(m.model_number, m.model_name): m.model_name for m in (c.list_models() or []) if m.is_available}
     if len(alias) <= 1: return result(False, error=f"signed_out (status {getattr(c, 'account_status', '?')})")
+    try: return await run_job(c, alias)
+    finally:
+        wb = await writeback(c, ck)
+        try:
+            r = json.load(open(OUT + "/result.json")); r["session"] = wb; json.dump(r, open(OUT + "/result.json", "w"))
+        except Exception: pass
+        try: await c.close()
+        except Exception: pass
+
+async def run_job(c, alias):
     eng, prompt = job["engine"], job["prompt"]
+    if eng == "keepalive": open(OUT + "/answer.txt", "w").write(""); return result(True, files=[])
     wm = job.get("model") or "gemini-flash"; level = int(job.get("level") or 2)
     if eng == "media": wm = "gemini-flash"
     if wm not in alias: return result(False, error=f"model {wm} not available on this account")
@@ -69,7 +109,4 @@ async def main():
         return result(True, files=names)
     except Exception as e:
         return result(False, error=f"{type(e).__name__}: {str(e)[:200]}")
-    finally:
-        try: await c.close()
-        except Exception: pass
 sys.exit(asyncio.run(main()))
