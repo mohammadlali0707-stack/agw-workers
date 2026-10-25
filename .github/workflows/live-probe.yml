@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 30
     env:
       RES_REPO: mohammadlali0707-stack/hq-ai-results
-      CID: ${{ inputs.callback_id }}-${{ runner.os }}
+      CID: ${{ inputs.callback_id }}-${{ matrix.os }}
     defaults:
       run:
         shell: bash
