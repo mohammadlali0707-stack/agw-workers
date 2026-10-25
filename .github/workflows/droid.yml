@@ -1,0 +1,51 @@
+name: Droid Live
+# SDD-004 P0b: Android emulator (Google Play image) on a runner, remote-controlled through the PRIVATE results repo.
+# No secrets in this file. Screens/state go to hq-ai-results/ctl/<cid>/.
+run-name: droid ${{ inputs.callback_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      callback_id: {required: true, type: string}
+      minutes: {required: false, type: string, default: '90'}
+permissions:
+  contents: read
+jobs:
+  droid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      RES_REPO: mohammadlali0707-stack/hq-ai-results
+      CID: ${{ inputs.callback_id }}
+      MINUTES: ${{ inputs.minutes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - name: Proxy
+        env:
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+        run: |
+          curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip
+          unzip -qo /tmp/xray.zip -d /tmp/xray
+          printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
+          (nohup /tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          sleep 2; echo "egress $(curl -s -m 20 -x http://127.0.0.1:10809 https://ipinfo.io/country)"
+      - name: Emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules; sudo udevadm trigger --name-match=kvm
+          SDK=$ANDROID_HOME; BIN=$SDK/cmdline-tools/latest/bin; IMG="system-images;android-34;google_apis_playstore;x86_64"
+          yes | $BIN/sdkmanager --licenses >/dev/null 2>&1
+          $BIN/sdkmanager "emulator" "platform-tools" "$IMG" >/dev/null 2>&1
+          echo no | $BIN/avdmanager create avd -n p -k "$IMG" -d pixel_6 >/dev/null 2>&1
+          printf 'hw.ramSize=4096\ndisk.dataPartition.size=8G\nhw.keyboard=yes\n' >> ~/.android/avd/p.avd/config.ini
+          (nohup $SDK/emulator/emulator -avd p -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim \
+             -http-proxy http://127.0.0.1:10809 -camera-back none -camera-front none > /tmp/emu.log 2>&1 &)
+          $SDK/platform-tools/adb wait-for-device
+          for i in $(seq 1 120); do [ "$($SDK/platform-tools/adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break; sleep 5; done
+          echo "booted after ~$((i*5))s"
+      - name: Control loop
+        env:
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+          GPASS: ${{ secrets.CALL_GOOGLE_PASSWORD }}
+        run: python3 tools/droidctl.py
