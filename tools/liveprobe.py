@@ -42,7 +42,7 @@ def main():
                 bad = []
                 for k, v in ck.items():
                     if not (isinstance(v, str) and v): continue
-                    c = {"name": k, "value": v, "secure": True, "httpOnly": True}
+                    c = {"name": k, "value": v, "secure": True, "httpOnly": True, "expires": int(time.time()) + 30 * 86400}
                     if k.startswith("__Host-") or k in ACC: c["url"] = "https://accounts.google.com/"
                     else: c.update(domain=".google.com", path="/")
                     if "3P" in k: c["sameSite"] = "None"
@@ -66,8 +66,13 @@ def main():
                                     "head": t[:400]})
             shot_screen(f"r{rnd}_screen_gemini")
             t = visit("https://gemini.google.com/live?hl=en", "gemini_live", 8); log(f"r{rnd}_gemini_live", t[:400])
-            t = visit("chrome://flags/?search=glic", "flags", 3)
-            log(f"r{rnd}_flags", t[:2500])
+            for q in ("glic", "gemini"):
+                try:
+                    pg.goto("chrome://flags", timeout=60000); time.sleep(2)
+                    pg.locator("#search").fill(q); time.sleep(2)
+                    pg.screenshot(path=f"{OUT}/r{rnd}_flags_{q}.png", full_page=True)
+                    log(f"r{rnd}_flags_{q}", pg.evaluate("() => [...document.querySelectorAll('.experiment:not(.hidden) .experiment-name, .experiment-name')].map(e=>e.innerText).slice(0,40)"))
+                except Exception as e: log(f"r{rnd}_flags_{q}", "ERR " + str(e)[:200])
             t = visit("chrome://settings/ai", "settings_ai", 3); log(f"r{rnd}_settings_ai", t[:1200])
             t = visit("chrome://settings/gemini", "settings_gemini", 3); log(f"r{rnd}_settings_gemini", t[:1200])
             t = visit("chrome://glic", "glic", 5); log(f"r{rnd}_glic", t[:600])
