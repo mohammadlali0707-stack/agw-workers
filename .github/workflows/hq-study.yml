@@ -25,13 +25,18 @@ jobs:
         env:
           RES_PAT: ${{ secrets.ACC6_PAT }}
           XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+          ENGINE: ${{ inputs.engine }}
+          ACC_IDX: ${{ inputs.acc }}
+          GEMINI_WEB_COOKIES: ${{ inputs.engine == 'notebook' && secrets[format('GEMINI_WEB_COOKIES_ACC{0}', inputs.acc)] || '' }}
+          COOKIE_PAT: ${{ inputs.engine == 'notebook' && secrets[format('ACC{0}_PAT', inputs.acc)] || '' }}
         run: |
           set +e
           mkdir -p /tmp/out/files
           curl -sSf -H "Authorization: Bearer $RES_PAT" -H "Accept: application/vnd.github.raw" \
             "https://api.github.com/repos/$RES_REPO/contents/jobs/$CID/job.json" -o /tmp/job.json
           (curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip && unzip -qo /tmp/xray.zip -d /tmp/xray && printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json && (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)) >/dev/null 2>&1 &
-          python3 -m pip install -q --user yt-dlp youtube-transcript-api >/dev/null 2>&1
+          if [ "$ENGINE" = notebook ]; then python3 -m pip install -q --user notebooklm-py pynacl >/dev/null 2>&1; else python3 -m pip install -q --user yt-dlp >/dev/null 2>&1; fi
+          export PUB_REPO="$GITHUB_REPOSITORY"
           wait; sleep 1
           timeout 1200 python3 tools/hqstudy.py >/dev/null 2>/tmp/err.txt
           echo "study finished rc=$?"
