@@ -2,7 +2,7 @@
 import json, os, platform, subprocess, sys, time, traceback, urllib.request
 OUT = "/tmp/out"; os.makedirs(OUT, exist_ok=True)
 R = {"os": platform.platform(), "steps": []}
-def log(k, v): R["steps"].append({k: v}); json.dump(R, open(OUT + "/probe.json", "w"), ensure_ascii=False, indent=1)
+def log(k, v): R["steps"].append({k: v}); json.dump(R, open(OUT + "/probe.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 WIN = sys.platform.startswith("win")
 CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe" if WIN else "google-chrome"
 PROF = os.path.abspath("/tmp/chprof")
@@ -81,5 +81,5 @@ def main():
         except Exception: pass
 try: main(); R["ok"] = True
 except Exception: R["ok"] = False; R["error"] = traceback.format_exc()[-1500:]
-json.dump(R, open(OUT + "/probe.json", "w"), ensure_ascii=False, indent=1)
+json.dump(R, open(OUT + "/probe.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 json.dump({"ok": R["ok"], "files": []}, open(OUT + "/result.json", "w"))
