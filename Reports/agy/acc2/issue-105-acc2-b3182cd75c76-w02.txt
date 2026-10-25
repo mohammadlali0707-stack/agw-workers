@@ -1,0 +1,52 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"pass","data":{"tag":"issue-105-acc2-b3182cd75c76-w02","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-40236173974-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+# Audit Report: `agy-swarm-infinite` Hugging Face Download Failure & Fleet Alignment Patch
+
+- **Worker ID:** `agw-ACC2-w02`
+- **Account:** Account 2 (`agw-ACC2`)
+- **Date:** 2026-10-25
+- **Workflow:** `.github/workflows/agy-swarm-infinite.yml`
+- **Target Repository:** `mohammadlali0707-stack/agw-workers`
+- **Audited Run:** [40229894070](https://github.com/mohammadlali0707-stack/agw-workers/actions/runs/40229894070) (also [40128975413](https://github.com/mohammadlali0707-stack/agw-workers/actions/runs/40128975413))
+- **Status:** Root Cause Isolated & Verified; Minimal Unified Patch Prepared
+
+---
+
+## 1. Executive Summary
+
+Continuous integration run **40229894070** of `.github/workflows/agy-swarm-infinite.yml` failed during the step `Install AGY CLI` on runner `Acc0-R3`. The failure manifested as a sequence of HTTP 401 client errors across download attempts, followed by a tar extraction failure with exit code 2.
+
+In strict accordance with repository safety policies, files under `.github/workflows/` were not modified directly. Instead, this technical audit report and an accompanying minimal unified diff patch (`Reports/agy/acc2/agy-swarm-infinite.patch`) were produced, verified locally via `git apply --check`, and validated for compliance against `Tools/check_run_injection.py`.
+
+---
+
+## 2. Root Cause Analysis
+
+1. **Secret Masking / Token Mismatch (`AGW_HF_TOKEN` vs `HF_TOKEN`):**
+   In line 81 of `agy-swarm-infinite.yml`:
+   ```yaml
+   HF_TOKEN: ${{ secrets.AGW_HF_TOKEN || secrets.HF_TOKEN }}
+   ```
+   Because `secrets.AGW_HF_TOKEN` exists in the repository secrets store, GitHub Actions evaluates the logical OR expression to `secrets.AGW_HF_TOKEN`. However, `AGW_HF_TOKEN` is an invalid or expired token. This prevented the fallback from ever reaching `secrets.HF_TOKEN` (the valid fleet-wide token).
+
+2. **Outdated Hugging Face Repository URL:**
+   In line 92 of `agy-swarm-infinite.yml`:
+   ```bash
+   "https://huggingface.co/datasets/mohammadlali/agx/resolve/main/antigravity.tar.gz"
+   ```
+   This URL references the obsolete dataset repository `mohammadlali/agx`. The fleet standard distribution repository for AGY CLI binaries is `https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz`.
+
+3. **Tar Extraction Failure on Missing Artifact:**
+   Because all download attempts failed with HTTP 401, `/tmp/agx/antigravity.tar.gz` was never written. When `tar -xzf /tmp/agx/antigravity.tar.gz -C /tmp/agx/` was subsequently called, it failed with `Cannot open: No such file or directory` and returned exit code 2.
+
+---
+
+## 3. Alignment with Fleet Standard
+
+Across all operational workflows in the repository:
+- **Secret Mapping:** Directly map `HF_TOKEN: ${{ secrets.HF_TOKEN }}` without the problematic `AGW_HF_TOKEN` override.
+- **Dataset Endpoint:** Download `cli_linux_x64.tar.gz` from `https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz`.
+- **Extraction & Installation:** Extract to `/tmp/agx/`, locate binary dynamically, install to `${RUNNER_TEMP:-/tmp}/agy-bin/agy`, export to `$GITHUB_PATH` and current `$PATH`.
