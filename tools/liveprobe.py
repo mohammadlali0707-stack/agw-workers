@@ -38,8 +38,17 @@ def main():
             b = pw.chromium.connect_over_cdp("http://127.0.0.1:9222")
             ctx = b.contexts[0]
             if rnd == 0:
-                ctx.add_cookies([{"name": k, "value": v, "domain": ".google.com", "path": "/", "secure": True, "httpOnly": True}
-                                 for k, v in ck.items() if isinstance(v, str) and v])
+                ACC = {"LSID", "ACCOUNT_CHOOSER", "SMSV"}
+                bad = []
+                for k, v in ck.items():
+                    if not (isinstance(v, str) and v): continue
+                    c = {"name": k, "value": v, "secure": True, "httpOnly": True}
+                    if k.startswith("__Host-") or k in ACC: c["url"] = "https://accounts.google.com/"
+                    else: c.update(domain=".google.com", path="/")
+                    if "3P" in k: c["sameSite"] = "None"
+                    try: ctx.add_cookies([c])
+                    except Exception: bad.append(k)
+                log("cookies_rejected", bad)
             pg = ctx.pages[0] if ctx.pages else ctx.new_page()
             def visit(url, name, wait=6):
                 try:
@@ -63,6 +72,7 @@ def main():
             t = visit("chrome://settings/gemini", "settings_gemini", 3); log(f"r{rnd}_settings_gemini", t[:1200])
             t = visit("chrome://glic", "glic", 5); log(f"r{rnd}_glic", t[:600])
             t = visit("https://www.google.com/?hl=en", "google", 4); shot_screen(f"r{rnd}_screen_google")
+            t = visit("https://accounts.google.com/ServiceLogin?continue=https://www.google.com/&hl=en", "accounts", 8); log(f"r{rnd}_accounts", t[:300]); shot_screen(f"r{rnd}_screen_accounts")
             if rnd == 0: time.sleep(45)   # let variations seed download before relaunch
             try: b.close()
             except Exception: pass
