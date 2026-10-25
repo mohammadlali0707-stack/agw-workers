@@ -1,0 +1,57 @@
+name: Live Probe
+# SDD-004 P0: checks whether Chrome on a runner (via the same xray exit) shows Gemini Live / Gemini in Chrome.
+# No secrets in this file; results go to the PRIVATE results repo.
+run-name: probe ${{ inputs.callback_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      callback_id: {required: true, type: string}
+      acc: {required: true, type: string, default: '6'}
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RES_REPO: mohammadlali0707-stack/hq-ai-results
+      CID: ${{ inputs.callback_id }}-${{ runner.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - name: Probe
+        env:
+          GEMINI_WEB_COOKIES: ${{ secrets[format('GEMINI_WEB_COOKIES_ACC{0}', inputs.acc)] }}
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+        run: |
+          set +e
+          PY=python; [ "$RUNNER_OS" = Linux ] && PY=python3
+          if [ "$RUNNER_OS" = Windows ]; then XZ=Xray-windows-64.zip; XB=/tmp/xray/xray.exe; else XZ=Xray-linux-64.zip; XB=/tmp/xray/xray; fi
+          mkdir -p /tmp/xray
+          curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/$XZ -o /tmp/xray.zip
+          unzip -qo /tmp/xray.zip -d /tmp/xray
+          printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
+          ($XB run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          sleep 3
+          $PY -m pip install -q playwright pillow >/dev/null 2>&1
+          if [ "$RUNNER_OS" = Linux ]; then
+            which Xvfb >/dev/null || sudo apt-get install -y -qq xvfb >/dev/null 2>&1
+            which import >/dev/null || sudo apt-get install -y -qq imagemagick >/dev/null 2>&1
+            Xvfb :99 -screen 0 1600x1000x24 >/dev/null 2>&1 &
+            export DISPLAY=:99; sleep 2
+          fi
+          $PY tools/liveprobe.py > /dev/null 2>&1
+          echo "probe rc=$?"
+      - name: Save to private repo
+        if: always()
+        env:
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+        run: if [ "$RUNNER_OS" = Linux ]; then python3 tools/ressave.py; else python tools/ressave.py; fi
