@@ -1,0 +1,43 @@
+name: HQ Study
+# Movie-English and Knowledge data jobs (subtitles, YouTube search/transcripts). No secrets in this file.
+# The job is read from the PRIVATE repo hq-ai-results and results are written back there; the run is deleted afterwards.
+run-name: hq ${{ inputs.callback_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      callback_id: {required: true, type: string}
+      engine: {required: false, type: string, default: study}
+      acc: {required: false, type: string, default: '6'}
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RES_REPO: mohammadlali0707-stack/hq-ai-results
+      CID: ${{ inputs.callback_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - name: Study job
+        env:
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+        run: |
+          set +e
+          mkdir -p /tmp/out/files
+          curl -sSf -H "Authorization: Bearer $RES_PAT" -H "Accept: application/vnd.github.raw" \
+            "https://api.github.com/repos/$RES_REPO/contents/jobs/$CID/job.json" -o /tmp/job.json
+          (curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip && unzip -qo /tmp/xray.zip -d /tmp/xray && printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json && (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)) >/dev/null 2>&1 &
+          python3 -m pip install -q --user yt-dlp youtube-transcript-api >/dev/null 2>&1
+          wait; sleep 1
+          timeout 1200 python3 tools/hqstudy.py >/dev/null 2>/tmp/err.txt
+          echo "study finished rc=$?"
+          tail -c 3000 /tmp/err.txt > /tmp/out/err.txt
+      - name: Save to private repo
+        if: always()
+        env:
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+        run: python3 tools/ressave.py
