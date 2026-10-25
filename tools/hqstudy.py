@@ -83,7 +83,9 @@ def subs():
     if not c: done(False, error="No English subtitles were found for that title. Check the spelling, add the year (Inception 2010) or the episode (Friends S01E01), or upload the .srt file.")
     key = lambda x: (x.get("MovieImdbRating") is not None, int(x.get("SubDownloadsCnt") or 0))
     best = max(c, key=key)
-    tt = best.get("MovieName") or q
+    tt = (best.get("MovieName") or q).strip()
+    m = re.match(r'^"([^"]+)"\s*(.*)$', tt)
+    if m: tt = m.group(1) + (" — " + m.group(2) if m.group(2) else "")
     if best.get("MovieKind") == "episode" and best.get("SeriesSeason") not in (None, "0"):
         tt = f"{tt} (S{int(best['SeriesSeason']):02d}E{int(best['SeriesEpisode']):02d})"
     elif best.get("MovieYear"): tt = f"{tt} ({best['MovieYear']})"
@@ -106,8 +108,55 @@ def yt_search():
         except Exception: pass
     if not vids: done(False, error="YouTube search returned no videos.")
     done(True, {"videos": vids}, count=len(vids))
+
+def _cookies():
+    raw = (os.environ.get("GEMINI_WEB_COOKIES") or "").strip()
+    if not raw: done(False, error="The Gemini Notebook account session is missing.")
+    ck = json.loads(raw)
+    if isinstance(ck, list): ck = {c.get("name"): c.get("value") for c in ck if isinstance(c, dict)}
+    return ck
+def _writeback(orig, path):
+    """Store the refreshed Google session back into this account's own secret (same scheme as hqjob.py)."""
+    try:
+        st = json.load(open(path)); new = dict(orig)
+        for c in st.get("cookies", []):
+            d = str(c.get("domain") or "").lstrip(".").lower()
+            if (d == "google.com" or d.endswith(".google.com")) and c.get("value") and (c["name"] not in new or d == "google.com"): new[c["name"]] = c["value"]
+        if new == orig: return "unchanged"
+        from nacl import encoding, public
+        import base64 as b64
+        repo, tok, idx = os.environ["PUB_REPO"], os.environ["COOKIE_PAT"], os.environ["ACC_IDX"]
+        H = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"}
+        k = json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=H), timeout=60).read())
+        enc = b64.b64encode(public.SealedBox(public.PublicKey(k["key"].encode(), encoding.Base64Encoder())).encrypt(json.dumps(new).encode())).decode()
+        urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/GEMINI_WEB_COOKIES_ACC{idx}", data=json.dumps({"encrypted_value": enc, "key_id": k["key_id"]}).encode(), method="PUT", headers=H), timeout=60)
+        return "saved"
+    except Exception as e: return f"save failed {type(e).__name__}"
+def notebook():
+    import asyncio
+    from notebooklm import NotebookLMClient
+    ck = _cookies(); names = sorted(ck)
+    if not {"SID", "__Secure-1PSIDTS"} <= set(ck): done(False, error="session lacks NotebookLM cookies", names=[n for n in names if n.isupper() or n.startswith("__")][:40])
+    path = "/tmp/nlm_state.json"
+    json.dump({"cookies": [{"name": n, "value": v, "domain": ".google.com", "path": "/", "expires": -1, "httpOnly": True, "secure": True, "sameSite": "None"} for n, v in ck.items() if isinstance(v, str) and v], "origins": []}, open(path, "w"))
+    async def run():
+        async with NotebookLMClient.from_storage(path, allow_headless=True) as c:
+            nb = await c.notebooks.create("HQ video " + os.environ.get("CID", "")[-8:])
+            try:
+                src = await c.sources.add_url(nb.id, job["url"], wait=True, wait_timeout=600)
+                ans = await c.chat.ask(nb.id, job["question"])
+                return getattr(ans, "answer", None) or str(ans)
+            finally:
+                try: await c.notebooks.delete(nb.id)
+                except Exception: pass
+    try: text = asyncio.run(run())
+    except Exception as e:
+        wb = _writeback(ck, path); done(False, error=f"notebook {type(e).__name__}: {str(e)[:240]}", session=wb)
+    wb = _writeback(ck, path)
+    if not (text or "").strip(): done(False, error="Gemini Notebook returned an empty answer.", session=wb)
+    done(True, {"text": text.strip()}, session=wb)
 try:
-    {"subs": subs, "yt_search": yt_search}[job.get("action")]()
+    {"subs": subs, "yt_search": yt_search, "notebook": notebook}[job.get("action")]()
 except SystemExit: raise
 except Exception as e:
     done(False, error=f"{type(e).__name__}: {str(e)[:200]}")
