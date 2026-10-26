@@ -1,5 +1,5 @@
 """HQ Study job on a GitHub runner. Job: /tmp/job.json -> /tmp/out/result.json (+ data.json).
-actions: subs (title search on OpenSubtitles, or an uploaded subtitle file ref) | yt_search (YouTube search, metadata only)."""
+actions: subs (title search on OpenSubtitles, or an uploaded subtitle file ref) | yt_search (YouTube search, metadata only) | yt_captions (one video's captions)."""
 import gzip, io, json, os, re, subprocess, urllib.parse, urllib.request, zipfile
 OUT = "/tmp/out"; os.makedirs(OUT, exist_ok=True)
 job = json.load(open("/tmp/job.json"))
@@ -155,8 +155,38 @@ def notebook():
     wb = _writeback(ck, path)
     if not (text or "").strip(): done(False, error="Gemini Notebook returned an empty answer.", session=wb)
     done(True, {"text": text.strip()}, session=wb)
+def yt_captions():   # SDD-005 M01: captions of one YouTube video -> timestamped plain transcript (no download)
+    import glob
+    Y = os.path.expanduser("~/.local/bin/yt-dlp"); d = "/tmp/ytc"; os.makedirs(d, exist_ok=True)
+    p = subprocess.run([Y, "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", "en.*,en,fa,fa-orig", "--sub-format", "vtt",
+                        "-o", d + "/v.%(ext)s", "--print-json", "--no-warnings", job["url"]], capture_output=True, text=True, timeout=240)
+    meta = {}
+    for l in reversed((p.stdout or "").strip().splitlines()):
+        try: meta = json.loads(l); break
+        except Exception: pass
+    fs = glob.glob(d + "/*.vtt")
+    if not fs: done(False, error="No captions: " + ((p.stderr or "").strip().splitlines() or ["none"])[-1][:200])
+    def rank(f):
+        n = os.path.basename(f); auto = bool(meta.get("automatic_captions")) and n.split(".")[-2] in (meta.get("automatic_captions") or {}) and n.split(".")[-2] not in (meta.get("subtitles") or {})
+        return (0 if ".en" in n else 1, 1 if auto else 0, len(n))
+    f = sorted(fs, key=rank)[0]; out, last, mark = [], "", -999
+    for blk in open(f, encoding="utf-8", errors="replace").read().split("\n\n"):
+        m = re.search(r"(\d+):(\d\d):(\d\d)\.\d+\s+-->", blk) or re.search(r"(?:^|\n)()(\d\d):(\d\d)\.\d+\s+-->", blk)
+        if not m: continue
+        sec = int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+        txt = " ".join(re.sub(r"<[^>]+>", "", l).strip() for l in blk.split("\n") if "-->" not in l and not l.startswith(("WEBVTT", "Kind:", "Language:", "NOTE")) and l.strip())
+        txt = re.sub(r"\s+", " ", txt).strip()
+        if not txt or txt == last or (last and txt in last): continue
+        if last and txt.startswith(last): txt = txt[len(last):].strip()
+        last = txt if not out or txt not in out[-1] else last
+        if sec - mark >= 30: out.append(f"\n[{sec // 60}:{sec % 60:02d}] "); mark = sec
+        out.append(txt + " ")
+    text = re.sub(r"[ ]{2,}", " ", "".join(out)).strip()
+    if len(text) < 200: done(False, error="Captions were empty.")
+    done(True, {"title": meta.get("title"), "channel": meta.get("channel") or meta.get("uploader"), "duration": meta.get("duration"), "lang": os.path.basename(f).split(".")[-2], "text": text[:120000]}, count=len(text))
+
 try:
-    {"subs": subs, "yt_search": yt_search, "notebook": notebook}[job.get("action")]()
+    {"subs": subs, "yt_search": yt_search, "notebook": notebook, "yt_captions": yt_captions}[job.get("action")]()
 except SystemExit: raise
 except Exception as e:
     done(False, error=f"{type(e).__name__}: {str(e)[:200]}")
