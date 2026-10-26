@@ -1,0 +1,10 @@
+# SDD-006 M04 guardrail: workers must not change the things that grade them.
+# Takes full effect when branch protection on main has "Require review from Code Owners" enabled.
+/tests/ @mohammadlali0707-stack
+/qa/ @mohammadlali0707-stack
+/eval/ @mohammadlali0707-stack
+/checkers/ @mohammadlali0707-stack
+/.github/workflows/ @mohammadlali0707-stack
+/.github/CODEOWNERS @mohammadlali0707-stack
+/tools/agent_bus.py @mohammadlali0707-stack
+/governance/ @mohammadlali0707-stack
