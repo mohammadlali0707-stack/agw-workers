@@ -1,0 +1,34 @@
+name: guard-protected-paths
+# SDD-006 M04: the fleet bots push to main with the same account as Mohammad, so GitHub rules can't tell them apart.
+# This alarm posts to the Agent Bus (which alerts Mohammad in the OS bot) when a bot commit changes tests, checkers, workflows or governance.
+on:
+  push:
+    branches: [main]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check bot commits
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          ev = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+          PROT = ("tests/", "qa/", "eval/", "checkers/", ".github/workflows/", ".github/CODEOWNERS", "tools/agent_bus.py", "governance/")
+          OWNER = "mohammadlali0707@gmail.com"
+          hits = []
+          for c in ev.get("commits", []):
+              if (c.get("author") or {}).get("email") == OWNER: continue
+              files = c.get("added", []) + c.get("modified", []) + c.get("removed", [])
+              bad = [f for f in files if f.startswith(PROT)]
+              if bad: hits.append(f"{c['id'][:8]} by {(c.get('author') or {}).get('name')}: " + ", ".join(bad[:6]))
+          if hits:
+              text = "Bot commit changed protected files (tests/checkers/workflows) — please review: " + " | ".join(hits)
+              subprocess.run(["python3", "tools/agent_bus.py", "post", "guard", "blocked", text[:480], ev.get("compare", "")], check=False)
+              print(text)
+          else: print("no protected files changed by bots")
+          PY
