@@ -1,0 +1,19 @@
+name: agent-bus-smoke
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [tools/agent_bus.py, .github/workflows/agent-bus-smoke.yml]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post and read one note
+        run: |
+          python3 tools/agent_bus.py post sdd-006 done "GitHub worker connected to the Agent Bus (OIDC sign-in, run ${GITHUB_RUN_ID})." "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python3 tools/agent_bus.py read sdd-006 3
