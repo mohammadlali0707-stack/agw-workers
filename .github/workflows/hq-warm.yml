@@ -1,0 +1,50 @@
+name: HQ Warm
+
+# Long-running Flash worker for the HQ gemini-proxy (one per account, restarted by the proxy before GitHub's 6 h limit).
+# Prompts and answers stay in the PRIVATE repo hq-ai-results; nothing sensitive is printed here.
+run-name: warm acc${{ inputs.acc }}
+on:
+  workflow_dispatch:
+    inputs:
+      acc:
+        description: 'account index (its own Antigravity token is used)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+
+      - name: Set up Antigravity CLI
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TOKEN_B64: ${{ secrets[format('AGW_TOKEN_ACC{0}', inputs.acc)] }}
+          INSTALL_ID: ${{ secrets[format('AGW_INSTALL_ID_ACC{0}', inputs.acc)] || secrets.AGW_INSTALL_ID_ACC6 || secrets.AGW_INSTALL_ID_ACC0 || secrets.AGW_INSTALL_ID_ACC1 || secrets.AGW_INSTALL_ID_ACC2 || secrets.AGW_INSTALL_ID_ACC3 || secrets.AGW_INSTALL_ID_ACC4 || secrets.AGW_INSTALL_ID_ACC5 || secrets.AGW_INSTALL_ID_ACC7 || secrets.AGW_INSTALL_ID_ACC8 }}
+        run: |
+          curl -sSfL -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx && tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name antigravity -o -name agy \) | head -1)
+          [ -z "$CLI_BIN" ] && CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          install -m 0755 "$CLI_BIN" /tmp/agy
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          printf '%s' "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          printf '%s' "$INSTALL_ID" > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+          echo "cli ready"
+
+      - name: Serve jobs
+        env:
+          RES_REPO: mohammadlali0707-stack/hq-ai-results
+          RES_PAT: ${{ secrets.ACC6_PAT }}
+          ACC: ${{ inputs.acc }}
+        run: python3 tools/hqwarm.py
