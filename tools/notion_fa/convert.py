@@ -150,13 +150,14 @@ def to_tagged(rt):
         def sub(m): keep.append({"type": "text", "text": {"content": m.group(0), "link": x["text"].get("link")}, "annotations": x.get("annotations")}); return f"⟦{len(keep) - 1}⟧"
         segs.append(f"<s{i}>" + PROT.sub(sub, t) + f"</s{i}>")
     return "".join(segs), keep
+STRAY = re.compile(r"\\?</?s\d+>")   # unmatched/mismatched segment tags from the model (e.g. <s0>…</s2>) must never reach Notion
 def from_tagged(tr, rt, keep):
     out = []
     pos = 0
     pat = re.compile(r"<s(\d+)>(.*?)</s\1>|⟦(\d+)⟧", re.S)
     ok = True
     for m in pat.finditer(tr):
-        gap = tr[pos:m.start()]
+        gap = STRAY.sub("", tr[pos:m.start()])
         if gap.strip(): out.append({"type": "text", "text": {"content": gap}})
         pos = m.end()
         if m.group(1) is not None:
@@ -166,14 +167,14 @@ def from_tagged(tr, rt, keep):
             for pt in parts:
                 mm = re.fullmatch(r"⟦(\d+)⟧", pt)
                 if mm and int(mm.group(1)) < len(keep): out.append(keep[int(mm.group(1))])
-                elif pt: out.append({"type": "text", "text": {"content": pt, "link": rt[i]["text"].get("link")}, "annotations": rt[i].get("annotations")})
+                elif STRAY.sub("", pt): out.append({"type": "text", "text": {"content": STRAY.sub("", pt), "link": rt[i]["text"].get("link")}, "annotations": rt[i].get("annotations")})
         else:
             k = int(m.group(3))
             if k < len(keep): out.append(keep[k])
-    tail = tr[pos:]
+    tail = STRAY.sub("", tr[pos:])
     if tail.strip(): out.append({"type": "text", "text": {"content": tail}})
     if not ok or not out:
-        t = re.sub(r"</?s\d+>", "", tr)
+        t = STRAY.sub("", tr)
         t = re.sub(r"⟦(\d+)⟧", lambda m: plain([keep[int(m.group(1))]]) if int(m.group(1)) < len(keep) else "", t)
         out = [{"type": "text", "text": {"content": t}}]
     clean = []
