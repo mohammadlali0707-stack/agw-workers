@@ -2,7 +2,7 @@ name: HQ Warm
 
 # Long-running Flash + Gemini-website (Argon/Pro) worker for the HQ gemini-proxy (one per account, restarted by the proxy before GitHub's 6 h limit).
 # Prompts and answers stay in the PRIVATE repo hq-ai-results; nothing sensitive is printed here.
-run-name: warm acc${{ inputs.acc }}
+run-name: warm acc${{ inputs.acc }}${{ inputs.burst == 'true' && ' burst' || '' }}
 on:
   workflow_dispatch:
     inputs:
@@ -10,9 +10,15 @@ on:
         description: 'account index (its own Antigravity token is used)'
         required: true
         type: string
+      burst:
+        description: 'extra short run when every warm slot is busy (claims for 20 min, then ends when idle)'
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   run:
@@ -60,6 +66,7 @@ jobs:
           RES_REPO: mohammadlali0707-stack/hq-ai-results
           RES_PAT: ${{ secrets.ACC6_PAT }}
           ACC: ${{ inputs.acc }}
+          CLAIM_SECS: ${{ inputs.burst == 'true' && '1200' || '18900' }}
           GEMINI_WEB_COOKIES: ${{ secrets[format('GEMINI_WEB_COOKIES_ACC{0}', inputs.acc)] }}
           COOKIE_PAT: ${{ secrets[format('ACC{0}_PAT', inputs.acc)] }}
           PUB_REPO: ${{ github.repository }}
