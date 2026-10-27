@@ -1,6 +1,6 @@
 name: HQ Warm
 
-# Long-running Flash worker for the HQ gemini-proxy (one per account, restarted by the proxy before GitHub's 6 h limit).
+# Long-running Flash + Gemini-website (Argon/Pro) worker for the HQ gemini-proxy (one per account, restarted by the proxy before GitHub's 6 h limit).
 # Prompts and answers stay in the PRIVATE repo hq-ai-results; nothing sensitive is printed here.
 run-name: warm acc${{ inputs.acc }}
 on:
@@ -42,9 +42,25 @@ jobs:
           echo '{"userSettings":{}}' > ~/.gemini/config/config.json
           echo "cli ready"
 
+      - name: Set up Gemini website session (Argon / Pro)
+        continue-on-error: true
+        env:
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+        run: |
+          set +e
+          curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip && unzip -qo /tmp/xray.zip -d /tmp/xray
+          printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
+          (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          python3 -m venv /tmp/gv && /tmp/gv/bin/pip install -q curl_cffi==0.16.3 loguru==0.7.3 orjson==3.11.9 pydantic==2.12.5 pynacl
+          mkdir -p /tmp/gwlib && tar xzf tools/gemini_webapi.tgz -C /tmp/gwlib
+          echo "web setup done"
+
       - name: Serve jobs
         env:
           RES_REPO: mohammadlali0707-stack/hq-ai-results
           RES_PAT: ${{ secrets.ACC6_PAT }}
           ACC: ${{ inputs.acc }}
+          GEMINI_WEB_COOKIES: ${{ secrets[format('GEMINI_WEB_COOKIES_ACC{0}', inputs.acc)] }}
+          COOKIE_PAT: ${{ secrets[format('ACC{0}_PAT', inputs.acc)] }}
+          PUB_REPO: ${{ github.repository }}
         run: python3 tools/hqwarm.py
