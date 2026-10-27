@@ -1,0 +1,116 @@
+# Runs in the PUBLIC agw-workers repo on behalf of the private repo mohammadlali0707-stack/Claud-Cloud-Project (owner 2026-10-27: everything runs in agw-workers).
+# Copied from mohammadlali0707-stack/Claud-Cloud-Project/.github/workflows/backlog-dispatcher.yml; step output is written to a file, not to this public log.
+name: 'Remote Claud-Cloud-Project: Backlog Dispatcher'
+
+# Controlled work-expansion loop (Issue #89).
+#
+# @agy workers have NO git credentials and NO GitHub API tokens in their execution
+# step (by design, confirmed 2026-09-09 in Mohammadlali/agw-workers's agw-worker.yml).
+# Workers cannot open issues, comment across accounts, or dispatch work directly.
+#
+# Instead, agents propose follow-up work by writing entries to Team/BACKLOG.md.
+# This workflow runs on a schedule (or manual dispatch) with access to ACC0_PAT..ACC8_PAT,
+# reads pending proposals, enforces a small rate-limited cap (default 3), applies a
+# lightweight quality sanity check (inspired by Tools/check_task_quality.py), and opens
+# real @agy-prefixed issues in the target repository using that repository owner's PAT.
+#
+# Consumed entries are marked [x] in Team/BACKLOG.md with the created issue URL,
+# and committed back to the branch.
+
+on:
+  schedule:
+    # Run every 6 hours to expand work in a controlled, rate-limited loop
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      cap:
+        description: 'Maximum number of proposals to dispatch in this run'
+        required: false
+        default: '3'
+        type: string
+      dry_run:
+        description: 'Dry run: validate entries and plan dispatch without opening issues or writing changes'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  dispatch-backlog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Run Backlog Dispatcher
+        id: dispatch
+        env:
+          ACC0_PAT: ${{ secrets.ACC0_PAT }}
+          ACC1_PAT: ${{ secrets.ACC1_PAT }}
+          ACC2_PAT: ${{ secrets.ACC2_PAT }}
+          ACC3_PAT: ${{ secrets.ACC3_PAT }}
+          ACC4_PAT: ${{ secrets.ACC4_PAT }}
+          ACC5_PAT: ${{ secrets.ACC5_PAT }}
+          ACC6_PAT: ${{ secrets.ACC6_PAT }}
+          ACC7_PAT: ${{ secrets.ACC7_PAT }}
+          ACC8_PAT: ${{ secrets.ACC8_PAT }}
+          DISPATCH_CAP: ${{ inputs.cap || '3' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+          EXTRA_FLAGS=""
+          if [ "$DRY_RUN" = "true" ]; then
+            EXTRA_FLAGS="--dry-run"
+          fi
+          python3 Tools/dispatch_backlog.py --cap "$DISPATCH_CAP" $EXTRA_FLAGS
+
+      - name: Commit and push consumed backlog entries
+        if: inputs.dry_run != true
+        # FIXED 2026-09-11, same root cause found and fixed in
+        # deploy-status-feed.yml the same day (check_status_feed_freshness
+        # was red 30h straight): actions/checkout@v4 already writes its own
+        # http.https://github.com/.extraheader into this workspace's LOCAL
+        # git config, carrying the default GITHUB_TOKEN. This step used to
+        # add a SECOND, UNSCOPED `http.extraheader` for ACC0_PAT on the `git
+        # push` line alone -- extraHeader is multi-valued in git, so any
+        # push here would send BOTH, and GitHub rejects that with
+        # "Duplicate header: Authorization" / HTTP 400. Scoped to
+        # github.com and unset first, matching the pattern documented in
+        # patch-agw-worker-fleet.yml.
+        env:
+          TOKEN: ${{ secrets.ACC6_PAT }}
+          TARGET_BRANCH: main
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+          git config user.email "agy-bot@claud-cloud.local"
+          git config user.name "AGY Bot"
+          if git diff --quiet Team/BACKLOG.md; then
+            echo "No changes in Team/BACKLOG.md to commit."
+            exit 0
+          fi
+          git add Team/BACKLOG.md
+          git commit -m "backlog: mark dispatched entries consumed"
+          git config --local --unset-all http.https://github.com/.extraheader || true
+          if [ -n "$TOKEN" ]; then
+            AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+            git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin "HEAD:$TARGET_BRANCH"
+          else
+            git push origin "HEAD:$TARGET_BRANCH"
+          fi
+          echo "Committed and pushed updated Team/BACKLOG.md"
