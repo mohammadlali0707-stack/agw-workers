@@ -1,0 +1,60 @@
+# Runs in the PUBLIC agw-workers repo on behalf of the private repo mohammadlali0707-stack/AirboxVIP_Coffeenet (owner 2026-10-27: everything runs in agw-workers).
+# Copied from mohammadlali0707-stack/AirboxVIP_Coffeenet/.github/workflows/tbs-morning.yml; step output is written to a file, not to this public log.
+name: 'Remote AirboxVIP_Coffeenet: AirboxVIP-Coffeenet Morning Status Report'
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  morning-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/AirboxVIP_Coffeenet
+          token: ${{ secrets.ACC6_PAT }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/AirboxVIP_Coffeenet
+          pip install pyyaml pytest 2>/dev/null || true
+
+      - name: Generate Morning Report
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          REPO: mohammadlali0707-stack/AirboxVIP_Coffeenet
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/AirboxVIP_Coffeenet
+          python3 Tools/generate_morning_report.py --output /tmp/morning_report.md
+          cat /tmp/morning_report.md
+
+      - name: Post Morning Report Issue
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+          REPO: mohammadlali0707-stack/AirboxVIP_Coffeenet
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/AirboxVIP_Coffeenet
+          TODAY=$(date -u +'%Y-%m-%d')
+          TITLE="[Morning Report] ${TODAY} - AirboxVIP-Coffeenet Daily Status"
+          gh issue create \
+            --repo "${REPO:-momonakikugava-pixel/AirboxVIP_Coffeenet}" \
+            --title "$TITLE" \
+            --body-file /tmp/morning_report.md
