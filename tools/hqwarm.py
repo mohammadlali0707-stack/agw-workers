@@ -27,6 +27,23 @@ HOMES = []
 for n in range(PAR):   # one HOME per slot: parallel CLI processes never share state files
     h = f"/tmp/wh{n}"; shutil.copytree(os.path.expanduser("~/.gemini"), h + "/.gemini", dirs_exist_ok=True); HOMES.append(h)
 LOCK = threading.Lock(); ACTIVE = [0]; STATS = {"jobs": 0, "fail": 0, "polls": 0, "changes": 0}
+# owner 2026-10-27: Gemini website (Argon / Pro) on the same warm run -> queue files "w-<cid>.json", served by hqwarmweb.py (one open session)
+PAR_WEB = int(os.environ.get("PAR_WEB", "1")); WEB = [0]; WEBP = None
+if os.environ.get("GEMINI_WEB_COOKIES") and os.path.exists("/tmp/gv/bin/python"):
+    WEBP = subprocess.Popen(["/tmp/gv/bin/python", os.path.join(os.path.dirname(os.path.abspath(__file__)), "hqwarmweb.py")],
+                            env=dict(os.environ, PYTHONPATH="/tmp/gwlib", GWEB_PROXY="http://127.0.0.1:10809", GEMINI_COOKIE_PATH="/tmp/gwcache"))
+def web_ready(): return WEBP is not None and WEBP.poll() is None and os.path.exists("/tmp/web_ready")
+def run_web(cid, job):
+    t = time.time(); d = f"/tmp/wdone/{cid}"
+    try:
+        os.makedirs("/tmp/wjobs", exist_ok=True)
+        open(f"/tmp/wjobs/{cid}.tmp", "w").write(json.dumps(job)); os.replace(f"/tmp/wjobs/{cid}.tmp", f"/tmp/wjobs/{cid}.json")
+        while not os.path.isdir(d) and time.time() - t < 2150 and (WEBP.poll() is None): time.sleep(0.5)
+        if os.path.isdir(d): files = {n: open(f"{d}/{n}").read() for n in ("answer.txt", "result.json")}
+        else: files = {"answer.txt": "", "result.json": json.dumps({"ok": False, "files": [], "warm": True, "error": "warm web session stopped"})}
+        save(cid, files); ok = json.loads(files["result.json"]).get("ok")
+    except Exception as e: ok = False; save(cid, {"answer.txt": "", "result.json": json.dumps({"ok": False, "files": [], "error": f"warm web {type(e).__name__}"})})
+    with LOCK: WEB[0] -= 1; STATS["jobs"] += 1; STATS["fail"] += (not ok)
 def run_job(cid, job, home):
     t = time.time(); out, rc = "", 1
     try:
@@ -54,16 +71,23 @@ print(f"warm worker acc{ACC} ready par={PAR}", flush=True)
 while True:
     claiming = time.time() - T0 < CLAIM_SECS
     with LOCK: active = ACTIVE[0]
-    if not claiming and active == 0: break
-    if claiming and active < PAR:
+    if not claiming and active == 0 and WEB[0] == 0: break
+    if claiming and (active < PAR or (WEB[0] < PAR_WEB and web_ready())):
         try:
             STATS["polls"] += 1
             x, items = gh("GET", f"/contents/queue?ref={BR}", h={"If-None-Match": etag} if etag else None)
             etag = x.headers.get("ETag"); STATS["changes"] += 1
             if int(x.headers.get("X-RateLimit-Remaining") or 9999) < 1500: time.sleep(20)
             for it in sorted((i for i in items if i["name"].endswith(".json")), key=lambda i: i["name"]):
+                if it["name"].startswith("w-"):
+                    with LOCK:
+                        if WEB[0] >= PAR_WEB or not web_ready(): continue
+                    job = claim(it)
+                    if job is None: continue
+                    with LOCK: WEB[0] += 1
+                    threading.Thread(target=run_web, args=(it["name"][2:-5], job), daemon=True).start(); etag = None; continue
                 with LOCK:
-                    if ACTIVE[0] >= PAR: break
+                    if ACTIVE[0] >= PAR: continue
                 job = claim(it)
                 if job is None: continue
                 with LOCK: ACTIVE[0] += 1; home = HOMES.pop()
@@ -79,4 +103,8 @@ while True:
         except Exception: time.sleep(5)
     if time.time() - last_log > 1800: last_log = time.time(); print(f"t={int(time.time()-T0)}s {STATS}", flush=True)
     time.sleep(POLL)
+if WEBP is not None and WEBP.poll() is None:   # let the web session store its refreshed cookies before the run ends
+    open("/tmp/web_stop", "w").write("1")
+    try: WEBP.wait(150)
+    except Exception: WEBP.kill()
 print(f"done {STATS}", flush=True)
