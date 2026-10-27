@@ -1,81 +1,59 @@
 name: notion-bilingual
 
 on:
-  workflow_dispatch:
-    inputs:
-      page:
-        description: 'Optional single Notion page ID to sync'
-        required: false
-        type: string
-        default: ''
-      dry_run:
-        description: 'Dry run mode (do not update Notion)'
-        required: false
-        type: boolean
-        default: true
   schedule:
-    - cron: '30 1 * * *'
-
-concurrency: notion-bilingual
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 
 permissions:
-  contents: read
   id-token: write
+  contents: read
 
 jobs:
-  sync:
+  bilingual-sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
-      - name: Run bilingual sync
+      - name: Restore sync timestamp cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/notion-bilingual
+          key: notion-bilingual-state-${{ runner.os }}
+          restore-keys: |
+            notion-bilingual-state-
+
+      - name: Sync Notion pages (Part 3)
         env:
-          INPUT_PAGE: ${{ inputs.page }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run }}
-          EVENT_NAME: ${{ github.event_name }}
           NOTION_PAT: ${{ secrets.NOTION_PAT }}
           GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
           GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
           GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
           GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
         run: |
-          ARGS=()
-          if [ "$EVENT_NAME" = "schedule" ]; then
-            ARGS+=(--no-dry-run)
-          elif [ "$INPUT_DRY_RUN" = "false" ]; then
-            ARGS+=(--no-dry-run)
-          else
-            ARGS+=(--dry-run)
-          fi
+          python3 tools/bilingual/notion_fa.py
 
-          if [ -n "$INPUT_PAGE" ]; then
-            ARGS+=(--page "$INPUT_PAGE")
-          fi
-
-          python3 -m tools.bilingual.run "${ARGS[@]}"
-
-      - name: Post summary to Agent Bus
-        if: always()
+      - name: Sync Notion databases (Part 4)
         env:
-          RUN_ID: ${{ github.run_id }}
-          SERVER_URL: ${{ github.server_url }}
-          REPOSITORY: ${{ github.repository }}
-          JOB_STATUS: ${{ job.status }}
+          NOTION_PAT: ${{ secrets.NOTION_PAT }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          STATE_FILE: .cache/notion-bilingual/last_sync.json
         run: |
-          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
-          SUMMARY="Bilingual sync finished with status: ${JOB_STATUS}"
-          if [ -f "summary.txt" ]; then
-            SUMMARY=$(head -n 1 summary.txt)
-          fi
-          KIND="done"
-          if [ "$JOB_STATUS" != "success" ]; then
-            KIND="blocked"
-          fi
-          python3 tools/agent_bus.py post bilingual "$KIND" "$SUMMARY" "$RUN_URL" || true
+          python3 tools/bilingual/notion_db.py --since-file "$STATE_FILE"
+
+      - name: Save sync timestamp cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache/notion-bilingual
+          key: notion-bilingual-state-${{ runner.os }}-${{ github.run_id }}
