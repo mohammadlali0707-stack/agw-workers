@@ -6,6 +6,6 @@
   "pilot_latest_from_db": ["405befc7ddfb814abb94f1fa42ce5c21"],
   "models": ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"],
   "batch_chars": 6000,
-  "max_minutes": 300,
+  "max_minutes": 18,
   "glossary": {"lead": "لید", "pipeline": "قیف فروش", "workflow": "ورک‌فلو", "fleet": "ناوگان", "agent": "ایجنت", "deploy": "استقرار", "dashboard": "داشبورد", "prompt": "پرامپت", "bot": "ربات", "pitch": "پیشنهاد فروش", "runbook": "راهنمای اجرا", "shadow test": "آزمایش سایه"}
 }

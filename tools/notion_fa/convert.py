@@ -10,7 +10,9 @@ Modes: dry-run (counts only), pilot (config.pilot ids), full (all, --limit pages
 PUBLIC REPO: this script never prints page text, titles or translations — only IDs and counts.
 Stdlib only. Env: NOTION_PAT, GEMINI_API_KEY_1..4 / GEMINI_API_KEY.
 """
-import argparse, json, os, re, sys, time, urllib.error, urllib.request, datetime
+import argparse, json, os, re, sys, time, urllib.error, urllib.request, datetime, socket
+
+socket.setdefaulttimeout(30)
 
 NV = "2022-06-28"
 CFG = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "config", "notion_fa.json")))
@@ -23,13 +25,13 @@ def log(*a): print(*a, flush=True)
 
 # ---------------- Notion ----------------
 TOK = os.environ.get("NOTION_PAT", "")
-def n(method, path, body=None, tries=6):
+def n(method, path, body=None, tries=4):
     for a in range(tries):
         try:
             r = urllib.request.Request("https://api.notion.com/v1" + path, data=json.dumps(body).encode() if body is not None else None, method=method,
                                        headers={"Authorization": "Bearer " + TOK, "Notion-Version": NV, "Content-Type": "application/json"})
             time.sleep(0.35)
-            return json.load(urllib.request.urlopen(r, timeout=60))
+            return json.load(urllib.request.urlopen(r, timeout=30))
         except urllib.error.HTTPError as e:
             if e.code in (409, 429, 500, 502, 503, 504): time.sleep(2 + 4 * a); continue
             log(f"notion {method} {path.split('?')[0][:60]} -> HTTP {e.code}"); return None
@@ -47,15 +49,21 @@ def title_prop(p):
     return None
 def kids(bid, depth=0):
     out, cur = [], None
+    seen_cursors = set()
     while True:
         r = n("GET", f"/blocks/{bid}/children?page_size=100" + (f"&start_cursor={cur}" if cur else ""))
         if not r: break
-        for b in r.get("results", []):
+        results = r.get("results", [])
+        if not results: break
+        for b in results:
             if b.get("has_children") and depth < 6 and b["type"] not in ("child_page", "child_database", "synced_block"):
                 b["_kids"] = kids(b["id"], depth + 1)
             out.append(b)
-        if not r.get("has_more"): break
-        cur = r.get("next_cursor")
+        if not r.get("has_more") or not r.get("next_cursor"): break
+        next_cur = r.get("next_cursor")
+        if not next_cur or next_cur == cur or next_cur in seen_cursors: break
+        seen_cursors.add(next_cur)
+        cur = next_cur
     return out
 DBT = {}
 def db_title(dbid):
@@ -102,11 +110,13 @@ def pick_model():
     for k in KEYS:
         try:
             names = []; tok = ""
+            seen_tokens = set()
             while True:
                 d = json.load(urllib.request.urlopen(f"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key={k}" + (f"&pageToken={tok}" if tok else ""), timeout=30))
                 names += [m["name"].split("/")[-1] for m in d.get("models", []) if "generateContent" in m.get("supportedGenerationMethods", [])]
                 tok = d.get("nextPageToken")
-                if not tok: break
+                if not tok or tok in seen_tokens: break
+                seen_tokens.add(tok)
             for w in want:
                 if w in names: MODEL[0] = w; log("model:", w); return w
         except Exception as e: log("model probe", type(e).__name__)
@@ -123,21 +133,21 @@ def gemini(items, tl):
     body = {"contents": [{"role": "user", "parts": [{"text": json.dumps(items, ensure_ascii=False)}]}],
             "systemInstruction": {"parts": [{"text": SYS[tl] + RULES}]},
             "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
-    for a in range(8):
+    for a in range(4):
         k = KEYS[KI[0] % len(KEYS)]
         try:
             r = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={k}", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
             STATS["llm_calls"] += 1
-            d = json.load(urllib.request.urlopen(r, timeout=240))
+            d = json.load(urllib.request.urlopen(r, timeout=30))
             txt = "".join(p.get("text", "") for p in d["candidates"][0]["content"]["parts"])
             out = json.loads(re.search(r"\[.*\]", txt, re.S).group(0))
             m = {int(x["i"]): str(x["t"]) for x in out if isinstance(x, dict) and "i" in x and "t" in x}
             if set(m) != {it["i"] for it in items}: raise ValueError("item count mismatch")
             return m
         except urllib.error.HTTPError as e:
-            log(f"gemini HTTP {e.code}"); KI[0] += 1; time.sleep(5 + 10 * a if e.code == 429 else 3)
+            log(f"gemini HTTP {e.code}"); KI[0] += 1; time.sleep(3 + 5 * a if e.code == 429 else 2)
         except Exception as e:
-            log(f"gemini {type(e).__name__}"); KI[0] += 1; time.sleep(3)
+            log(f"gemini {type(e).__name__}"); KI[0] += 1; time.sleep(2)
     return None
 
 # rich_text <-> tagged text
@@ -336,22 +346,28 @@ def process(p, mode, write=True):
 
 def search_pages(since=None):
     cur = None
+    seen_cursors = set()
     while True:
         body = {"page_size": 100, "filter": {"property": "object", "value": "page"}, "sort": {"direction": "descending", "timestamp": "last_edited_time"}}
         if cur: body["start_cursor"] = cur
         r = n("POST", "/search", body)
         if not r: return
-        for p in r.get("results", []):
+        results = r.get("results", [])
+        if not results: return
+        for p in results:
             if since and p.get("last_edited_time", "") < since: return
             yield p
-        if not r.get("has_more"): return
-        cur = r.get("next_cursor")
+        if not r.get("has_more") or not r.get("next_cursor"): return
+        next_cur = r.get("next_cursor")
+        if not next_cur or next_cur == cur or next_cur in seen_cursors: return
+        seen_cursors.add(next_cur)
+        cur = next_cur
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--mode", default="dry-run", choices=["dry-run", "pilot", "full", "daily"]); ap.add_argument("--limit", type=int, default=200)
     a = ap.parse_args()
     if not TOK: raise SystemExit("NOTION_PAT missing")
-    t0 = time.time(); budget = CFG["max_minutes"] * 60
+    t0 = time.time(); budget = min(CFG.get("max_minutes", 18), 18) * 60
     if a.mode == "pilot":
         pages = [n("GET", f"/pages/{x}") for x in CFG["pilot"]]
         for dbid in CFG.get("pilot_latest_from_db", []):
@@ -367,7 +383,7 @@ def main():
             before = STATS["pages_done"]
             process(p, a.mode, write=a.mode != "dry-run")
             done += STATS["pages_done"] - before
-            if a.mode == "full" and done >= a.limit: log("page limit reached"); break
+            if (a.mode == "full" and done >= a.limit) or (a.mode == "dry-run" and STATS["pages_seen"] >= a.limit): log("page limit reached"); break
     if a.mode == "dry-run": STATS["est_llm_calls"] = int(STATS["chars"] / CFG["batch_chars"]) + STATS["pages_seen"] - STATS["pages_skipped"]
     log("SUMMARY " + json.dumps(STATS))
     with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as f: f.write("### notion_fa " + a.mode + "\n```\n" + json.dumps(STATS, indent=1) + "\n```\n")
