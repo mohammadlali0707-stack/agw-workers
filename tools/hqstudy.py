@@ -1,6 +1,7 @@
 """HQ Study job on a GitHub runner. Job: /tmp/job.json -> /tmp/out/result.json (+ data.json).
 actions: subs (title search on OpenSubtitles, or an uploaded subtitle file ref) | yt_search (YouTube search, metadata only) | yt_captions (one video's captions)
-| lrc (song lyrics + YouTube candidates) | gutenberg (public-domain book chapters) | tts (English voice note -> files/voice.ogg)."""
+| lrc (song lyrics + YouTube candidates) | gutenberg (public-domain book chapters) | tts (English voice note -> files/voice.ogg)
+| news (RSS headlines by topic) | article (full text of one news article)."""
 import gzip, io, json, os, re, subprocess, urllib.parse, urllib.request, zipfile
 OUT = "/tmp/out"; os.makedirs(OUT, exist_ok=True)
 job = json.load(open("/tmp/job.json"))
@@ -257,8 +258,59 @@ def tts():   # English voice note: edge-tts in parallel chunks -> one mono ogg/o
     subprocess.run([ff, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "/tmp/vo.txt", "-ac", "1", "-c:a", "libopus", "-b:a", "24k", "-application", "voip", OUT + "/files/voice.ogg"], check=True, timeout=300)
     done(True, {"path": f"jobs/{os.environ.get('CID', '')}/files/voice.ogg", "bytes": os.path.getsize(OUT + "/files/voice.ogg")})
 
+# ---------- owner 2026-10-27: 📰 News English — fresh headlines (RSS) and the full text of one article ----------
+FEEDS = {
+ "world": [("BBC", "https://feeds.bbci.co.uk/news/world/rss.xml"), ("The Guardian", "https://www.theguardian.com/world/rss"), ("NPR", "https://feeds.npr.org/1004/rss.xml")],
+ "business": [("BBC", "https://feeds.bbci.co.uk/news/business/rss.xml"), ("The Guardian", "https://www.theguardian.com/uk/business/rss"), ("NPR", "https://feeds.npr.org/1006/rss.xml")],
+ "tech": [("BBC", "https://feeds.bbci.co.uk/news/technology/rss.xml"), ("The Guardian", "https://www.theguardian.com/uk/technology/rss"), ("NPR", "https://feeds.npr.org/1019/rss.xml")],
+ "science": [("BBC", "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml"), ("The Guardian", "https://www.theguardian.com/science/rss"), ("NPR", "https://feeds.npr.org/1007/rss.xml")],
+ "health": [("BBC", "https://feeds.bbci.co.uk/news/health/rss.xml"), ("NPR", "https://feeds.npr.org/1128/rss.xml"), ("The Guardian", "https://www.theguardian.com/society/rss")],
+ "environment": [("The Guardian", "https://www.theguardian.com/environment/rss"), ("BBC", "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml")],
+ "culture": [("BBC", "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml"), ("The Guardian", "https://www.theguardian.com/uk/culture/rss"), ("NPR", "https://feeds.npr.org/1008/rss.xml")],
+ "sport": [("BBC", "https://feeds.bbci.co.uk/sport/rss.xml"), ("The Guardian", "https://www.theguardian.com/uk/sport/rss")],
+ "life": [("The Guardian", "https://www.theguardian.com/lifeandstyle/rss")],
+ "easy": [("VOA Learning English", "https://learningenglish.voanews.com/api/zmg_pl-vomx-tpeymtm")],
+}
+def _txt(h):
+    import html as H
+    return re.sub(r"\s+", " ", H.unescape(re.sub(r"<[^>]+>", " ", h or ""))).strip()
+def news():
+    import xml.etree.ElementTree as ET, email.utils
+    feeds = FEEDS.get(job.get("cat")) or FEEDS["world"]; n = int(job.get("n") or 12); per = n // len(feeds) + 3; out, seen = [], set()
+    for src, u in feeds:
+        k = 0
+        try:
+            for it in ET.fromstring(fetch(u, t=30)).iter("item"):
+                t, l = _txt(it.findtext("title")), (it.findtext("link") or "").strip()
+                if not t or not l or t.lower() in seen or "/live/" in l or "/video" in l or "/av/" in l: continue
+                try: ts = email.utils.parsedate_to_datetime(it.findtext("pubDate") or "").timestamp()
+                except Exception: ts = 0
+                seen.add(t.lower()); out.append({"title": t, "link": l, "desc": _txt(it.findtext("description"))[:300], "src": src, "ts": ts}); k += 1
+                if k >= per: break
+        except Exception: pass
+    if not out: done(False, error="No news feed answered.")
+    out.sort(key=lambda a: -a["ts"]); done(True, {"items": out[:n]}, count=len(out[:n]))
+def article():
+    url = job["url"]; raw = fetch(url, t=40).decode("utf-8", "replace")
+    m = re.search(r'<meta[^>]+property="og:title"[^>]+content="([^"]+)"', raw) or re.search(r"<title[^>]*>(.*?)</title>", raw, re.S)
+    title = _txt(m.group(1)) if m else ""
+    body = re.sub(r"<(script|style|aside|nav|footer|figure|header)[^>]*>.*?</\1>", " ", raw, flags=re.S | re.I)
+    ps = [_txt(x) for x in re.findall(r"<p[^>]*>(.*?)</p>", body, re.S | re.I)]
+    ps = [x for x in ps if len(x) > 60 and not re.search(r"cookie|subscribe|newsletter|sign up|copyright|all rights reserved|follow us", x, re.I)]
+    text = "\n\n".join(ps)
+    if len(text) < 800:
+        try:
+            import sys, site, importlib
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--user", "trafilatura"], capture_output=True, timeout=240)
+            importlib.invalidate_caches(); sys.path.append(site.getusersitepackages()); import trafilatura
+            t2 = trafilatura.extract(raw, include_comments=False, include_tables=False) or ""
+            if len(t2) > len(text): text = t2
+        except Exception: pass
+    if len(text) < 300: done(False, error="Could not read the article text.")
+    done(True, {"title": title, "url": url, "text": text[:20000]}, count=len(text))
+
 try:
-    {"subs": subs, "yt_search": yt_search, "notebook": notebook, "yt_captions": yt_captions, "lrc": lrc, "gutenberg": gutenberg, "tts": tts}[job.get("action")]()
+    {"subs": subs, "yt_search": yt_search, "notebook": notebook, "yt_captions": yt_captions, "lrc": lrc, "gutenberg": gutenberg, "tts": tts, "news": news, "article": article}[job.get("action")]()
 except SystemExit: raise
 except Exception as e:
     done(False, error=f"{type(e).__name__}: {str(e)[:200]}")
