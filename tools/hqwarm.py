@@ -44,12 +44,55 @@ def run_web(cid, job):
         save(cid, files); ok = json.loads(files["result.json"]).get("ok")
     except Exception as e: ok = False; save(cid, {"answer.txt": "", "result.json": json.dumps({"ok": False, "files": [], "error": f"warm web {type(e).__name__}"})})
     with LOCK: WEB[0] -= 1; STATS["jobs"] += 1; STATS["fail"] += (not ok)
+SAFE_ENV = {k: v for k, v in os.environ.items() if k not in ("RES_PAT", "COOKIE_PAT", "GEMINI_WEB_COOKIES", "ACTIONS_RUNTIME_TOKEN", "GITHUB_TOKEN")}
+def run_work(cid, job, home):
+    """Argon project subtask (owner 2026-10-27): optional repo checkout on branch argon/..., agy does the work, push the branch, report -> private repo."""
+    t = time.time(); work = f"{home}/work"; out, rc, info = "", 1, {}
+    H = ["-c", "http.https://github.com/.extraHeader=AUTHORIZATION: basic " + base64.b64encode(f"x-access-token:{T}".encode()).decode()]
+    def git(*a, cwd=None, check=False):
+        p = subprocess.run(["git", *H, *a], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+        if check and p.returncode: raise RuntimeError(f"git {a[0]} failed rc={p.returncode}")
+        return p.stdout.decode("utf-8", "replace")
+    try:
+        shutil.rmtree(work, ignore_errors=True); os.makedirs(work)
+        repo, br = job.get("repo"), job.get("branch") or f"argon/{cid}"
+        cwd = work
+        if repo:
+            url = f"https://github.com/{repo}.git"; cwd = f"{work}/repo"
+            if subprocess.run(["git", *H, "clone", "-q", "--branch", br, url, cwd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600).returncode:
+                shutil.rmtree(cwd, ignore_errors=True); git("clone", "-q", url, cwd, check=True); git("checkout", "-q", "-b", br, cwd=cwd, check=True)
+            git("config", "user.email", "argon-workers@leaddesk.local", cwd=cwd); git("config", "user.name", f"Argon worker ACC{ACC}", cwd=cwd)
+            base = git("rev-parse", "HEAD", cwd=cwd).strip(); info["base"] = base
+        pf = f"{home}/prompt.txt"; open(pf, "w").write(job.get("prompt", ""))
+        hq = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hqteam.py")
+        subprocess.run(["python3", hq, "brief", pf, job.get("topic", "")], env=dict(SAFE_ENV, HQTEAM_NAME=job.get("who", "argon-task")), timeout=60,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = subprocess.run(["/tmp/agy", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions", "--print-timeout", "1680s", "-p", open(pf).read()],
+                           cwd=cwd, env=dict(SAFE_ENV, HOME=home, HQTEAM_NAME=job.get("who", "argon-task")), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1750)
+        out, rc = p.stdout.decode("utf-8", "replace").strip(), p.returncode
+        if repo:
+            git("add", "-A", cwd=cwd)
+            if git("status", "--porcelain", cwd=cwd).strip(): git("commit", "-q", "-m", f"{job.get('title', 'Argon subtask')[:70]} ({cid})", cwd=cwd)
+            head = git("rev-parse", "HEAD", cwd=cwd).strip(); info["head"] = head; info["branch"] = br; info["repo"] = repo
+            if head != info["base"] or job.get("branch"):
+                info["pushed"] = subprocess.run(["git", *H, "push", "-q", "origin", f"HEAD:refs/heads/{br}"], cwd=cwd, stdout=subprocess.DEVNULL,
+                                                stderr=subprocess.DEVNULL, timeout=600).returncode == 0
+            info["diffstat"] = git("diff", "--stat", info["base"], "HEAD", cwd=cwd)[-3000:]
+            diff = git("diff", info["base"], "HEAD", cwd=cwd)
+        else: diff = ""
+    except subprocess.TimeoutExpired: out, rc = (out or "") + "\n[timed out]", 124; diff = ""
+    except Exception as e: out = (out or "") + f"\n[{type(e).__name__}: {str(e)[:200]}]"; diff = ""
+    ok = rc == 0 and bool(out) and not (len(out) < 600 and BAD.search(out)) and (not job.get("repo") or info.get("pushed", True))
+    res = {"ok": ok, "files": [], "warm": True, "work": True, "secs": round(time.time() - t, 1), **info, **({} if ok else {"error": f"agy rc={rc} " + out[-300:]})}
+    save(cid, {"answer.txt": out[-60000:], "result.json": json.dumps(res), "diff.txt": diff[:200000]})
+    with LOCK:
+        ACTIVE[0] -= 1; HOMES.append(home); STATS["jobs"] += 1; STATS["fail"] += (not ok)
 def run_job(cid, job, home):
     t = time.time(); out, rc = "", 1
     try:
         work = f"{home}/work"; shutil.rmtree(work, ignore_errors=True); os.makedirs(work)
         p = subprocess.run(["/tmp/agy", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions", "--print-timeout", "1680s",
-                            "-p", PRE + job.get("prompt", "")], cwd=work, env=dict(os.environ, HOME=home), stdout=subprocess.PIPE,
+                            "-p", PRE + job.get("prompt", "")], cwd=work, env=dict(SAFE_ENV, HOME=home), stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, timeout=1700)
         out, rc = p.stdout.decode("utf-8", "replace").strip(), p.returncode
     except subprocess.TimeoutExpired: out, rc = "timed out", 124
@@ -91,7 +134,8 @@ while True:
                 job = claim(it)
                 if job is None: continue
                 with LOCK: ACTIVE[0] += 1; home = HOMES.pop()
-                threading.Thread(target=run_job, args=(it["name"][:-5], job, home), daemon=True).start()
+                if it["name"].startswith("t-"): threading.Thread(target=run_work, args=(it["name"][2:-5], job, home), daemon=True).start()
+                else: threading.Thread(target=run_job, args=(it["name"][:-5], job, home), daemon=True).start()
                 etag = None   # re-list right away (more may be waiting)
         except urllib.error.HTTPError as e:
             if e.code == 304:   # unchanged -> free (does not count against the API limit)
