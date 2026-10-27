@@ -1,0 +1,276 @@
+# Runs in the PUBLIC agw-workers repo on behalf of the private repo mohammadlali0707-stack/Claud-Cloud-Project (owner 2026-10-27: everything runs in agw-workers).
+# Copied from mohammadlali0707-stack/Claud-Cloud-Project/.github/workflows/tbs-morning.yml; step output is written to a file, not to this public log.
+name: 'Remote Claud-Cloud-Project: TBS Morning Report'
+
+# THE OWNER'S STANDING QUESTION, ANSWERED BEFORE HE ASKS IT.
+#
+# tbs-manager.yml fills the queue at 03:30 UTC and wakes the fleet. This
+# workflow runs half an hour later, at 04:00 UTC, and files ONE new GitHub
+# issue that says what happened overnight -- commits, unmerged branches, the
+# pending-task queue, the MAP.md state block, and the gate suite -- so the
+# owner reads one issue instead of reconstructing all of that by hand.
+#
+# THE ALLOWED_BOTS TRAP, INVESTIGATED, NOT GUESSED AT.
+#
+# The concern raised for this file: claude-code-action's docs say a scheduled
+# run's actor is whoever last edited the cron syntax, and the action rejects
+# a non-human actor unless it is listed in `allowed_bots`. Checked with
+# `git log --format='%H %an' -- .github/workflows/tbs-manager.yml` on
+# 2026-09-04: every commit that ever touched that file's `cron:` line,
+# including the one that last changed its value, is authored
+# `claude[bot] <41898282+claude[bot]@users.noreply.github.com>` -- the same
+# git identity this session commits as (`Git user: claude[bot]`), which is
+# also who commits THIS file's own `cron:` line below. So the same fact holds
+# here by the same mechanism, not by re-measurement: until a human edits this
+# cron line, every 04:00 UTC run's `github.actor` resolves to `claude[bot]`,
+# a Bot account, not a User.
+#
+# Read against the pinned action source (tag `v1` = commit `86dc03f`, matching
+# what `uses: anthropics/claude-code-action@v1` below resolves to), two
+# separate checks exist and only one of them is skipped for schedule events:
+#   - `checkWritePermissions` (src/entrypoints/prepare.ts) runs only when
+#     `isEntityContext(context) || isWorkflowRunEvent(context)` -- a schedule
+#     event is neither, so this one is skipped, matching docs/security.md's
+#     "scheduled runs have no external actor".
+#   - `checkHumanActor` (src/github/validation/actor.ts), called from
+#     `prepareAgentMode` (src/modes/agent/index.ts:30) UNCONDITIONALLY for
+#     every event once a `prompt` is set (agent/automation mode, which both
+#     steps below use) -- schedule included. It looks up the actor's GitHub
+#     account type and rejects anything that is not `User` unless the actor
+#     is named in `allowed_bots`.
+# So the write-permission gate does not bite a scheduled run, but the
+# human-actor gate does, and docs/security.md's "scheduled runs have no
+# external actor" is only true of the first check, not the second -- this is
+# the gap the issue asked to check for. `allowed_bots: 'claude[bot]'` on both
+# steps below is what keeps the 04:00 UTC run from dying silently with
+# "Workflow initiated by non-human actor: claude (type: Bot)" the first
+# morning nobody has touched this file's cron line by hand.
+# MEASURED, NOT ASSUMED: only the two source files above were read (via
+# `gh api .../contents/...?ref=86dc03f...`); no scheduled run of this
+# workflow has fired yet, so the first real 04:00 UTC run is what actually
+# proves `allowed_bots` was enough, not this reasoning alone.
+#
+# CONVERTED TO @AGY 2026-09-09 (Issue #87):
+# Per owner instruction, report generation was converted from claude-code-action@v1
+# to dispatching through this repo's own @agy bot (agy-issue-bot.yml).
+# The morning-report job opens an @agy-prefixed issue titled "گزارش صبحگاهی — <date>"
+# using secrets.ACC6_PAT (mohammadlali0707-stack's personal access token,
+# author_association == OWNER). CHANGED from secrets.ACC0_PAT 2026-09-19:
+# `migrate-ccp-to-acc6.yml` (owner instruction, 2026-09-11) moved this repo
+# off ACC0 entirely, and `repair-acc6-before-acc0-deletion.yml` explicitly
+# predicted this exact failure mode ("workflows reading ACC0_PAT..ACC8_PAT
+# would start failing every scheduled run once ACC0 is gone") -- measured
+# real: run 35442621633 (schedule) and 35446749794/35446741766
+# (workflow_dispatch) all failed checkout with "remote: Repository not
+# found", ACC0_PAT's account no longer resolving this repo at all.
+# mohammadlali0707-stack is this repo's actual current owner, so ACC6_PAT
+# is what now produces author_association == OWNER, not a downgrade.
+# That issue event triggers agy-issue-bot.yml, which dispatches the task to the
+# agw-worker fleet, commits Reports/morning/<date>.md + Team/CHANGELOG.md, pushes,
+# and posts the Persian body as an issue comment.
+# The job ends cleanly after opening the issue (asynchronous dispatch).
+# Triggers and the idempotency guard remain intact.
+
+on:
+  schedule:
+    # 04:00 UTC = 07:30 Tehran (owner is UTC+3:30), half an hour after
+    # tbs-manager.yml's 03:30 UTC slot, so the queue has already been filled
+    # and the first workers may have already reported by the time this reads.
+    #
+    # THIS IS INSURANCE, NOT A FIX. Issue #54 measured `list_workflow_runs`
+    # on this workflow (Actions API, 2026-09-06 07:53 UTC) and found exactly
+    # ONE run in its whole life -- for the 04:00 line, four hours late -- with
+    # the workflow itself `active`, the cron unfiltered by weekday, and the
+    # schedule firing on this repo's actual default branch. WHY GitHub did not
+    # run the other firings is not known and is not claimed here. The "report
+    # already exists, skip" guard below makes extra shots at the same target
+    # free, so three cron lines cost nothing -- but they do not explain or
+    # repair whatever is dropping the others. Do not read three lines here as
+    # the problem being solved.
+    - cron: '0 4 * * *'
+    - cron: '0 6 * * *'
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Regenerate today's report even if Reports/morning/<date>.md already exists"
+        required: false
+        default: false
+        type: boolean
+  # A SECOND, INDEPENDENT TRIGGER -- because `schedule` is measured (above) to
+  # not be delivering, and `push` is not a guess: CLAUDE.md already records
+  # this repo's pushes firing "dozens of times a day" (12-15 minutes late,
+  # which is irrelevant to a once-a-day report).
+  #
+  # NO `branches:` FILTER, ON PURPOSE, MEASURED ELSEWHERE IN THIS REPO.
+  # `tbs-gates.yml`'s own history: a `push` trigger with `branches:` plus
+  # `paths-ignore:` produced ZERO runs across three pushes, and dropping
+  # `branches:` in favour of a bare `paths:` allowlist (the shape
+  # `tbs-image.yml` was already known to fire on) is what made it fire. This
+  # reuses that proven shape rather than re-testing the broken one. The paths
+  # below are chosen to fire on nearly every commit in this project, not
+  # because this job cares about their content -- `Team/CHANGELOG.md` and
+  # `Team/MAP.md` are the two files CLAUDE.md requires every session to touch
+  # before it stops. The `push-fallback` job below re-checks out the HUB
+  # branch explicitly (not `github.ref`), so a push on some other branch that
+  # happens to touch these paths still only ever inspects and dispatches the
+  # hub branch's report -- harmless, if occasionally redundant.
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  morning-report:
+    # push events are handled by the push-fallback job below, which only
+    # DISPATCHES this workflow (a fresh workflow_dispatch run) after deciding
+    # the schedule looks dead -- this job must not also run directly off the
+    # push that reached it, or the fallback and the direct run would race.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    concurrency:
+      group: tbs-morning
+      cancel-in-progress: false
+
+    steps:
+      - name: Check out the hub branch
+        uses: actions/checkout@v6
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+          # BOTH the checkout ref and the push refspec need the literal
+          # fallback -- vars.TBS_BRANCH does not exist in this repository.
+          ref: main
+          # Full history, not depth 1: check_changelog.py reports "0 commits
+          # checked" on a shallow clone and passes silently on that -- a gate
+          # that cannot run is not a gate that passed.
+          fetch-depth: 0
+          lfs: false
+
+      # A repeat run (extra cron line, manual dispatch, or the push fallback)
+      # must be free, or every other change here means duplicate issues.
+      # `Reports/morning/<date>.md` is the criterion, deliberately not an
+      # issue search: this session can read the git-tracked file, and issue #54
+      # is explicit that reading issues back depends on a token and path this
+      # gate does not use.
+      - name: Check for an existing report (idempotency guard)
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+          DATE="$(date -u +%F)"
+          REPORT="Reports/morning/${DATE}.md"
+          TITLE="گزارش صبحگاهی — ${DATE}"
+          FORCE="${{ github.event.inputs.force }}"
+          if [ -f "$REPORT" ] && [ "$FORCE" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "SKIP: ${REPORT} already exists for ${DATE} and force was not" \
+                 "set -- not filing a duplicate report."
+          else
+            # FIXED 2026-09-14: the file check alone let every push this
+            # session (dozens/day, per CLAUDE.md's own note on push
+            # frequency) open ANOTHER "@agy write today's report" issue for
+            # the same date, since the file never gets written until the
+            # (until today, never-firing -- see the AGY dispatch step's own
+            # comment below) issue bot actually does the work. Measured
+            # 2026-09-14: 9 duplicate open issues for today alone. Also
+            # check for an already-open issue with today's exact title
+            # before filing another.
+            EXISTING=$(gh issue list --repo "mohammadlali0707-stack/Claud-Cloud-Project" \
+              --state open --search "in:title \"${TITLE}\"" \
+              --json title --jq ".[] | select(.title == \"${TITLE}\") | .title" | head -1)
+            if [ -n "$EXISTING" ] && [ "$FORCE" != "true" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "SKIP: an open issue titled '${TITLE}' already exists and force was not" \
+                   "set -- not filing a duplicate issue."
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              if [ -f "$REPORT" ]; then
+                echo "RUN: ${REPORT} exists but force=true was passed -- regenerating."
+              else
+                echo "RUN: no report yet for ${DATE} -- proceeding."
+              fi
+            fi
+          fi
+
+      # ---------------------------------------------------------------- AGY dispatch
+      #
+      # FIXED 2026-09-14: this step's own issue never got processed since at
+      # least 2026-09-11 -- not because ACC0_PAT or `gh issue create` was
+      # broken (every run here "succeeded" and a real issue was opened every
+      # time, confirmed via list_issues), but because the ONE workflow that
+      # actually reads these issues (agy-issue-bot.yml) triggers only when
+      # the issue body ENDS with "@agy" (`endsWith(github.event.issue.body,
+      # '@agy')`, matching status-dashboard's own chat convention -- see its
+      # api/agy_create.js), while this step's body used to put "@agy" at the
+      # very START instead. Every run's trigger condition evaluated false,
+      # so agy-issue-bot.yml showed "skipped" on every one of them -- 24
+      # open issues piled up this way, 9 of them duplicate morning reports
+      # opened the same day, before anyone noticed. The body now ALSO ends
+      # with a literal trailing "@agy" line so the existing gate matches;
+      # the leading one stays for a human reader opening the issue.
+      - name: Open morning report issue for AGY
+        id: agy
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT }}
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+          set -e
+          DATE="$(date -u +%F)"
+          TITLE="گزارش صبحگاهی — ${DATE}"
+          cat << 'EOF' | sed 's/^          //' > /tmp/agy_prompt.txt
+          @agy Write today's morning report (__DATE__).
+
+          GATHER, each item with the tool that produces it -- do not answer any of these from memory or from a prior run:
+            1. Commits from the last 24 hours on this branch:
+               `git log --since="24 hours ago" --oneline`.
+            2. Unmerged branches: `git ls-remote --heads origin` (NOT `git branch -r`, which only shows what this shallow-vs-full checkout happened to fetch) to list every remote head. There are ~20 remote branches and growing, so do NOT loop `merge-base` once per branch -- a shell loop or $(...) here needs an approval this unattended run cannot grant, and it will stall. Do it in one pass instead: `git rev-list HEAD > /tmp/tbs_ancestors.txt`, then pipe the `ls-remote` output straight through `grep -F -f /tmp/tbs_ancestors.txt` for the merged branches and `grep -Fv -f /tmp/tbs_ancestors.txt` for the unmerged ones (both plain `git`/`grep`, no loop, no subshell). Name every branch from both greps in the report -- merged and unmerged alike.
+            3. `Team/tasks/pending/`: how many `*.json` files, and each file's `assigned_to` field.
+            4. The "## CURRENT STATE" block at the very top of `Team/MAP.md` -- that block only, nothing below it.
+            5. `GIT_TERMINAL_PROMPT=0 python3 Tools/run_gates.py` -- read its final summary line for the pass/fail/unmeasured counts. This can take a while; let it finish.
+
+          IF ANYTHING IS RED (any gate `fail`, or a gate `unmeasured` that the MAP.md block says should be measurable), draft -- inside the report body, as a clearly marked section -- the text of an @agy issue that would fix it: a title and a body someone could paste into a new issue. Do not file that second issue yourself; the morning report is the one issue this job creates.
+
+          REPORT RULES, and these are not optional:
+            - No claim without the tool call that produced it in this run.
+            - Cite an identifier (a hash, a filename, a branch name, a count) only if you saw it in a tool result during this run -- never reconstruct one from memory or from this prompt's own examples.
+            - Every negative statement ("no unmerged branches", "nothing is assigned", "no gate failed") names the instrument that produced it, in the same sentence.
+
+          OUTPUT AND COMMIT:
+            - Compose a Persian body covering the five gathered items above, each with its source named per the report rules. Paths, commands, file names and identifiers stay in English inside the Persian body; everything else is Persian.
+            - Write that exact Persian body verbatim to `Reports/morning/__DATE__.md`.
+            - Add one line to `Team/CHANGELOG.md` for that commit in the same push, so `check_changelog.py` stays green. Do not touch Team/MAP.md or any other file.
+            - Stage and commit your changes with git (the worker will push automatically):
+                git config user.email 'agy-bot@claud-cloud.local'
+                git config user.name 'AGY Bot'
+                git add -A && git commit -m "report: morning __DATE__"
+            - Follow the two-commit changelog rule if required by check_changelog.py (or ensure CHANGELOG.md records the commit hash).
+            - Print the entire Persian report to stdout as your final response so the issue bot posts it as the comment on this issue.
+
+          @agy
+          EOF
+          sed -i "s/__DATE__/${DATE}/g" /tmp/agy_prompt.txt
+
+          ISSUE_URL=$(gh issue create \
+            --repo "mohammadlali0707-stack/Claud-Cloud-Project" \
+            --title "${TITLE}" \
+            --body-file /tmp/agy_prompt.txt)
+          if [ -z "$ISSUE_URL" ]; then
+            echo "FAIL: gh issue create returned empty URL" >&2
+            exit 1
+          fi
+          echo "Dispatched morning report issue: ${ISSUE_URL}"
+          echo "### Morning Report Dispatched to AGY" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Issue:** ${ISSUE_URL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Date:** ${DATE}" >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------ push fallback
+  # Issue #54: `push` is a trigger this repo already measures as firing
+  # dozens of times a day (CLAUDE.md), unlike `schedule` here (see the `on:`
+  # comment above). This job is deliberately light -- a checkout and two
+  # shell checks, no agent -- and its only action on a real miss is to
+  # DISPATCH morning-report, not to duplicate its prompt.
