@@ -1,0 +1,80 @@
+# Runs in the PUBLIC agw-workers repo on behalf of the private repo mohammadlali0707-stack/Claud-Cloud-Project (owner 2026-10-27: everything runs in agw-workers).
+# Copied from mohammadlali0707-stack/Claud-Cloud-Project/.github/workflows/asset-inbox-backup.yml; step output is written to a file, not to this public log.
+name: 'Remote Claud-Cloud-Project: asset-inbox-backup'
+
+# Package D: Asset Inbox & Google Drive Backup
+# Daily scheduled sync and manual workflow_dispatch to back up Kaggle tbs-asset-inbox
+# dataset to Google Drive using rclone strictly as add/update without --delete.
+
+on:
+  schedule:
+    # Run daily at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: validate secrets and connections without uploading'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: asset-inbox-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: Kaggle Inbox to Google Drive Backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/Claud-Cloud-Project
+          token: ${{ secrets.ACC6_PAT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Kaggle CLI and rclone
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+          python3 -m pip install --upgrade pip kaggle
+          sudo apt-get update -qq
+          sudo apt-get install -qq -y rclone
+
+      - name: Validate Required Secrets
+        id: validate_secrets
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME || vars.KAGGLE_USERNAME }}
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+          python3 Tools/asset_inbox_backup.py --check-secrets
+
+      - name: Execute Backup & Sync
+        if: success()
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME || vars.KAGGLE_USERNAME || 'mohammadlali' }}
+          RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+          export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 Tools/asset_inbox_backup.py --run-backup --dry-run
+          else
+            python3 Tools/asset_inbox_backup.py --run-backup
+          fi
