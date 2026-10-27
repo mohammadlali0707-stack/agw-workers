@@ -74,6 +74,7 @@ on:
         type: string
 
 permissions:
+  id-token: write
   contents: read
   issues: write
 
@@ -279,6 +280,8 @@ jobs:
             printf '\n%s\n\n' "---"
             printf '%s\n' "$PROMPT_INPUT"
           } > /tmp/agy_prompt.txt
+          # owner 2026-10-27: team protocol (Agent Bus: read / ask a teammate / review / done)
+          curl -fsSL --max-time 15 https://raw.githubusercontent.com/mohammadlali0707-stack/agw-workers/main/tools/hqteam.py -o /tmp/hqteam.py && python3 /tmp/hqteam.py brief /tmp/agy_prompt.txt || true
           PROMPT=$(cat /tmp/agy_prompt.txt)
           USED_IDX="$PRIMARY_IDX"
           restore_token "$USED_IDX" || exit 1
