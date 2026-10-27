@@ -1,10 +1,10 @@
 """HQ warm worker: one long GitHub-hosted run per account that keeps the Antigravity CLI ready and serves
-Flash jobs from the PRIVATE repo queue (queue/acc<N>/<cid>.json) -> answer in jobs/<cid>/ (same as hq-gemini.yml).
+Flash jobs from the PRIVATE repo queue (branch wq<N>, queue/<cid>.json) -> answer in jobs/<cid>/ (same as hq-gemini.yml).
 Nothing sensitive is printed: this repo is public. Claim = delete the queue file (atomic; a loser gets 404/409)."""
 import base64, json, os, random, re, shutil, subprocess, threading, time, urllib.request, urllib.error
 R, T, ACC = os.environ["RES_REPO"], os.environ["RES_PAT"], os.environ["ACC"]
-PAR = int(os.environ.get("PAR", "3")); CLAIM_SECS = float(os.environ.get("CLAIM_SECS", "18900")); POLL = float(os.environ.get("POLL", "1.5"))
-T0 = time.time(); Q = f"queue/acc{ACC}"
+PAR = int(os.environ.get("PAR", "3")); CLAIM_SECS = float(os.environ.get("CLAIM_SECS", "18900")); POLL = float(os.environ.get("POLL", "1.0"))
+T0 = time.time(); BR = f"wq{ACC}"   # own queue branch per account: queue writes never race result commits on main
 PRE = ("You are being used as a plain chat model by an API. Reply ONLY with the answer text the request below asks for (keep any requested "
        "format such as JSON exactly). Do not create or edit files and do not run commands unless the request explicitly requires it.\n\n---\n\n")
 BAD = re.compile(r"too many requests|rate.?limit|\b429\b|quota|unauthorized|authentication failed|invalid (api key|token)|not logged in|timed? ?out|invalid model selection", re.I)
@@ -43,9 +43,9 @@ def run_job(cid, job, home):
     with LOCK:
         ACTIVE[0] -= 1; HOMES.append(home); STATS["jobs"] += 1; STATS["fail"] += (not ok)
 def claim(item):
-    try: _, job = gh("GET", f"/contents/{item['path']}", raw=True); job = json.loads(job)
+    try: _, job = gh("GET", f"/contents/{item['path']}?ref={BR}", raw=True); job = json.loads(job)
     except Exception: return None
-    try: gh("DELETE", f"/contents/{item['path']}", {"message": f"claim {item['name'][:-5]} acc{ACC}", "sha": item["sha"]})
+    try: gh("DELETE", f"/contents/{item['path']}", {"message": f"claim {item['name'][:-5]} acc{ACC}", "sha": item["sha"], "branch": BR})
     except urllib.error.HTTPError: return None   # someone else (overlapping run) claimed it
     except Exception: return None
     return job
@@ -58,7 +58,7 @@ while True:
     if claiming and active < PAR:
         try:
             STATS["polls"] += 1
-            x, items = gh("GET", f"/contents/{Q}", h={"If-None-Match": etag} if etag else None)
+            x, items = gh("GET", f"/contents/queue?ref={BR}", h={"If-None-Match": etag} if etag else None)
             etag = x.headers.get("ETag"); STATS["changes"] += 1
             for it in sorted((i for i in items if i["name"].endswith(".json")), key=lambda i: i["name"]):
                 with LOCK:
