@@ -53,3 +53,11 @@ PAGE["properties"]["Name"]["title"] = [rt("روال روزانه")]
 C.process(PAGE, "full")
 assert not [c for c in calls if c[0] in ("PATCH", "POST", "DELETE")], "idempotent: no writes on second run"
 print("ALL TESTS PASSED", json.dumps(C.STATS))
+
+
+def test_mismatched_tags_removed():
+    rt = [{"type": "text", "text": {"content": "Safety first"}, "annotations": {}}]
+    out = C.from_tagged("<s0>ایمنی اول</s2> و \\<s4>بیشتر", rt, [])
+    txt = "".join(x["text"]["content"] for x in out)
+    assert "<s" not in txt and "</s" not in txt and "ایمنی اول" in txt, txt
+test_mismatched_tags_removed(); print("TAG TEST OK")
