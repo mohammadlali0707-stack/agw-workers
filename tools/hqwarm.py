@@ -60,6 +60,7 @@ while True:
             STATS["polls"] += 1
             x, items = gh("GET", f"/contents/queue?ref={BR}", h={"If-None-Match": etag} if etag else None)
             etag = x.headers.get("ETag"); STATS["changes"] += 1
+            if int(x.headers.get("X-RateLimit-Remaining") or 9999) < 1500: time.sleep(20)
             for it in sorted((i for i in items if i["name"].endswith(".json")), key=lambda i: i["name"]):
                 with LOCK:
                     if ACTIVE[0] >= PAR: break
@@ -69,8 +70,12 @@ while True:
                 threading.Thread(target=run_job, args=(it["name"][:-5], job, home), daemon=True).start()
                 etag = None   # re-list right away (more may be waiting)
         except urllib.error.HTTPError as e:
-            if e.code == 404: etag = None   # empty queue folder disappears from git
-            elif e.code != 304: time.sleep(5)
+            if e.code == 304:   # unchanged -> free (does not count against the API limit)
+                try:
+                    if int(e.headers.get("X-RateLimit-Remaining") or 9999) < 1500: time.sleep(20)   # protect the shared ACC6 API budget
+                except ValueError: pass
+            elif e.code == 404: etag = None; time.sleep(10)   # queue/.keep missing -> every poll would count; slow down
+            else: time.sleep(10)
         except Exception: time.sleep(5)
     if time.time() - last_log > 1800: last_log = time.time(); print(f"t={int(time.time()-T0)}s {STATS}", flush=True)
     time.sleep(POLL)
