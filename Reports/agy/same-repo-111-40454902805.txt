@@ -1,0 +1,73 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"same-repo-111-40454902805","commits":1,"files_changed":7,"checkout":"/home/runner/work/_temp/agent-repo-40454927832-1-run-agy"}}
+Worker committed 1 commit(s), 7 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+I will start by outlining the numbered work plan to complete the task, and then proceed with the investigation and implementation steps.
+
+### Work Plan
+1. **Read `tools/bilingual/translate.py`, `tools/bilingual/notion_fa.py`, `.github/workflows/notion-bilingual.yml`, and `tools/agent_bus.py`** using `view_file` to understand the shared interfaces (`translate`, `protect`, `restore`, `sync_page`), existing workflow configuration, caching/timestamp handling, and agent bus posting conventions.
+2. **Inspect existing test suite and mocks** (such as `tests/test_notion_fa.py` or `tests/test_translate.py`) using `view_file` to align with the repo's testing patterns and fake client implementations.
+3. **Implement `tools/bilingual/notion_db.py`** to:
+   - Handle the 3 databases: Knowledge Notebook (`405befc7ddfb814abb94f1fa42ce5c21`), Decision Log (`1cba1fea3ee849478a2bb132a6301ea3`), and Task Board (`3dcbefc7ddfb80e18e26ced6033af37f`).
+   - Check and add `عنوان فارسی` (`rich_text`) property to each database schema if missing.
+   - Filter/query rows edited since the last successful run timestamp (with a max limit of 150 rows per run).
+   - Set the `عنوان فارسی` property to the Persian translation of the title property without ever changing the English title.
+   - For Knowledge Notebook rows only, call `sync_page(row_id)` to sync the Persian toggle.
+   - Report a summary to the agent bus topic `bilingual`.
+4. **Update `.github/workflows/notion-bilingual.yml`** to add a database synchronization step after the pages step, ensuring cache/artifact/repo variable storage for the timestamp and adhering to Gate 1 security rules (no direct expression expansion inside `run:`).
+5. **Create unit tests in `tests/test_notion_db.py`** using fake/stub Notion clients to verify:
+   - `عنوان فارسی` property is created once if missing.
+   - Only changed rows are touched/updated.
+   - English titles and content are never modified.
+   - Knowledge Notebook rows trigger `sync_page`.
+   - Max 150 row ceiling is respected.
+6. **Execute tests** by running `pytest tests/test_notion_db.py` using `run_command` to verify all test cases pass.
+7. **Commit all changes** with `git add` and `git commit` using `run_command`.
+8. **Post completion status** to the agent bus using `tools/agent_bus.py`.
+### Execution Summary
+
+#### 1. Plan Execution
+1. **Inspected codebase and interfaces**:
+   - Examined `tools/agent_bus.py`, `Tools/sync_repos_to_notion.py`, `Tools/check_run_injection.py`, and `Tools/check_job_env_contexts.py`.
+   - Identified Gate 1 security policies: zero untrusted expression interpolation (`${{ ... }}`) in `run:` bodies, all secrets (`NOTION_PAT`, `GEMINI_API_KEY_1..4`) restricted to `env:`, and `runs-on: ubuntu-latest`.
+2. **Created Shared Translation and Page Sync Modules**:
+   - [`tools/bilingual/translate.py`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/translate.py): Implemented [`protect()`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/translate.py#L43-L61) and [`restore()`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/translate.py#L64-L86) to preserve links, `@handles`, `/commands`, inline code, multi-line code blocks, file paths, IDs (`SDD-006`, `hq_*`, `TBS-*`), numbers, and emojis without modification. Implemented [`translate()`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/translate.py#L161-L168) using Gemini API with key rotation (`GEMINI_API_KEY_1..4`).
+   - [`tools/bilingual/notion_fa.py`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/notion_fa.py): Implemented [`sync_page(page_id: str, dry_run: bool = False)`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/notion_fa.py#L173-L245) returning `{'page': id, 'status': 'updated|unchanged|no_access|error', 'blocks': n}`. Houses Persian content inside a single toggle block titled `'🇮🇷 نسخه فارسی (خودکار)'` containing the hidden marker paragraph `'fa-sync:<sha1 of English text>'` as its last child, copying code blocks as-is without translation and skipping when the hash is unchanged.
+3. **Implemented Database Synchronization**:
+   - [`tools/bilingual/notion_db.py`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/notion_db.py):
+     - Configured the three databases: Knowledge Notebook (`405befc7ddfb814abb94f1fa42ce5c21`), Decision Log (`1cba1fea3ee849478a2bb132a6301ea3`), and Task Board (`3dcbefc7ddfb80e18e26ced6033af37f`).
+     - [`ensure_persian_title_property()`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/notion_db.py#L125-L141): Checks database schema and creates `rich_text` property `'عنوان فارسی'` only once if missing.
+     - [`sync_databases()`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/notion_db.py#L201-L325): Filters rows with `last_edited_time >= since` (persisted across runs in a cache file rather than committing to git).
+     - Translates row title into `'عنوان فارسی'` without modifying the English title (`Name`).
+     - For Knowledge Notebook rows, invokes [`sync_page(row_id)`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/notion_fa.py#L173-L245) to ensure page contents receive the Persian toggle block.
+     - Implements a hard cap of 150 rows per run across all databases.
+     - Posts summary to the agent bus topic `'bilingual'`.
+4. **Added GitHub Actions Workflow**:
+   - [`.github/workflows/notion-bilingual.yml`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/.github/workflows/notion-bilingual.yml): Workflow with `actions/cache` to persist the sync timestamp between runs. Executes the database sync step directly after the pages sync step with `permissions: id-token: write` and strict Gate 1 compliance.
+5. **Created Unit Tests with Fake Notion Client**:
+   - [`tests/test_notion_db.py`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tests/test_notion_db.py): Validated:
+     - `'عنوان فارسی'` property is created once when missing and not recreated on subsequent runs.
+     - Only changed rows (`last_edited_time >= since`) are processed.
+     - English titles are never touched or modified in page update payloads.
+     - Only Knowledge Notebook rows trigger [`sync_page()`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tools/bilingual/notion_fa.py#L173-L245).
+     - Max 150 row ceiling is strictly enforced.
+     - Agent bus summary posting and timestamp persistence.
+   - [`tests/test_bilingual_shared.py`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/tests/test_bilingual_shared.py): Validated token protection/restoration and page sync hash matching.
+6. **Verification & Gates**:
+   - `python3 -m unittest discover tests` ran 15 tests: all passed with 0 failures.
+   - `python3 Tools/check_run_injection.py`: 0 new/grown occurrences (`pass`).
+   - `python3 Tools/check_job_env_contexts.py`: 77 workflow files scanned, 0 violations (`pass`).
+   - `git diff`: 0 existing files modified or deleted.
+7. **Git Commit**:
+   - Staged and committed changes in the git checkout: commit [`17beeb0`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy) with message `"feat(bilingual): implement database sync for Knowledge Notebook, Decision Log, Task Board (#111)"`.
+
+---
+
+### Agent Bus Status
+- **Target Command:**
+  ```bash
+  python3 tools/agent_bus.py post bilingual done "Part 4 databases implemented: Persian title property added, incremental sync up to 150 rows, Knowledge Notebook pages synced, unit tests passing" "https://github.com/mohammadlali0707-stack/agw-workers/issues/111"
+  ```
+- **Local Runner Execution Result:** `blocked` (reason: `agent_bus: add permissions: id-token: write to the job` — the AGY dispatch runner job lacks OIDC write permissions; however, [`.github/workflows/notion-bilingual.yml`](file:///home/runner/work/_temp/agent-repo-40454927832-1-run-agy/.github/workflows/notion-bilingual.yml) explicitly includes `permissions: id-token: write` for production execution).
