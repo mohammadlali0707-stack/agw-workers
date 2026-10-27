@@ -1,0 +1,47 @@
+name: Notion Persian + English mirror (#112)
+# Owner decision 2026-10-27 (option 2): Persian main pages, English copy on separate mirror pages.
+# PUBLIC REPO: the script logs only IDs and counts, never page text.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dry-run | pilot | full | daily"
+        required: true
+        default: dry-run
+        type: choice
+        options: [dry-run, pilot, full, daily]
+      limit:
+        description: "full mode: max pages per run"
+        required: false
+        default: "200"
+  schedule:
+    - cron: "30 2 * * *"
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: notion-fa
+  cancel-in-progress: false
+jobs:
+  run:
+    if: github.event_name == 'workflow_dispatch' || vars.NOTION_FA_DAILY == 'on'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Stub tests
+        run: python3 tools/notion_fa/test_convert.py
+      - name: Convert
+        env:
+          NOTION_PAT: ${{ secrets.NOTION_PAT }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MODE: ${{ github.event_name == 'schedule' && 'daily' || inputs.mode }}
+          LIMIT: ${{ inputs.limit || '200' }}
+        run: python3 tools/notion_fa/convert.py --mode "$MODE" --limit "$LIMIT"
