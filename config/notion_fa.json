@@ -1,0 +1,11 @@
+{
+  "mirror_root": "741ac3536c114555bb8ff0def4178903",
+  "skip_db_title_words": ["Lead", "CRM", "Top 5", "Top 10", "Pipeline", "Content", "Post", "Draft", "Outreach", "Pitch", "Customer", "Client"],
+  "keep_heading_contains": ["🔄 Decision Log — auto-synced", "Change Log", "Handoff"],
+  "pilot": ["b512ec6b62184fe1b02d6a7795a11c13", "22814685831c4256b2af8da9dbc8e5bd"],
+  "pilot_latest_from_db": ["405befc7ddfb814abb94f1fa42ce5c21"],
+  "models": ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"],
+  "batch_chars": 6000,
+  "max_minutes": 300,
+  "glossary": {"lead": "لید", "pipeline": "قیف فروش", "workflow": "ورک‌فلو", "fleet": "ناوگان", "agent": "ایجنت", "deploy": "استقرار", "dashboard": "داشبورد", "prompt": "پرامپت", "bot": "ربات", "pitch": "پیشنهاد فروش", "runbook": "راهنمای اجرا", "shadow test": "آزمایش سایه"}
+}
