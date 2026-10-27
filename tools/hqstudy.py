@@ -234,8 +234,11 @@ def gutenberg():   # a public-domain book from Project Gutenberg, split into cha
     done(True, {"id": bk["id"], "title": bk.get("title"), "url": f"https://www.gutenberg.org/ebooks/{bk['id']}", "chapters": chs[:80]}, count=len(chs))
 def tts():   # English voice note: edge-tts in parallel chunks -> one mono ogg/opus file in files/voice.ogg
     import asyncio, sys, site, importlib
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--user", "edge-tts"], capture_output=True, timeout=240)
+    import shutil
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--user", "edge-tts"] + ([] if shutil.which("ffmpeg") else ["imageio-ffmpeg"]), capture_output=True, timeout=240)
     importlib.invalidate_caches(); sys.path.append(site.getusersitepackages()); import edge_tts
+    ff = shutil.which("ffmpeg")
+    if not ff: import imageio_ffmpeg; ff = imageio_ffmpeg.get_ffmpeg_exe()   # the runner image has no ffmpeg; this is a static build with libopus
     text, voice, rate = str(job.get("text") or "")[:6000], job.get("voice") or "en-US-AndrewNeural", job.get("rate") or "-5%"
     ch, cur = [], ""
     for line in text.split("\n"):
@@ -251,7 +254,7 @@ def tts():   # English voice note: edge-tts in parallel chunks -> one mono ogg/o
         await asyncio.gather(*(one(t, f) for t, f in zip(ch, parts)))
     asyncio.run(go())
     open("/tmp/vo.txt", "w").write("".join(f"file '{f}'\n" for f in parts)); os.makedirs(OUT + "/files", exist_ok=True)
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "/tmp/vo.txt", "-ac", "1", "-c:a", "libopus", "-b:a", "24k", "-application", "voip", OUT + "/files/voice.ogg"], check=True, timeout=300)
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "/tmp/vo.txt", "-ac", "1", "-c:a", "libopus", "-b:a", "24k", "-application", "voip", OUT + "/files/voice.ogg"], check=True, timeout=300)
     done(True, {"path": f"jobs/{os.environ.get('CID', '')}/files/voice.ogg", "bytes": os.path.getsize(OUT + "/files/voice.ogg")})
 
 try:
