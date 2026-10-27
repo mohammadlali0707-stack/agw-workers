@@ -1,0 +1,43 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"same-repo-113-40501193169","commits":1,"files_changed":3,"checkout":"/home/runner/work/_temp/agent-repo-40501224002-1-run-agy"}}
+Worker committed 1 commit(s), 3 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. Inspect `.github/workflows/` and repository contents using `run_command` (`ls -la .github/workflows`, `ls -la`) to identify the Notion workflow file, sync script, and agent bus mechanism.
+2. Read the workflow file and Notion sync script using `view_file` to analyze the job definition, network/API calls, timeout configurations, and pagination loop exit conditions.
+3. Edit the workflow file to add `timeout-minutes: 20` to the job definition, and edit the Notion sync script using `replace_file_content` to enforce explicit timeouts on all network/API requests and safe termination on pagination loops.
+4. Run validation checks using `run_command` (`git diff`, python/syntax verification) to ensure the changes are minimal, do not touch tests/checkers/governance files, and maintain functionality.
+5. Commit the changes inside the repository with `git add` and `git commit`, and post the result on the agent bus.
+### Work Plan & Execution Summary
+
+#### 1. Plan
+1. **Inspect `.github/workflows/` and repository configuration**: Located [`.github/workflows/notion-fa.yml`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/.github/workflows/notion-fa.yml), [`tools/notion_fa/convert.py`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/tools/notion_fa/convert.py), and [`config/notion_fa.json`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/config/notion_fa.json).
+2. **Read files to identify hanging points and missing timeouts**: Identified `timeout-minutes: 330` in the job definition, missing socket timeouts, an excessive 240s timeout in `gemini()` with 8 retries, and unbounded pagination loops in `search_pages()`, `kids()`, and `pick_model()` that lacked exit conditions if `next_cursor` is missing or repeated.
+3. **Apply Minimal Fixes**:
+   - Updated [`.github/workflows/notion-fa.yml`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/.github/workflows/notion-fa.yml#L26-L30): Set `timeout-minutes: 20` (reduced from 330).
+   - Updated [`tools/notion_fa/convert.py`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/tools/notion_fa/convert.py):
+     - Added `socket.setdefaulttimeout(30)`.
+     - Reduced Notion API request timeout in `n()` from 60s to 30s.
+     - Reduced Gemini API request timeout in `gemini()` from 240s to 30s, reducing max retry attempts from 8 to 4.
+     - Added strict pagination exit conditions in [`kids()`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/tools/notion_fa/convert.py#L48-L69) and [`search_pages()`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/tools/notion_fa/convert.py#L347-L363) preventing infinite loops if `results` is empty, `has_more` lacks `next_cursor`, or `next_cursor` repeats or cycles (`seen_cursors`).
+     - Added cycle prevention in `pick_model()` for `nextPageToken`.
+     - Enforced `budget = min(CFG.get("max_minutes", 18), 18) * 60` and limit termination in `dry-run` mode.
+   - Updated [`config/notion_fa.json`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/config/notion_fa.json#L8-L10): Set `max_minutes: 18` so the script gracefully completes summaries and bus notifications before the 20-minute job deadline.
+4. **Run Verification & Gate Checks**:
+   - Ran `python3 tools/notion_fa/test_convert.py`: All stub tests passed.
+   - Ran `python3 Tools/check_run_injection.py` and `python3 Tools/check_job_env_contexts.py`: Gate 1 checks passed with 0 violations.
+   - Validated YAML syntax for `.github/workflows/notion-fa.yml`.
+   - Verified pagination edge-case termination (empty results, null cursors, and repeating cursors).
+5. **Commit Changes**: Staged and committed changes inside the checkout with commit message `fix(notion-fa): enforce job timeout, network timeouts, and safe pagination (#113)`.
+
+---
+
+### Agent Bus Status
+- **Attempted Command:**
+  ```bash
+  python3 tools/agent_bus.py post bilingual done "Fix Notion Persian + English mirror (#112): timeout-minutes 20, network request timeouts set, pagination exit conditions verified" "https://github.com/mohammadlali0707-stack/agw-workers/issues/113"
+  ```
+- **Local Runner Result:** `blocked` (reason: `agent_bus: add permissions: id-token: write to the job` — local runner environment lacks GitHub Actions OIDC write permissions; [`.github/workflows/notion-fa.yml`](file:///home/runner/work/_temp/agent-repo-40501224002-1-run-agy/.github/workflows/notion-fa.yml#L19-L21) contains `permissions: id-token: write` for production workflow runs).
