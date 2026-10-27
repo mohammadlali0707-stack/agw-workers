@@ -1,0 +1,67 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"same-repo-108-40454897268","commits":1,"files_changed":3,"checkout":"/home/runner/work/_temp/agent-repo-40454920498-1-run-agy"}}
+Worker committed 1 commit(s), 3 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+I will follow the required planning step before writing files or running commands.
+
+### Work Plan
+1. **Inspect repository and conventions**: View `tools/agent_bus.py` and directory structure using `view_file` to understand repo conventions, dependencies, and agent bus posting syntax.
+2. **Implement `tools/bilingual/translate.py`**:
+   - `protect(text: str) -> tuple[str, list[str]]`: Pattern-match URLs, inline code (`...`), /commands, @handles, emails, file paths, IDs (e.g., `SDD-006`, `hq_*`), words with underscores (`snake_case`), and emojis/numbers/placeholders. Replace them with index placeholders `⟦0⟧, ⟦1⟧...` and return `(masked, keep)`.
+   - `restore(masked: str, keep: list[str] | dict[int, str]) -> str`: Replace `⟦N⟧` (and tolerant variations like `⟦ N ⟧`) with `keep[N]`.
+   - `translate(text: str, target: str = 'fa') -> str`:
+     - Checks in-run SHA1 cache first.
+     - Protects tokens using `protect()`.
+     - Handles chunking for text exceeding 4000 characters (preserving line breaks / sentence boundaries where possible).
+     - Primary engine: Google endpoint `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=fa&dt=t` via HTTP POST (`q` form parameter, joining `res[0][i][0]`).
+     - Fallback engine: Gemini API (rotating `GEMINI_API_KEY_1..4`, model `gemini-2.5-flash` or newer, system prompt requesting natural business Persian with output restricted to translation only).
+     - Retries up to 2 times with backoff on failure; raises exception if all attempts fail.
+     - Restores protected tokens using `restore()`.
+     - Caches result in SHA1 dictionary.
+3. **Implement `tests/test_bilingual_translate.py`**:
+   - Test `protect` and `restore` with various patterns (URLs, code, commands, handles, emails, file paths, IDs like `SDD-006`, `hq_test`, snake_case, tolerant placeholder spacing `⟦ 0 ⟧`).
+   - Test primary Google translation engine with stubbed `urllib.request` / `requests`.
+   - Test chunking behavior for long texts (>4000 chars) preserving line breaks.
+   - Test fallback to Gemini API when Google fails, key rotation among `GEMINI_API_KEY_1..4`.
+   - Test retry with backoff and error raising when both engines fail.
+   - Test in-run SHA1 cache.
+4. **Execute tests and verify**: Run `pytest` or `python3 -m unittest` using `run_command` to ensure all tests pass cleanly without network calls.
+5. **Agent bus & git commit**: Post completion to agent bus via `python3 tools/agent_bus.py post ...` and commit changes via `git add` and `git commit`.
+
+Let's begin by inspecting `tools/agent_bus.py`.
+### Execution Summary
+
+#### 1. Implementation of Translator Library
+Implemented the bilingual translator library in [`tools/bilingual/translate.py`](file:///home/runner/work/_temp/agent-repo-40454920498-1-run-agy/tools/bilingual/translate.py) and initialized the package [`tools/bilingual/__init__.py`](file:///home/runner/work/_temp/agent-repo-40454920498-1-run-agy/tools/bilingual/__init__.py):
+- **Token Protection & Restoration (`protect` / `restore`)**:
+  - `protect(text: str) -> tuple[str, list[str]]`: Pattern matches and replaces URLs, code blocks / inline code, `/commands`, `@handles`, emails, file paths (absolute, relative, home directory, multi-segment, and file extensions), IDs like `SDD-006`, and words with underscores (e.g. `hq_job`, `GEMINI_API_KEY_1`) with index placeholders `⟦0⟧, ⟦1⟧...`.
+  - `restore(masked: str, keep: Sequence[str] | Mapping[int | str, str]) -> str`: Reconstructs original tokens from `keep`, tolerating spaced brackets (e.g. `⟦ 0 ⟧`) and Eastern Arabic/Persian digits (e.g. `⟦ ۰ ⟧`).
+- **Translation Pipeline (`translate`)**:
+  - **In-Run Cache**: SHA1 hash caching using an in-memory dictionary `_CACHE`, preventing duplicate HTTP calls.
+  - **Chunking**: Text longer than 4000 characters is segmented along newline and sentence boundaries into chunks of $\le 4000$ characters without splitting placeholders or line breaks.
+  - **Primary Engine**: Google single translation endpoint (`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=fa&dt=t`) using HTTP POST with form field `q`, joining `res[0][i][0]` across segments to preserve line breaks.
+  - **Fallback Engine**: Gemini API (`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`) rotating through available keys `GEMINI_API_KEY_1..4` (and `GEMINI_API_KEY`), using prompt for natural business Persian output only.
+  - **Retries & Error Handling**: Exponential backoff with up to 2 retries per engine; raises `RuntimeError` if all attempts fail.
+
+#### 2. Unit Tests with Stubbed HTTP
+Created comprehensive unit tests in [`tests/test_bilingual_translate.py`](file:///home/runner/work/_temp/agent-repo-40454920498-1-run-agy/tests/test_bilingual_translate.py):
+- `test_protect_replaces_all_target_tokens`: Verifies masking and exact roundtrip restoration for URLs, code blocks, inline code, commands, handles, emails, file paths, IDs like `SDD-006`, and identifiers with underscores.
+- `test_restore_tolerates_spaces_and_eastern_digits`: Validates tolerance for whitespace (`⟦ 1 ⟧`) and Persian numerals (`⟦ ۲ ⟧`).
+- `test_restore_supports_dict_keep`: Validates dictionary mappings for `keep`.
+- `test_long_text_is_chunked_preserving_line_breaks`: Validates chunking behavior for text $> 4000$ characters.
+- `test_translate_chunks_long_text_and_preserves_placeholders`: Validates end-to-end multi-chunk translation calls preserving line breaks and placeholders.
+- `test_google_translate_success_and_placeholders_survive`: Validates Google Translate POST form payload and placeholder survival.
+- `test_google_translate_multi_segment_keeps_line_breaks`: Validates multi-line line break preservation across `[0][i][0]` segments.
+- `test_fallback_to_gemini_when_google_fails`: Validates automatic transition to Gemini API when Google endpoint returns errors.
+- `test_gemini_key_rotation`: Validates key rotation across `GEMINI_API_KEY_1..4`.
+- `test_retry_and_raise_on_total_failure`: Validates 2x backoff retries and `RuntimeError` raising upon total failure.
+- `test_in_run_sha1_cache`: Validates SHA1-indexed cache hits avoiding repeated HTTP requests.
+
+#### 3. Verification & Agent Bus Status
+- Executed full test suite (`python3 -m unittest discover tests`): 18 tests passed in 0.072s with zero network dependencies.
+- Attempted posting to the agent bus via `python3 tools/agent_bus.py post part1 bilingual done '...'`; the local runner environment does not have GitHub Actions OIDC write permissions (`ACTIONS_ID_TOKEN_REQUEST_URL`), which is logged and documented.
+- Committed all files cleanly:
+  - Commit: `34b75ee`
+  - Message: `[bilingual 1/4] Add translator library tools/bilingual/translate.py and tests (#108)`
