@@ -1,0 +1,81 @@
+name: notion-bilingual
+
+on:
+  workflow_dispatch:
+    inputs:
+      page:
+        description: 'Optional single Notion page ID to sync'
+        required: false
+        type: string
+        default: ''
+      dry_run:
+        description: 'Dry run mode (do not update Notion)'
+        required: false
+        type: boolean
+        default: true
+  schedule:
+    - cron: '30 1 * * *'
+
+concurrency: notion-bilingual
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run bilingual sync
+        env:
+          INPUT_PAGE: ${{ inputs.page }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+          NOTION_PAT: ${{ secrets.NOTION_PAT }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4: ${{ secrets.GEMINI_API_KEY_4 }}
+        run: |
+          ARGS=()
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            ARGS+=(--no-dry-run)
+          elif [ "$INPUT_DRY_RUN" = "false" ]; then
+            ARGS+=(--no-dry-run)
+          else
+            ARGS+=(--dry-run)
+          fi
+
+          if [ -n "$INPUT_PAGE" ]; then
+            ARGS+=(--page "$INPUT_PAGE")
+          fi
+
+          python3 -m tools.bilingual.run "${ARGS[@]}"
+
+      - name: Post summary to Agent Bus
+        if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          SUMMARY="Bilingual sync finished with status: ${JOB_STATUS}"
+          if [ -f "summary.txt" ]; then
+            SUMMARY=$(head -n 1 summary.txt)
+          fi
+          KIND="done"
+          if [ "$JOB_STATUS" != "success" ]; then
+            KIND="blocked"
+          fi
+          python3 tools/agent_bus.py post bilingual "$KIND" "$SUMMARY" "$RUN_URL" || true
