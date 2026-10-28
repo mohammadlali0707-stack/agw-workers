@@ -69,8 +69,17 @@ async def main():
     try: return await run_job(c, alias)
     finally:
         wb = await writeback(c, ck)
+        us = None
+        try:   # owner 2026-10-28: report the real Gemini-website usage % so the server can balance accounts
+            f = getattr(c, "_fetch_usage_info", None)
+            if f: await asyncio.wait_for(f(), 60)
+            u = getattr(c, "usage_info", None) or {}
+            us = {w: {"level": (u.get(w) or {}).get("usage_level"), "reset_at": (u.get(w) or {}).get("reset_at")} for w in ("current_5h", "weekly")}
+        except Exception: pass
         try:
-            r = json.load(open(OUT + "/result.json")); r["session"] = wb; json.dump(r, open(OUT + "/result.json", "w"))
+            r = json.load(open(OUT + "/result.json")); r["session"] = wb
+            if us: r["usage"] = us
+            json.dump(r, open(OUT + "/result.json", "w"))
         except Exception: pass
         try: await c.close()
         except Exception: pass
