@@ -336,3 +336,8 @@ def list_room_messages(
         since=since,
         after=after,
     )
+
+
+# Alias for sending room messages (supports text and/or file attachments)
+send_room_message = send_room_file
+

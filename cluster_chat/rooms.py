@@ -117,7 +117,14 @@ class RoomManager:
     def get_room_file(self, room: str) -> Path:
         """Resolve room message storage JSONL file safely."""
         validated_room = validate_room_name(room)
-        target = (self.messages_dir / f"{validated_room}.jsonl").resolve()
+        # Support 'workers' and 'workers-room' mapping to the same underlying file if one exists
+        file_stem = validated_room
+        if file_stem == "workers" and (self.messages_dir / "workers-room.jsonl").exists():
+            file_stem = "workers-room"
+        elif file_stem == "workers-room" and (self.messages_dir / "workers.jsonl").exists() and not (self.messages_dir / "workers-room.jsonl").exists():
+            file_stem = "workers"
+
+        target = (self.messages_dir / f"{file_stem}.jsonl").resolve()
 
         if not target.is_relative_to(self.messages_dir):
             raise ValueError(f"Path traversal detected for room '{room}'")

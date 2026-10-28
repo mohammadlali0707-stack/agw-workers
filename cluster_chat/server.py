@@ -333,6 +333,21 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"ok": True, "rooms": rooms})
             return
 
+        # 3b. Agent status list endpoint
+        if path in ("/api/cluster-chat/agents", "/api/agents"):
+            try:
+                from cluster_chat.telegram_bridge import KNOWN_AGENTS
+                agent_names = list(KNOWN_AGENTS)
+            except Exception:
+                agent_names = ["argon", "cookie", "coca", "workers"]
+
+            agents = [
+                {"name": name, "role": f"Cluster Agent ({name})", "status": "online"}
+                for name in agent_names
+            ]
+            self._send_json({"ok": True, "agents": agents, "count": len(agents)})
+            return
+
         # 4. Room messages & incremental polling endpoint
         # Matches /api/cluster-chat/rooms/<room>/messages, /api/rooms/<room>/messages,
         # or root endpoints /api/cluster-chat/messages, /api/messages, /messages

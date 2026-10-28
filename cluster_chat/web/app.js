@@ -3,6 +3,8 @@
  *
  * Client application for Cluster Chat Bridge.
  * Supports:
+ * - Full-viewport chat (100dvh flex layout) & compact room navigation
+ * - Default-hidden agent status modal, live polling, clipboard screenshot paste
  * - Host-agnostic root-relative URLs (zero airboxvip.top dependencies)
  * - Dynamic WebSocket / SSE origin resolution from window.location
  * - Resilient Connection Manager with automatic 4-second timeout & HTTP polling fallback (?since=)
@@ -20,11 +22,14 @@
     sender: "mohammad",
     targetAgent: "",
     stagedFiles: [],
-    knownRooms: ["main", "dm-argon", "workers-room"],
+    pollingTimer: null,
+    pollIntervalMs: 3000,
+    knownRooms: ["main", "dm-argon", "workers", "workers-room"],
     roomDescriptions: {
-      "main": "General cluster broadcast channel",
-      "dm-argon": "Direct agent chat with LeadDesk Argon",
-      "workers-room": "LeadDesk agent worker mesh channel"
+      "main": "کانال عمومی پیام‌های کلاستر | General cluster broadcast channel",
+      "dm-argon": "گفتگوی مستقیم با آرگون | Direct agent chat with LeadDesk Argon",
+      "workers": "کانال ارتباطی ایجنت‌های ورکر | LeadDesk agent worker mesh channel",
+      "workers-room": "کانال ارتباطی ایجنت‌های ورکر | LeadDesk agent worker mesh channel"
     },
     renderedMessageIds: new Set(),
     lastMessageId: null,
@@ -32,7 +37,7 @@
     isAtBottom: true
   };
 
-  // DOM Elements
+  // DOM Elements with safe lookups
   const elements = {
     roomList: document.getElementById("room-list"),
     currentRoomTitle: document.getElementById("current-room-title"),
@@ -44,7 +49,7 @@
     chatContainer: document.getElementById("chat-container"),
     dropOverlay: document.getElementById("drop-overlay"),
     messageList: document.getElementById("message-list"),
-    stagedTray: document.getElementById("staged-tray"),
+    stagedTray: document.getElementById("staged-tray") || document.getElementById("attachment-preview"),
     stagedCount: document.getElementById("staged-count"),
     stagedItems: document.getElementById("staged-items"),
     clearStagedBtn: document.getElementById("clear-staged-btn"),
@@ -54,13 +59,19 @@
     attachBtn: document.getElementById("attach-btn"),
     sendBtn: document.getElementById("send-btn"),
     refreshBtn: document.getElementById("refresh-btn"),
+    agentStatusToggle: document.getElementById("agent-status-toggle"),
+    agentStatusModal: document.getElementById("agent-status-modal"),
+    agentModalClose: document.getElementById("agent-modal-close"),
+    agentModalBackdrop: document.getElementById("agent-modal-backdrop"),
+    agentCardsContainer: document.getElementById("agent-cards-container"),
+    statusBadgeText: document.getElementById("status-badge-text"),
+    connectionStatus: document.getElementById("connection-status"),
     imageModal: document.getElementById("image-modal"),
     modalImg: document.getElementById("modal-img"),
     modalCaption: document.getElementById("modal-caption"),
     modalDownload: document.getElementById("modal-download"),
     modalClose: document.getElementById("modal-close"),
     statusIndicator: document.getElementById("status-indicator"),
-    connectionStatus: document.getElementById("connection-status"),
     pollInterval: document.getElementById("poll-interval"),
     headerStatusBadge: document.getElementById("header-status-badge")
   };
@@ -74,9 +85,9 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
   }
 
-  // Escape HTML strings for safety
+  // Escape HTML helper
   function escapeHtml(str) {
-    if (!str) return "";
+    if (!str && str !== 0) return "";
     return String(str)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -172,12 +183,12 @@
     if (success && btnElement) {
       const originalText = btnElement.innerHTML;
       btnElement.classList.add("copied");
-      btnElement.innerHTML = "✓ Copied!";
+      btnElement.innerHTML = "✓ کپی شد | Copied!";
       setTimeout(() => {
         btnElement.classList.remove("copied");
         btnElement.innerHTML = originalText;
       }, 2000);
-    } else if (!success) {
+    } else if (!success && typeof prompt === "function") {
       prompt("Copy to clipboard (Ctrl+C, Enter):", text);
     }
     return success;
@@ -293,51 +304,26 @@
         }
       }
 
-      // Fallback immediately if neither transport is available
-      this.activatePollingFallback("transport_unsupported");
+      // Neither realtime supported; fallback immediately
+      this.activatePollingFallback("realtime_unsupported");
     }
 
-    handleRealtimeSuccess(transportName) {
+    handleRealtimeSuccess(transportType) {
       this.mode = "LIVE";
-      this.updateStatus("live", "Live (Direct)", transportName);
       this.stopPollingLoop();
-      this.stopBackgroundProbe();
+      this.updateStatus("live", `Live (${transportType})`, "Connected");
     }
 
-    handleIncomingData(rawData) {
+    handleIncomingData(raw) {
       try {
-        const payload = typeof rawData === "string" ? JSON.parse(rawData) : rawData;
-        if (Array.isArray(payload)) {
-          appendNewMessages(payload);
-        } else if (payload && Array.isArray(payload.messages)) {
-          appendNewMessages(payload.messages);
-        } else if (payload && payload.message) {
-          appendNewMessages([payload.message]);
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (parsed && parsed.type === "message" && parsed.message) {
+          appendNewMessages([parsed.message]);
+        } else if (parsed && parsed.messages && Array.isArray(parsed.messages)) {
+          appendNewMessages(parsed.messages);
         }
       } catch (e) {
-        console.warn("Failed to parse realtime payload:", e);
-      }
-    }
-
-    cleanupRealtime() {
-      if (this.socket) {
-        try {
-          this.socket.onopen = null;
-          this.socket.onmessage = null;
-          this.socket.onerror = null;
-          this.socket.onclose = null;
-          this.socket.close();
-        } catch (_) {}
-        this.socket = null;
-      }
-      if (this.eventSource) {
-        try {
-          this.eventSource.onopen = null;
-          this.eventSource.onmessage = null;
-          this.eventSource.onerror = null;
-          this.eventSource.close();
-        } catch (_) {}
-        this.eventSource = null;
+        console.warn("Could not parse incoming realtime event:", e);
       }
     }
 
@@ -409,42 +395,32 @@
       if (this.backgroundProbeTimer) return;
       this.backgroundProbeTimer = setInterval(() => {
         if (this.mode === "POLLING" || this.mode === "OFFLINE") {
-          this.probeRealtimeInBackground();
+          console.log("Background probing realtime transport...");
+          this.attemptRealtimeTransport();
         }
       }, this.probeIntervalMs);
     }
 
-    stopBackgroundProbe() {
-      if (this.backgroundProbeTimer) {
-        clearInterval(this.backgroundProbeTimer);
-        this.backgroundProbeTimer = null;
+    cleanupRealtime() {
+      if (this.socket) {
+        try {
+          this.socket.onopen = null;
+          this.socket.onmessage = null;
+          this.socket.onerror = null;
+          this.socket.onclose = null;
+          this.socket.close();
+        } catch (_) {}
+        this.socket = null;
       }
-    }
-
-    probeRealtimeInBackground() {
-      if (typeof WebSocket === "undefined") return;
-      try {
-        const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${wsProto}//${window.location.host}/ws`;
-        const testWs = new WebSocket(wsUrl);
-
-        const timeout = setTimeout(() => {
-          try { testWs.close(); } catch (_) {}
-        }, 3500);
-
-        testWs.onopen = () => {
-          clearTimeout(timeout);
-          testWs.close();
-          // Realtime transport is available again!
-          this.attemptRealtimeTransport();
-        };
-        testWs.onerror = () => {
-          clearTimeout(timeout);
-        };
-        testWs.onclose = () => {
-          clearTimeout(timeout);
-        };
-      } catch (_) {}
+      if (this.eventSource) {
+        try {
+          this.eventSource.onopen = null;
+          this.eventSource.onmessage = null;
+          this.eventSource.onerror = null;
+          this.eventSource.close();
+        } catch (_) {}
+        this.eventSource = null;
+      }
     }
 
     updateStatus(statusKey, labelText, detailText) {
@@ -467,6 +443,83 @@
   // Create global connection manager instance
   const connectionManager = new ResilientConnectionManager();
 
+  // Toggle Agent Status & Identity Modal / Drawer
+  function toggleAgentStatusModal(show) {
+    if (!elements.agentStatusModal) return;
+    const isHidden = elements.agentStatusModal.classList.contains("hidden");
+    const willShow = typeof show === "boolean" ? show : isHidden;
+
+    if (willShow) {
+      elements.agentStatusModal.classList.remove("hidden");
+      if (elements.agentStatusToggle) {
+        elements.agentStatusToggle.setAttribute("aria-expanded", "true");
+      }
+    } else {
+      elements.agentStatusModal.classList.add("hidden");
+      if (elements.agentStatusToggle) {
+        elements.agentStatusToggle.setAttribute("aria-expanded", "false");
+      }
+    }
+  }
+
+  // Safely update Agent Status grid and compact header badge
+  function updateAgentStatus(agents) {
+    if (!Array.isArray(agents)) return;
+    const onlineAgents = agents.filter(a => (a.status || "").toLowerCase() === "online");
+    const count = onlineAgents.length;
+
+    if (elements.statusBadgeText) {
+      elements.statusBadgeText.textContent = `ایجنت‌ها (${count} آنلاین)`;
+    }
+
+    if (elements.agentCardsContainer) {
+      elements.agentCardsContainer.innerHTML = "";
+      agents.forEach(agent => {
+        const card = document.createElement("div");
+        const isOnline = (agent.status || "").toLowerCase() === "online";
+        card.className = "agent-card " + (isOnline ? "online" : "offline");
+        card.dataset.agent = agent.name;
+
+        let avatar = agent.avatar;
+        if (!avatar) {
+          if (agent.name === "argon") avatar = "🤖";
+          else if (agent.name === "mohammad") avatar = "👑";
+          else if (agent.name === "cookie") avatar = "🍪";
+          else if (agent.name === "coca") avatar = "🥤";
+          else avatar = "⚡";
+        }
+
+        card.innerHTML = `
+          <div class="agent-avatar">${avatar}</div>
+          <div class="agent-info">
+            <div class="agent-name">${escapeHtml(agent.name)} <span class="agent-badge">${escapeHtml(agent.role || "")}</span></div>
+            <div class="agent-state">
+              <span class="dot ${isOnline ? "online" : "offline"}"></span>
+              ${isOnline ? "آنلاین (آماده پردازش)" : "آفلاین"}
+            </div>
+          </div>
+        `;
+        elements.agentCardsContainer.appendChild(card);
+      });
+    }
+  }
+
+  // Fetch agent status from server endpoint (safely updates UI)
+  async function loadAgentStatus() {
+    try {
+      const res = await fetch("/api/cluster-chat/agents");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.agents)) {
+          updateAgentStatus(data.agents);
+        }
+      }
+    } catch (e) {
+      // Safe fallback - default cards remain visible inside modal
+      console.warn("Could not fetch agents status:", e);
+    }
+  }
+
   // Load active rooms from server API using relative path
   async function loadRooms() {
     try {
@@ -474,7 +527,8 @@
       if (res.ok) {
         const data = await res.json();
         if (data.ok && Array.isArray(data.rooms)) {
-          state.knownRooms = Array.from(new Set([...state.knownRooms, ...data.rooms]));
+          const mapped = data.rooms.map(r => (r === "workers-room" ? "workers" : r));
+          state.knownRooms = Array.from(new Set([...state.knownRooms, ...data.rooms, ...mapped]));
           renderRoomButtons();
         }
       }
@@ -483,26 +537,38 @@
     }
   }
 
-  // Render sidebar room buttons
+  // Render header room navigation pills
   function renderRoomButtons() {
     if (!elements.roomList) return;
     elements.roomList.innerHTML = "";
-    state.knownRooms.forEach(room => {
+
+    // Guarantee main, dm-argon, workers are present
+    const standardDisplayRooms = ["main", "dm-argon", "workers"];
+    const allRooms = Array.from(new Set([...standardDisplayRooms, ...state.knownRooms]));
+
+    allRooms.forEach(room => {
+      // Skip redundant workers-room button if workers is displayed
+      if (room === "workers-room" && allRooms.includes("workers")) {
+        return;
+      }
+
       const btn = document.createElement("button");
-      btn.className = "room-btn" + (room === state.currentRoom ? " active" : "");
+      btn.type = "button";
+      const isActive = room === state.currentRoom || (room === "workers" && state.currentRoom === "workers-room");
+      btn.className = "room-btn" + (isActive ? " active" : "");
       btn.dataset.room = room;
 
       let icon = "💬";
-      let badge = "room";
+      let badge = "اتاق";
       if (room === "main") {
         icon = "🌐";
-        badge = "general";
+        badge = "عمومی";
       } else if (room === "dm-argon") {
         icon = "🤖";
-        badge = "lead";
-      } else if (room === "workers-room") {
+        badge = "آرگون";
+      } else if (room === "workers" || room === "workers-room") {
         icon = "⚙️";
-        badge = "mesh";
+        badge = "ورکرها";
       }
 
       btn.innerHTML = `
@@ -526,17 +592,22 @@
     state.lastMessageId = null;
     state.lastMessageTimestamp = null;
 
-    // Update UI headers
-    if (elements.currentRoomTitle) elements.currentRoomTitle.textContent = room;
-    if (elements.dropRoomTarget) elements.dropRoomTarget.textContent = room;
+    // Update UI headers safely
+    if (elements.currentRoomTitle) {
+      elements.currentRoomTitle.textContent = room;
+    }
+    if (elements.dropRoomTarget) {
+      elements.dropRoomTarget.textContent = room;
+    }
     if (elements.currentRoomDesc) {
       elements.currentRoomDesc.textContent =
-        state.roomDescriptions[room] || "Active cluster communication channel";
+        state.roomDescriptions[room] || "کانال ارتباطی فعال کلاستر | Active cluster communication channel";
     }
 
     // Update active class on buttons
     document.querySelectorAll(".room-btn").forEach(btn => {
-      if (btn.dataset.room === room) {
+      const btnRoom = btn.dataset.room;
+      if (btnRoom === room || (btnRoom === "workers" && room === "workers-room")) {
         btn.classList.add("active");
       } else {
         btn.classList.remove("active");
@@ -544,10 +615,9 @@
     });
 
     if (elements.messageList) {
-      elements.messageList.innerHTML = '<div class="empty-state">Loading messages...</div>';
+      elements.messageList.innerHTML = '<div class="empty-state">در حال بارگذاری پیام‌ها...</div>';
     }
-
-    loadInitialRoomMessages(room, true);
+    fetchMessages(true);
   }
 
   /**
@@ -555,7 +625,8 @@
    */
   async function loadInitialRoomMessages(room, forceScroll = false) {
     try {
-      const res = await fetch(`/api/messages?room=${encodeURIComponent(room)}&limit=100`, {
+      const roomParam = encodeURIComponent(room || state.currentRoom);
+      const res = await fetch(`/api/cluster-chat/rooms/${roomParam}/messages?limit=100`, {
         cache: "no-store",
         headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" }
       });
@@ -568,49 +639,19 @@
       }
     } catch (err) {
       console.warn("Failed to load initial room messages:", err);
-      if (elements.messageList) {
-        elements.messageList.innerHTML = `<div class="empty-state">Could not load messages (${escapeHtml(err.message)}). Retrying...</div>`;
+      if (elements.messageList && state.renderedMessageIds.size === 0) {
+        elements.messageList.innerHTML = `<div class="empty-state error">خطا در بارگذاری پیام‌ها (${escapeHtml(err.message)})</div>`;
       }
     }
   }
 
-  /**
-   * Render initial full message list for room
-   */
-  function renderInitialMessages(messages, forceScroll = false) {
-    if (!elements.messageList) return;
-    elements.messageList.innerHTML = "";
-    state.renderedMessageIds.clear();
-    state.lastMessageId = null;
-    state.lastMessageTimestamp = null;
-
-    if (!messages || messages.length === 0) {
-      elements.messageList.innerHTML =
-        '<div class="empty-state">No messages in #' + escapeHtml(state.currentRoom) + ' yet. Start the conversation!</div>';
-      return;
-    }
-
-    messages.forEach(msg => {
-      if (!msg || !msg.message_id) return;
-      if (state.renderedMessageIds.has(msg.message_id)) return;
-
-      state.renderedMessageIds.add(msg.message_id);
-      state.lastMessageId = msg.message_id;
-      state.lastMessageTimestamp = msg.created_at;
-
-      const msgElem = createMessageElement(msg);
-      elements.messageList.appendChild(msgElem);
-    });
-
-    if (forceScroll && elements.chatContainer) {
-      elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
-    }
+  // Fetch messages for current room (compatibility helper)
+  async function fetchMessages(forceScroll = false) {
+    await loadInitialRoomMessages(state.currentRoom, forceScroll);
   }
 
   /**
-   * Incremental HTTP Polling:
-   * Requests new messages using GET /api/messages?since=<lastMessageIdOrTimestamp>
-   * Returns empty array if no new messages exist.
+   * Incremental HTTP polling using root-relative endpoint GET /api/messages?since=...
    */
   async function pollMessages() {
     if (!state.currentRoom) return;
@@ -625,7 +666,6 @@
       params.set("limit", "100");
     }
 
-    // Using root-relative endpoint GET /api/messages?since=...
     const res = await fetch(`/api/messages?${params.toString()}`, {
       cache: "no-store",
       headers: {
@@ -652,50 +692,77 @@
     if (!elements.messageList || !Array.isArray(messages) || messages.length === 0) return;
 
     // Filter out messages already rendered in DOM
-    const newMessages = messages.filter(
-      msg => msg && msg.message_id && !state.renderedMessageIds.has(msg.message_id)
-    );
+    const toRender = messages.filter(m => m && m.message_id && !state.renderedMessageIds.has(m.message_id));
+    if (toRender.length === 0) return;
 
-    if (newMessages.length === 0) return;
-
-    // Remove empty-state placeholder if present
+    // Remove empty-state if present
     const emptyState = elements.messageList.querySelector(".empty-state");
     if (emptyState) {
       emptyState.remove();
     }
 
-    // Check if user is near bottom before appending
-    const isNearBottom = elements.chatContainer
-      ? elements.chatContainer.scrollHeight - elements.chatContainer.scrollTop - elements.chatContainer.clientHeight < 120
-      : true;
-
-    let hasOwnMessage = false;
-
-    newMessages.forEach(msg => {
+    toRender.forEach(msg => {
       state.renderedMessageIds.add(msg.message_id);
       state.lastMessageId = msg.message_id;
       state.lastMessageTimestamp = msg.created_at;
-
-      if ((msg.sender || "").toLowerCase() === state.sender.toLowerCase()) {
-        hasOwnMessage = true;
-      }
 
       const msgElem = createMessageElement(msg);
       elements.messageList.appendChild(msgElem);
     });
 
-    if (elements.chatContainer && (isNearBottom || hasOwnMessage)) {
-      elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
+    if (state.isAtBottom) {
+      scrollToBottom();
     }
   }
 
   /**
-   * Create a single chat message DOM element
+   * Render initial full message list for room
+   */
+  function renderInitialMessages(messages, forceScroll = false) {
+    if (!elements.messageList) return;
+    elements.messageList.innerHTML = "";
+    state.renderedMessageIds.clear();
+    state.lastMessageId = null;
+    state.lastMessageTimestamp = null;
+
+    if (!messages || messages.length === 0) {
+      elements.messageList.innerHTML =
+        '<div class="empty-state">هیچ پیامی در اتاق #' +
+        escapeHtml(state.currentRoom) +
+        ' وجود ندارد. گفتگو را آغاز کنید!</div>';
+      return;
+    }
+
+    messages.forEach(msg => {
+      if (!msg || !msg.message_id) return;
+      if (state.renderedMessageIds.has(msg.message_id)) return;
+
+      state.renderedMessageIds.add(msg.message_id);
+      state.lastMessageId = msg.message_id;
+      state.lastMessageTimestamp = msg.created_at;
+
+      const msgElem = createMessageElement(msg);
+      elements.messageList.appendChild(msgElem);
+    });
+
+    if (forceScroll || state.isAtBottom) {
+      scrollToBottom();
+    }
+  }
+
+  function renderMessages(messages, forceScroll = false) {
+    renderInitialMessages(messages, forceScroll);
+  }
+
+  /**
+   * Build DOM element for a single message with zero airboxvip links and full relative URLs
    */
   function createMessageElement(msg) {
     const msgItem = document.createElement("div");
     msgItem.className = "message-item";
-    msgItem.dataset.messageId = msg.message_id;
+    if (msg.message_id) {
+      msgItem.dataset.messageId = msg.message_id;
+    }
 
     if (msg.target_agent) {
       msgItem.classList.add("highlight-target");
@@ -750,7 +817,7 @@
               <div class="photo-meta">
                 <span class="photo-name" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</span>
                 <span class="photo-size">${sizeStr}</span>
-                <a class="btn-link" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download photo">⬇️</a>
+                <a class="btn-link" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="دانلود عکس">⬇️</a>
               </div>
             </div>
           `;
@@ -779,15 +846,12 @@
               </div>
               <div class="doc-actions">
                 ${att.local_path ? `
-                  <button class="btn-badge" onclick="window.ClusterChatUI.copyToClipboard('${localPathEscaped}', this)" title="Copy local path for local agent use">
-                    📋 Path
+                  <button type="button" class="btn-badge btn-badge-sm" onclick="window.ClusterChatUI.copyPath('${localPathEscaped}', this)" title="کپی مسیر محلی برای ایجنت">
+                    📋 مسیر
                   </button>
                 ` : ""}
-                <button class="btn-badge" onclick="window.ClusterChatUI.copyToClipboard('${escapeHtml(publicUrl)}', this)" title="Copy relative URL">
-                  🔗 Link
-                </button>
-                <a class="btn-badge" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download file">
-                  ⬇️ Save
+                <a class="btn-badge" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="ذخیره فایل">
+                  ⬇️ دریافت
                 </a>
               </div>
             </div>
@@ -797,16 +861,11 @@
       attachmentsHtml += "</div>";
     }
 
-    const messageTextEscaped = escapeHtml(cleanText);
-
     msgItem.innerHTML = `
       <div class="message-header">
         <span class="${senderClass}">${escapeHtml(msg.sender)}</span>
         ${targetHtml}
         <span class="message-time">${timeFormatted}</span>
-        ${msg.text ? `
-          <button class="btn-badge-sm" onclick="window.ClusterChatUI.copyToClipboard('${messageTextEscaped}', this)" title="Copy message text">📋</button>
-        ` : ""}
       </div>
       ${bodyHtml}
       ${attachmentsHtml}
@@ -815,16 +874,22 @@
     return msgItem;
   }
 
-  // Stage files for upload
-  function stageFiles(fileList) {
-    if (!fileList || fileList.length === 0) return;
-    for (let i = 0; i < fileList.length; i++) {
-      state.stagedFiles.push(fileList[i]);
-    }
+  // Scroll message container to bottom
+  function scrollToBottom() {
+    if (!elements.chatContainer) return;
+    elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
+  }
+
+  // Stage files for attachment upload
+  function stageFiles(files) {
+    if (!files || files.length === 0) return;
+    Array.from(files).forEach(f => {
+      state.stagedFiles.push(f);
+    });
     renderStagedTray();
   }
 
-  // Remove file from staging tray
+  // Unstage attachment by index
   function unstageFile(index) {
     if (index >= 0 && index < state.stagedFiles.length) {
       state.stagedFiles.splice(index, 1);
@@ -834,39 +899,45 @@
 
   // Render staging tray preview
   function renderStagedTray() {
-    if (!elements.stagedTray || !elements.stagedItems) return;
+    if (!elements.stagedTray) return;
+
     if (state.stagedFiles.length === 0) {
       elements.stagedTray.classList.add("hidden");
-      elements.stagedItems.innerHTML = "";
+      if (elements.stagedItems) elements.stagedItems.innerHTML = "";
       return;
     }
 
     elements.stagedTray.classList.remove("hidden");
     if (elements.stagedCount) elements.stagedCount.textContent = state.stagedFiles.length;
-    elements.stagedItems.innerHTML = "";
+    if (elements.stagedItems) {
+      elements.stagedItems.innerHTML = "";
 
-    state.stagedFiles.forEach((file, idx) => {
-      const item = document.createElement("div");
-      item.className = "staged-item";
+      state.stagedFiles.forEach((file, idx) => {
+        const item = document.createElement("div");
+        item.className = "staged-item";
 
-      const isImage = file.type && file.type.startsWith("image/");
-      let thumbHtml = "📄";
-      if (isImage) {
-        const objUrl = URL.createObjectURL(file);
-        thumbHtml = `<img class="staged-thumb" src="${objUrl}" alt="thumb">`;
-      }
+        const isImage = file.type && file.type.startsWith("image/");
+        let thumbHtml = "📄";
+        if (isImage) {
+          const objUrl = URL.createObjectURL(file);
+          thumbHtml = `<img class="staged-thumb" src="${objUrl}" alt="thumb">`;
+        }
 
-      item.innerHTML = `
-        ${thumbHtml}
-        <span title="${escapeHtml(file.name)}">${escapeHtml(file.name)} (${formatBytes(file.size)})</span>
-        <button type="button" class="btn-remove" title="Remove attachment" onclick="window.ClusterChatUI.unstage(${idx})">×</button>
-      `;
-      elements.stagedItems.appendChild(item);
-    });
+        item.innerHTML = `
+          ${thumbHtml}
+          <span class="staged-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+          <span class="staged-size">${formatBytes(file.size)}</span>
+          <button type="button" class="btn-remove-staged" onclick="window.ClusterChatUI.unstage(${idx})" title="حذف پیوست">×</button>
+        `;
+
+        elements.stagedItems.appendChild(item);
+      });
+    }
   }
 
-  // Send message with or without attachments using root-relative paths
+  // Send message or upload attachments
   async function sendMessage() {
+    if (!elements.messageText) return;
     const text = elements.messageText.value.trim();
     const hasFiles = state.stagedFiles.length > 0;
 
@@ -874,22 +945,24 @@
       return;
     }
 
-    // Determine active sender
-    let activeSender = elements.senderSelect.value;
+    // Determine active sender safely
+    let activeSender = (elements.senderSelect && elements.senderSelect.value) || "mohammad";
     if (activeSender === "__custom__") {
-      activeSender = elements.customSenderInput.value.trim();
+      activeSender = elements.customSenderInput ? elements.customSenderInput.value.trim() : "";
       if (!activeSender) {
-        alert("Please specify a custom sender name.");
-        elements.customSenderInput.focus();
+        alert("لطفاً نام فرستنده دلخواه را وارد کنید.");
+        if (elements.customSenderInput) elements.customSenderInput.focus();
         return;
       }
     }
     state.sender = activeSender;
 
-    const activeTarget = elements.targetAgentSelect.value || null;
+    const activeTarget = (elements.targetAgentSelect && elements.targetAgentSelect.value) || null;
 
-    elements.sendBtn.disabled = true;
-    elements.sendBtn.innerHTML = "<span>Sending...</span> ⏳";
+    if (elements.sendBtn) {
+      elements.sendBtn.disabled = true;
+      elements.sendBtn.innerHTML = "<span>در حال ارسال...</span> ⏳";
+    }
 
     try {
       if (hasFiles) {
@@ -927,7 +1000,8 @@
           forward_telegram: true
         };
 
-        const res = await fetch(`/api/cluster-chat/rooms/${encodeURIComponent(state.currentRoom)}/messages`, {
+        const roomParam = encodeURIComponent(state.currentRoom);
+        const res = await fetch(`/api/cluster-chat/rooms/${roomParam}/messages`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -940,49 +1014,64 @@
       }
 
       // Reset composer
-      elements.messageText.value = "";
+      if (elements.messageText) {
+        elements.messageText.value = "";
+        elements.messageText.style.height = "";
+      }
       state.stagedFiles = [];
       renderStagedTray();
 
-      // Trigger immediate incremental poll to fetch the new message
+      // Trigger immediate poll to fetch the new message
       await connectionManager.executePoll();
+      await fetchMessages(true);
     } catch (err) {
       console.error("Failed to send message:", err);
-      alert("Error sending message: " + err.message);
+      alert("خطا در ارسال پیام: " + err.message);
     } finally {
-      elements.sendBtn.disabled = false;
-      elements.sendBtn.innerHTML = "<span>Send</span> 🚀";
-      elements.messageText.focus();
+      if (elements.sendBtn) {
+        elements.sendBtn.disabled = false;
+        elements.sendBtn.innerHTML = "<span>ارسال</span> 🚀";
+      }
+      if (elements.messageText) {
+        elements.messageText.focus();
+      }
     }
   }
 
   // Open Lightbox Photo Modal with normalized root-relative URLs
   function openPhoto(publicUrl, filename, downloadUrl) {
+    if (!elements.imageModal) return;
     const cleanPublicUrl = normalizeAttachmentUrl(publicUrl);
     const cleanDownloadUrl = normalizeAttachmentUrl(downloadUrl);
 
-    elements.modalImg.src = cleanPublicUrl;
-    elements.modalCaption.textContent = filename;
-    elements.modalDownload.href = cleanDownloadUrl;
-    elements.modalDownload.setAttribute("download", filename);
+    if (elements.modalImg) elements.modalImg.src = cleanPublicUrl;
+    if (elements.modalCaption) elements.modalCaption.textContent = filename;
+    if (elements.modalDownload) {
+      elements.modalDownload.href = cleanDownloadUrl;
+      elements.modalDownload.setAttribute("download", filename);
+    }
     elements.imageModal.classList.remove("hidden");
   }
 
   function closePhoto() {
+    if (!elements.imageModal) return;
     elements.imageModal.classList.add("hidden");
-    elements.modalImg.src = "";
   }
 
-  // Setup Event Listeners
+  // Setup DOM event handlers
   function setupEvents() {
     // Sender selector custom toggle
     if (elements.senderSelect) {
       elements.senderSelect.addEventListener("change", e => {
         if (e.target.value === "__custom__") {
-          elements.customSenderInput.classList.remove("hidden");
-          elements.customSenderInput.focus();
+          if (elements.customSenderInput) {
+            elements.customSenderInput.classList.remove("hidden");
+            elements.customSenderInput.focus();
+          }
         } else {
-          elements.customSenderInput.classList.add("hidden");
+          if (elements.customSenderInput) {
+            elements.customSenderInput.classList.add("hidden");
+          }
           state.sender = e.target.value;
         }
       });
@@ -992,6 +1081,7 @@
     if (elements.refreshBtn) {
       elements.refreshBtn.addEventListener("click", () => {
         loadInitialRoomMessages(state.currentRoom, true);
+        loadAgentStatus();
       });
     }
 
@@ -1000,8 +1090,10 @@
       elements.attachBtn.addEventListener("click", () => {
         elements.fileInput.click();
       });
+    }
 
-      // File input change
+    // File input change
+    if (elements.fileInput) {
       elements.fileInput.addEventListener("change", e => {
         stageFiles(e.target.files);
         elements.fileInput.value = "";
@@ -1016,6 +1108,26 @@
       });
     }
 
+    // Agent status modal toggle
+    if (elements.agentStatusToggle) {
+      elements.agentStatusToggle.addEventListener("click", () => {
+        toggleAgentStatusModal();
+      });
+    }
+
+    // Agent status modal close
+    if (elements.agentModalClose) {
+      elements.agentModalClose.addEventListener("click", () => {
+        toggleAgentStatusModal(false);
+      });
+    }
+
+    if (elements.agentModalBackdrop) {
+      elements.agentModalBackdrop.addEventListener("click", () => {
+        toggleAgentStatusModal(false);
+      });
+    }
+
     // Composer form submission
     if (elements.composerForm) {
       elements.composerForm.addEventListener("submit", e => {
@@ -1024,8 +1136,13 @@
       });
     }
 
-    // Textarea enter key submit (Shift+Enter for newline)
+    // Textarea enter key submit (Shift+Enter for newline) & auto-resizing
     if (elements.messageText) {
+      elements.messageText.addEventListener("input", () => {
+        elements.messageText.style.height = "auto";
+        elements.messageText.style.height = Math.min(elements.messageText.scrollHeight, 120) + "px";
+      });
+
       elements.messageText.addEventListener("keydown", e => {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
@@ -1035,16 +1152,25 @@
     }
 
     // Lightbox close
-    if (elements.modalClose && elements.imageModal) {
+    if (elements.modalClose) {
       elements.modalClose.addEventListener("click", closePhoto);
+    }
+    if (elements.imageModal) {
       const backdrop = elements.imageModal.querySelector(".modal-backdrop");
       if (backdrop) backdrop.addEventListener("click", closePhoto);
-      document.addEventListener("keydown", e => {
-        if (e.key === "Escape" && !elements.imageModal.classList.contains("hidden")) {
+    }
+
+    // Global keyboard listener (Escape dismisses modals)
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape") {
+        if (elements.imageModal && !elements.imageModal.classList.contains("hidden")) {
           closePhoto();
         }
-      });
-    }
+        if (elements.agentStatusModal && !elements.agentStatusModal.classList.contains("hidden")) {
+          toggleAgentStatusModal(false);
+        }
+      }
+    });
 
     // Clipboard Paste Listener (Supports screenshots and files pasted directly)
     window.addEventListener("paste", e => {
@@ -1056,16 +1182,15 @@
 
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
-        if (item.kind === "file" || (item.type && item.type.startsWith("image/"))) {
+        if (item.kind === "file") {
           const file = item.getAsFile();
           if (file) {
-            let filename = file.name;
-            if (!filename || filename === "image.png") {
-              const ext = file.type === "image/jpeg" ? ".jpg" : ".png";
-              filename = `screenshot_${Date.now()}${ext}`;
+            let renamedFile = file;
+            if (file.name === "image.png" || !file.name) {
+              const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+              renamedFile = new File([file], `screenshot_${timestamp}.png`, { type: file.type });
             }
-            const renamed = new File([file], filename, { type: file.type });
-            pastedFiles.push(renamed);
+            pastedFiles.push(renamedFile);
           }
         }
       }
@@ -1075,51 +1200,54 @@
       }
     });
 
-    // Drag and Drop Handling over chat container
-    if (elements.dropOverlay) {
+    // Drag & Drop File Upload over Chat Container
+    if (elements.chatContainer && elements.dropOverlay) {
       let dragCounter = 0;
 
-      const dragEnterHandler = e => {
-        e.preventDefault();
-        e.stopPropagation();
+      ["dragenter", "dragover", "dragleave", "drop"].forEach(eventName => {
+        elements.chatContainer.addEventListener(eventName, e => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+      });
+
+      elements.chatContainer.addEventListener("dragenter", e => {
         dragCounter++;
         elements.dropOverlay.classList.add("active");
-      };
+      });
 
-      const dragLeaveHandler = e => {
-        e.preventDefault();
-        e.stopPropagation();
+      elements.chatContainer.addEventListener("dragleave", e => {
         dragCounter--;
         if (dragCounter <= 0) {
           dragCounter = 0;
           elements.dropOverlay.classList.remove("active");
         }
-      };
+      });
 
-      const dragOverHandler = e => {
-        e.preventDefault();
-        e.stopPropagation();
-      };
-
-      const dropHandler = e => {
-        e.preventDefault();
-        e.stopPropagation();
+      elements.chatContainer.addEventListener("drop", e => {
         dragCounter = 0;
         elements.dropOverlay.classList.remove("active");
-
-        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-          stageFiles(e.dataTransfer.files);
+        const dt = e.dataTransfer;
+        if (dt && dt.files && dt.files.length > 0) {
+          stageFiles(dt.files);
         }
-      };
+      });
+    }
 
-      window.addEventListener("dragenter", dragEnterHandler);
-      window.addEventListener("dragleave", dragLeaveHandler);
-      window.addEventListener("dragover", dragOverHandler);
-      window.addEventListener("drop", dropHandler);
+    // Scroll listener for sticky scroll-to-bottom behavior
+    if (elements.chatContainer) {
+      elements.chatContainer.addEventListener("scroll", () => {
+        const threshold = 80;
+        const distFromBottom =
+          elements.chatContainer.scrollHeight -
+          elements.chatContainer.scrollTop -
+          elements.chatContainer.clientHeight;
+        state.isAtBottom = distFromBottom <= threshold;
+      });
     }
   }
 
-  // Expose global helpers for HTML event handlers and test harness
+  // Expose global helpers for HTML event handlers, programmatic control, and test harnesses
   window.ClusterChatUI = {
     unstage: unstageFile,
     openPhoto: openPhoto,
@@ -1132,7 +1260,10 @@
     getState: () => state,
     appendNewMessages: appendNewMessages,
     renderInitialMessages: renderInitialMessages,
-    createMessageElement: createMessageElement
+    createMessageElement: createMessageElement,
+    toggleAgentModal: toggleAgentStatusModal,
+    updateAgentStatus: updateAgentStatus,
+    switchRoom: switchRoom
   };
 
   // Initialization
@@ -1140,6 +1271,7 @@
     renderRoomButtons();
     setupEvents();
     await loadRooms();
+    await loadAgentStatus();
     await loadInitialRoomMessages(state.currentRoom, true);
 
     // Start resilient connection manager (attempts realtime with 4s fallback to 2.5s polling)

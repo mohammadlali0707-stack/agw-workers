@@ -1,124 +1,104 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cluster Chat Bridge</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>کلاستر چت | Cluster Chat Bridge</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="app-layout">
-    <!-- Sidebar / Room Navigation -->
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-icon">⚡</div>
-        <div class="brand-text">
-          <h2>Cluster Chat</h2>
-          <span class="subtext">Bridge &amp; Storage</span>
+  <div class="chat-app app-layout" id="chat-app">
+    <!-- Compact Top Header (flex: 0 0 auto, 48px-56px height) -->
+    <header class="chat-header">
+      <div class="header-start">
+        <div class="brand">
+          <span class="brand-icon">⚡</span>
+          <span class="brand-name">کلاستر چت</span>
         </div>
-      </div>
 
-      <div class="section-title">Rooms</div>
-      <nav id="room-list" class="room-nav">
-        <button class="room-btn active" data-room="main">
-          <span class="room-icon">🌐</span>
-          <span class="room-name">main</span>
-          <span class="room-badge">general</span>
-        </button>
-        <button class="room-btn" data-room="dm-argon">
-          <span class="room-icon">🤖</span>
-          <span class="room-name">dm-argon</span>
-          <span class="room-badge">lead</span>
-        </button>
-        <button class="room-btn" data-room="workers-room">
-          <span class="room-icon">⚙️</span>
-          <span class="room-name">workers-room</span>
-          <span class="room-badge">mesh</span>
-        </button>
-      </nav>
+        <!-- Room Switcher Tabs / Pills (main, dm-argon, workers) -->
+        <nav id="room-list" class="room-nav" aria-label="اتاق‌های گفتگو">
+          <button class="room-btn active" data-room="main" type="button">
+            <span class="room-icon">🌐</span>
+            <span class="room-name">main</span>
+            <span class="room-badge">عمومی</span>
+          </button>
+          <button class="room-btn" data-room="dm-argon" type="button">
+            <span class="room-icon">🤖</span>
+            <span class="room-name">dm-argon</span>
+            <span class="room-badge">آرگون</span>
+          </button>
+          <button class="room-btn" data-room="workers" data-room-alt="workers-room" type="button">
+            <span class="room-icon">⚙️</span>
+            <span class="room-name">workers</span>
+            <span class="room-badge">ورکرها</span>
+          </button>
+        </nav>
 
-      <div class="section-title">Participant Identity</div>
-      <div class="identity-box">
-        <label for="sender-select">Active Sender:</label>
-        <div class="select-wrapper">
-          <select id="sender-select">
-            <option value="mohammad" selected>mohammad (Lead)</option>
-            <option value="argon">argon (Planner / LeadDesk)</option>
-            <option value="cookie">cookie (Agent Worker)</option>
-            <option value="coca">coca (Agent Worker)</option>
-            <option value="agy-worker">agy-worker (ACC)</option>
-            <option value="__custom__">Custom Sender...</option>
-          </select>
-        </div>
-        <input type="text" id="custom-sender-input" class="hidden" placeholder="Enter sender name...">
-
-        <label for="target-agent-select" style="margin-top: 10px;">Target Agent:</label>
-        <div class="select-wrapper">
-          <select id="target-agent-select">
-            <option value="" selected>Broadcast (All)</option>
-            <option value="argon">argon</option>
-            <option value="cookie">cookie</option>
-            <option value="coca">coca</option>
-            <option value="agy-worker">agy-worker</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="system-status">
-        <div id="status-indicator" class="status-indicator polling"></div>
-        <span id="connection-status">Connecting...</span>
-        <span id="poll-interval" class="poll-interval">2.5s poll</span>
-      </div>
-    </aside>
-
-    <!-- Main Chat Workspace -->
-    <main class="chat-workspace">
-      <!-- Header -->
-      <header class="chat-header">
-        <div class="header-room-info">
-          <span class="room-hash">#</span>
+        <!-- Current room metadata (accessible / compact) -->
+        <div class="current-room-meta sr-only">
           <h1 id="current-room-title">main</h1>
-          <span id="current-room-desc" class="room-description">General cluster broadcast channel</span>
+          <span id="current-room-desc">کانال عمومی پیام‌های کلاستر</span>
         </div>
-        <div class="header-actions">
-          <span id="header-status-badge" class="connection-badge polling" title="Active connection mode">Connecting...</span>
-          <button id="refresh-btn" class="btn-secondary" title="Refresh messages">🔄 Refresh</button>
-        </div>
-      </header>
+      </div>
 
-      <!-- Message Area with Drag and Drop Zone -->
+      <div class="header-end">
+        <span id="header-status-badge" class="connection-badge polling" title="Active connection mode">Connecting...</span>
+
+        <!-- Compact Agent Status Toggle Button / Badge in Header -->
+        <button
+          type="button"
+          id="agent-status-toggle"
+          class="btn-agent-status"
+          aria-expanded="false"
+          aria-controls="agent-status-modal"
+          title="مشاهده وضعیت ایجنت‌ها و هویت فرستنده"
+        >
+          <span class="status-indicator online"></span>
+          <span id="status-badge-text" class="status-badge-text">ایجنت‌ها (۴ آنلاین)</span>
+        </button>
+
+        <!-- Refresh Button -->
+        <button id="refresh-btn" class="btn-refresh" type="button" title="بروزرسانی پیام‌ها">
+          <span class="refresh-icon">🔄</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Chat Workspace (flex: 1 1 auto, claiming >80% screen space) -->
+    <main class="chat-workspace">
+      <!-- Chat Messages Viewport (flex: 1 1 auto; min-height: 0; overflow-y: auto) -->
       <div id="chat-container" class="chat-container">
-        <!-- Drag & Drop Overlay -->
+        <!-- Drag & Drop Zone Overlay -->
         <div id="drop-overlay" class="drop-overlay">
           <div class="drop-message">
             <span class="drop-icon">📥</span>
-            <h3>Drop photos or documents here</h3>
-            <p>Upload directly to <strong id="drop-room-target">main</strong></p>
+            <h3>تصاویر یا اسناد را اینجا رها کنید</h3>
+            <p>بارگذاری مستقیم در اتاق <strong id="drop-room-target">main</strong></p>
           </div>
         </div>
 
-        <!-- Message List -->
+        <!-- Chat Messages Stream -->
         <div id="message-list" class="message-list">
-          <div class="empty-state">Loading messages...</div>
+          <div class="empty-state">در حال بارگذاری پیام‌ها...</div>
         </div>
       </div>
 
-      <!-- Attachment Staging Tray -->
-      <div id="staged-tray" class="staged-tray hidden">
-        <div class="staged-header">
-          <span>Staged Attachments (<span id="staged-count">0</span>)</span>
-          <button id="clear-staged-btn" class="btn-link">Clear all</button>
-        </div>
-        <div id="staged-items" class="staged-items"></div>
-      </div>
-
-      <!-- Composer Bar -->
+      <!-- Clean Compose Bar (flex: 0 0 auto; width: 100%; box-sizing: border-box;) -->
       <footer class="composer-container">
-        <!-- Hidden file input for attachment picker -->
+        <!-- Attachment Staging Tray / Preview Strip (Cleanly above input row, hidden when empty) -->
+        <div id="staged-tray" class="staged-tray attachment-preview hidden">
+          <div class="staged-header">
+            <span>فایل‌های پیوست (<span id="staged-count">0</span>)</span>
+            <button type="button" id="clear-staged-btn" class="btn-link">پاک کردن همه</button>
+          </div>
+          <div id="staged-items" class="staged-items"></div>
+        </div>
+
         <input type="file" id="file-input" multiple class="hidden">
 
         <form id="composer-form" class="composer-form">
-          <button type="button" id="attach-btn" class="btn-attach" title="Attach file or photo">
+          <button type="button" id="attach-btn" class="btn-attach" title="افزودن فایل یا تصویر">
             📎
           </button>
 
@@ -126,30 +106,128 @@
             id="message-text"
             class="message-input"
             rows="1"
-            placeholder="Type a message or paste a screenshot (Enter to send, Shift+Enter for newline)..."
+            placeholder="پیام خود را بنویسید (Enter برای ارسال، Shift+Enter برای خط جدید)..."
+            dir="auto"
           ></textarea>
 
-          <button type="submit" id="send-btn" class="btn-send" title="Send message">
-            <span>Send</span> 🚀
+          <button type="submit" id="send-btn" class="btn-send" title="ارسال پیام">
+            <span>ارسال</span> 🚀
           </button>
         </form>
-
-        <div class="composer-tips">
-          <span>💡 <strong>Tip:</strong> Paste screenshots directly with <kbd>Ctrl+V</kbd> / <kbd>Cmd+V</kbd>, drag &amp; drop files anywhere, or click 📎 to browse.</span>
-        </div>
       </footer>
     </main>
-  </div>
 
-  <!-- Fullscreen Image Modal / Lightbox -->
-  <div id="image-modal" class="image-modal hidden">
-    <div class="modal-backdrop"></div>
-    <div class="modal-content">
-      <button id="modal-close" class="modal-close" title="Close preview">×</button>
-      <img id="modal-img" src="" alt="Photo preview">
-      <div class="modal-footer">
-        <span id="modal-caption" class="modal-caption"></span>
-        <a id="modal-download" class="btn-primary" href="" target="_blank" download>Download Original</a>
+    <!-- Agent Status & Identity Modal/Drawer (Default-hidden, 0px screen space when closed) -->
+    <div
+      id="agent-status-modal"
+      class="agent-status-modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="agent-modal-title"
+    >
+      <div class="modal-backdrop" id="agent-modal-backdrop"></div>
+      <div class="agent-modal-card">
+        <div class="modal-header">
+          <div class="modal-title-wrap">
+            <span class="status-indicator online"></span>
+            <h2 id="agent-modal-title">وضعیت ایجنت‌ها و تنظیمات هویت</h2>
+          </div>
+          <button type="button" id="agent-modal-close" class="modal-close" aria-label="بستن">×</button>
+        </div>
+
+        <div class="modal-body">
+          <!-- Active Agent Status Cards (Hidden by default behind toggle) -->
+          <section class="agent-status-section">
+            <h3 class="section-title">ایجنت‌های فعال کلاستر</h3>
+            <div id="agent-cards-container" class="agent-cards-grid">
+              <div class="agent-card online" data-agent="argon">
+                <div class="agent-avatar">🤖</div>
+                <div class="agent-info">
+                  <div class="agent-name">argon <span class="agent-badge">Planner / LeadDesk</span></div>
+                  <div class="agent-state"><span class="dot online"></span> آنلاین (آماده پردازش)</div>
+                </div>
+              </div>
+              <div class="agent-card online" data-agent="cookie">
+                <div class="agent-avatar">🍪</div>
+                <div class="agent-info">
+                  <div class="agent-name">cookie <span class="agent-badge">Worker ACC</span></div>
+                  <div class="agent-state"><span class="dot online"></span> آنلاین (آماده تسک)</div>
+                </div>
+              </div>
+              <div class="agent-card online" data-agent="coca">
+                <div class="agent-avatar">🥤</div>
+                <div class="agent-info">
+                  <div class="agent-name">coca <span class="agent-badge">Worker ACC</span></div>
+                  <div class="agent-state"><span class="dot online"></span> آنلاین (آماده تسک)</div>
+                </div>
+              </div>
+              <div class="agent-card online" data-agent="agy-worker">
+                <div class="agent-avatar">⚡</div>
+                <div class="agent-info">
+                  <div class="agent-name">agy-worker <span class="agent-badge">ACC Worker</span></div>
+                  <div class="agent-state"><span class="dot online"></span> آنلاین (فعال)</div>
+                </div>
+              </div>
+              <div class="agent-card online" data-agent="mohammad">
+                <div class="agent-avatar">👑</div>
+                <div class="agent-info">
+                  <div class="agent-name">mohammad <span class="agent-badge">Team Lead</span></div>
+                  <div class="agent-state"><span class="dot online"></span> فعال</div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Participant Identity Settings -->
+          <section class="identity-section">
+            <h3 class="section-title">تنظیمات هویت پیام</h3>
+            <div class="identity-box">
+              <label for="sender-select">فرستنده فعال (Active Sender):</label>
+              <div class="select-wrapper">
+                <select id="sender-select">
+                  <option value="mohammad" selected>mohammad (Lead)</option>
+                  <option value="argon">argon (Planner / LeadDesk)</option>
+                  <option value="cookie">cookie (Agent Worker)</option>
+                  <option value="coca">coca (Agent Worker)</option>
+                  <option value="agy-worker">agy-worker (ACC)</option>
+                  <option value="__custom__">Custom Sender...</option>
+                </select>
+              </div>
+              <input type="text" id="custom-sender-input" class="hidden" placeholder="نام فرستنده دلخواه...">
+
+              <label for="target-agent-select" style="margin-top: 10px;">ایجنت مخاطب (Target Agent):</label>
+              <div class="select-wrapper">
+                <select id="target-agent-select">
+                  <option value="" selected>پخش همگانی به همه (Broadcast All)</option>
+                  <option value="argon">argon</option>
+                  <option value="cookie">cookie</option>
+                  <option value="coca">coca</option>
+                  <option value="agy-worker">agy-worker</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <!-- System Status Footer -->
+          <div class="system-status">
+            <div id="status-indicator" class="status-indicator polling"></div>
+            <span id="connection-status">اتصال کلاستر برقرار است (Bridge Live)</span>
+            <span id="poll-interval" class="poll-interval">2.5s poll</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fullscreen Image Modal / Lightbox -->
+    <div id="image-modal" class="image-modal hidden">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <button id="modal-close" class="modal-close" title="بستن تصویر">×</button>
+        <img id="modal-img" src="" alt="پیش‌نمایش تصویر">
+        <div class="modal-footer">
+          <span id="modal-caption" class="modal-caption"></span>
+          <a id="modal-download" class="btn-primary" href="" target="_blank" download>دانلود فایل اصلی</a>
+        </div>
       </div>
     </div>
   </div>
