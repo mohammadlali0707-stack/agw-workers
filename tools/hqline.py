@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """GitHub backup for Mohammad's emergency line (owner 2026-10-28). Runs only when the server did not pick up a comment.
 Reads the comment (+ a little context), asks Antigravity (shell + internet), posts the answer. Prints nothing (public log)."""
-import json, os, subprocess, tempfile, urllib.request
+import json, os, subprocess, sys, tempfile, urllib.request, urllib.error
 REPO = "mohammadlali0707-stack/emergency-line"; MARK = "<!-- hq-line -->"; PAT = os.environ["LINE_PAT"]; CID = os.environ["CID"]
 def gh(m, p, b=None):
     r = urllib.request.Request("https://api.github.com" + p, method=m, data=json.dumps(b).encode() if b is not None else None,
                                headers={"Authorization": "Bearer " + PAT, "Accept": "application/vnd.github+json", "Content-Type": "application/json"})
-    with urllib.request.urlopen(r, timeout=60) as x: return json.loads(x.read() or b"null")
+    r.add_header("User-Agent", "hq-line")
+    try:
+        with urllib.request.urlopen(r, timeout=60) as x: return json.loads(x.read() or b"null")
+    except urllib.error.HTTPError as e:
+        try: msg = json.loads(e.read()).get("message", "")[:120]
+        except Exception: msg = ""
+        sys.stderr.write(f"GHFAIL {m} {p.split('?')[0].replace(REPO, 'R')} {e.code} {msg}\n"); raise
 c = gh("GET", f"/repos/{REPO}/issues/comments/{CID}")
 if any(x.get("content") in ("eyes", "rocket") for x in gh("GET", f"/repos/{REPO}/issues/comments/{CID}/reactions")): raise SystemExit(0)
 gh("POST", f"/repos/{REPO}/issues/comments/{CID}/reactions", {"content": "rocket"})
