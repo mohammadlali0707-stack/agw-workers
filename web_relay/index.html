@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>کلاستر چت | GitHub Relay Mode</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container" id="app">
+    <!-- Top Navigation Header -->
+    <header class="top-header">
+      <div class="header-brand">
+        <span class="brand-icon">⚡</span>
+        <span class="brand-title">کلاستر چت</span>
+        <span class="brand-badge">Relay</span>
+      </div>
+
+      <!-- Room Navigation Tabs -->
+      <nav class="room-tabs" aria-label="اتاق‌های گفتگو">
+        <button class="room-tab active" data-room="main" type="button">
+          <span>🌐</span>
+          <span>main</span>
+          <span class="unread-badge" id="unread-main">0</span>
+        </button>
+        <button class="room-tab" data-room="dm-argon" type="button">
+          <span>🤖</span>
+          <span>dm-argon</span>
+          <span class="unread-badge" id="unread-dm-argon">0</span>
+        </button>
+        <button class="room-tab" data-room="workers" type="button">
+          <span>⚙️</span>
+          <span>workers</span>
+          <span class="unread-badge" id="unread-workers">0</span>
+        </button>
+      </nav>
+
+      <!-- Header Actions -->
+      <div class="header-actions">
+        <!-- Quick Web Bridge Launch Button -->
+        <button class="btn-web-bridge" id="open-web-bridge-btn" type="button" title="درخواست واکشی وب از طریق رانر گیت‌هاب (/web)">
+          <span>🌐</span>
+          <span>Web Bridge</span>
+        </button>
+
+        <!-- Status Pill -->
+        <div class="status-pill" id="status-pill" title="وضعیت ارتباط با مخزن گیت‌هاب">
+          <span class="status-dot offline" id="status-dot"></span>
+          <span class="status-text" id="status-text">آفلاین</span>
+          <span class="ratelimit-text" id="ratelimit-text">--/5000</span>
+        </div>
+
+        <!-- Manual Poll / Refresh Button -->
+        <button class="btn-icon" id="manual-poll-btn" type="button" title="بروزرسانی دستی پیام‌ها">
+          🔄
+        </button>
+
+        <!-- Settings / Auth Toggle Button -->
+        <button class="btn-icon" id="open-settings-btn" type="button" title="تنظیمات توکن گیت‌هاب و رمزنگاری">
+          ⚙️
+        </button>
+      </div>
+    </header>
+
+    <!-- Notice Banner (if PAT is not configured) -->
+    <div class="notice-banner" id="auth-banner">
+      <span>⚠️ برای اتصال به کلاستر چت از طریق رله گیت‌هاب، لطفاً توکن Fine-Grained PAT خود را وارد کنید.</span>
+      <button class="notice-btn" id="banner-settings-btn" type="button">تنظیمات توکن</button>
+    </div>
+
+    <!-- Main Chat Workspace Viewport -->
+    <main class="chat-viewport">
+      <div class="message-stream" id="message-stream">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">💬</div>
+          <div class="empty-title">اتصال به مخزن برقرار نیست</div>
+          <div class="empty-desc">پس از وارد کردن توکن گیت‌هاب، پیام‌های این اتاق بصورت خودکار دریافت خواهند شد.</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Composer Bar (Sticky Bottom) -->
+    <footer class="composer-bar">
+      <!-- Staged Attachments Tray (hidden when empty) -->
+      <div class="staged-tray" id="staged-tray">
+        <div class="staged-header">
+          <span>فایل‌های انتخاب‌شده جهت ارسال:</span>
+          <button class="remove-btn" id="clear-staged-btn" type="button" style="font-size:0.75rem; color:var(--text-dim);">پاک کردن همه</button>
+        </div>
+        <div class="staged-list" id="staged-list"></div>
+      </div>
+
+      <!-- Input Row -->
+      <div class="input-row">
+        <!-- Hidden file input (max 4 MB) -->
+        <input type="file" id="file-input" multiple style="display: none;">
+
+        <button class="btn-attach" id="attach-btn" type="button" title="پیوست فایل یا تصویر (حداکثر ۴ مگابایت)">
+          📎
+        </button>
+
+        <textarea
+          id="message-input"
+          class="message-textarea"
+          rows="1"
+          placeholder="پیام خود را بنویسید (Enter ارسال، Shift+Enter خط جدید)..."
+          dir="auto"
+        ></textarea>
+
+        <button class="btn-send" id="send-btn" type="button" title="ارسال پیام">
+          <span>ارسال</span>
+          <span>🚀</span>
+        </button>
+      </div>
+
+      <!-- Composer Footer / Quick Hints -->
+      <div class="composer-footer">
+        <span class="composer-hint">میانبر واکشی وب: <code id="quick-web-hint">/web https://example.com</code></span>
+        <span id="crypto-status-indicator" style="font-size: 0.72rem; color: var(--text-dim);">🔓 بدون رمزنگاری E2E</span>
+      </div>
+    </footer>
+
+    <!-- Settings & Authentication Modal -->
+    <div class="modal-overlay" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span>⚙️</span>
+            <span id="settings-title">تنظیمات رله گیت‌هاب و رمزنگاری</span>
+          </div>
+          <button class="modal-close" id="close-settings-btn" type="button" aria-label="بستن">×</button>
+        </div>
+
+        <form id="settings-form">
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label" for="cfg-owner">مالک مخزن (GitHub Owner):</label>
+              <input class="form-input" type="text" id="cfg-owner" required value="mohammadlali0707-stack">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="cfg-repo">نام مخزن (Repository):</label>
+              <input class="form-input" type="text" id="cfg-repo" required value="agw-workers">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="cfg-branch">شاخه رله (Branch):</label>
+              <input class="form-input" type="text" id="cfg-branch" required value="main">
+              <span class="form-help">شاخه کاری پیش‌فرض <code>main</code> یا شاخه اختصاصی <code>relay-state</code></span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="cfg-pat">توکن دسترسی گیت‌هاب (Fine-Grained PAT):</label>
+              <div class="password-wrap">
+                <input class="form-input" type="password" id="cfg-pat" placeholder="github_pat_..." autocomplete="off">
+                <button class="password-toggle" type="button" id="toggle-pat-btn" title="نمایش/پنهان‌سازی">👁️</button>
+              </div>
+              <span class="form-help">نیاز به دسترسی <code>Contents: Read and write</code> و <code>Actions: Read and write</code> دارد. توکن فقط در حافظه مرورگر شما ذخیره شده و به هیچ سرور دیگری ارسال نمی‌شود.</span>
+            </div>
+
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="cfg-remember">
+                <span>ذخیره دائمی در این دستگاه (localStorage)</span>
+              </label>
+              <span class="form-help">در صورت عدم انتخاب، توکن تنها تا بسته شدن تب مرورگر در sessionStorage نگهداری می‌شود.</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="cfg-passphrase">کلید رمزنگاری سرتاسری اختیاری (Shared Passphrase):</label>
+              <div class="password-wrap">
+                <input class="form-input" type="password" id="cfg-passphrase" placeholder="کلید محرمانه جهت رمزنگاری AES-256-GCM" autocomplete="off">
+                <button class="password-toggle" type="button" id="toggle-passphrase-btn" title="نمایش/پنهان‌سازی">👁️</button>
+              </div>
+              <span class="form-help">در صورت تنظیم، تمامی پیام‌ها قبل از قرارگیری در گیت‌هاب با الگوریتم AES-256-GCM (PBKDF2 100k) رمزگذاری می‌شوند.</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="cfg-interval">بازه زمانی استعلام (Poll Interval):</label>
+              <select class="form-select" id="cfg-interval">
+                <option value="5000">۵ ثانیه (سریع)</option>
+                <option value="10000" selected>۱۰ ثانیه (پیش‌فرض متعادل)</option>
+                <option value="15000">۱۵ ثانیه</option>
+                <option value="30000">۳۰ ثانیه (صرفه‌جویی در سهمیه)</option>
+              </select>
+              <span class="form-help">از هدر شرطی ETag استفاده می‌شود تا درخواست‌های بدون تغییر سهمیه API را مصرف نکنند.</span>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button class="btn-danger" type="button" id="clear-creds-btn">حذف اطلاعات ذخیره‌شده</button>
+            <button class="btn-primary" type="submit">ذخیره و اتصال</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Quick Web Bridge Modal -->
+    <div class="modal-overlay" id="web-bridge-modal" role="dialog" aria-modal="true" aria-labelledby="web-bridge-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span>🌐</span>
+            <span id="web-bridge-title">واکشی وب از طریق رانر گیت‌هاب (Web Bridge)</span>
+          </div>
+          <button class="modal-close" id="close-web-bridge-btn" type="button" aria-label="بستن">×</button>
+        </div>
+
+        <form id="web-bridge-form">
+          <div class="modal-body">
+            <div class="form-group">
+              <label class="form-label" for="bridge-url">آدرس اینترنتی هدف (URL):</label>
+              <input class="form-input" type="url" id="bridge-url" placeholder="https://example.com/article" required>
+              <span class="form-help">آدرس‌های خصوصی، لوکال‌هاست و رنج‌های ابری توسط گارد SSRF مسدود می‌شوند.</span>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="bridge-mode">حالت استخراج محتوا (Mode):</label>
+              <select class="form-select" id="bridge-mode">
+                <option value="markdown" selected>Markdown (تبدیل هوشمند متن و لینک‌ها)</option>
+                <option value="html">HTML (کد خام صفحه)</option>
+                <option value="file">Raw File / Download (دانلود فایل باینری/PDF/تصویر)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="bridge-room">اتاق تحویل پاسخ:</label>
+              <select class="form-select" id="bridge-room">
+                <option value="main">main (عمومی)</option>
+                <option value="dm-argon">dm-argon (آرگون)</option>
+                <option value="workers">workers (ورکرها)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="bridge-max-bytes">حداکثر حجم دریافت (بایت):</label>
+              <input class="form-input" type="number" id="bridge-max-bytes" value="2097152" min="1024" max="5242880">
+              <span class="form-help">پیش‌فرض ۲ مگابایت برای متن، حداکثر ۵ مگابایت برای فایل باینری.</span>
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button class="btn-secondary" type="button" id="cancel-web-bridge-btn">انصراف</button>
+            <button class="btn-primary" type="submit" id="submit-web-bridge-btn">اجرای درخواست در رانر 🚀</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="crypto.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
