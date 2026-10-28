@@ -105,13 +105,24 @@
   }
 
   /**
-   * Format ISO date string into human friendly time
+   * Format ISO date string into human friendly time in Asia/Tehran
    */
   function formatTimestamp(isoStr) {
     if (!isoStr) return '';
     try {
-      const date = new Date(isoStr);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      let s = String(isoStr).trim();
+      if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(s) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+        s = s.replace(' ', 'T') + 'Z';
+      }
+      const date = new Date(s);
+      if (isNaN(date.getTime())) return isoStr;
+      return new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Tehran',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }).format(date);
     } catch (e) {
       return isoStr;
     }

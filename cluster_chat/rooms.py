@@ -21,6 +21,13 @@ from cluster_chat.attachments import (
     AttachmentMetadata,
     validate_room_name,
 )
+from cluster_chat.timezone_utils import (
+    TEHRAN_TZ,
+    ensure_utc_iso,
+    format_tehran_display,
+    format_tehran_time,
+    utc_now_iso,
+)
 
 DEFAULT_DATA_DIR = "./data/cluster-chat"
 
@@ -181,7 +188,9 @@ class RoomManager:
 
         # Timestamp
         if not created_at:
-            created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            created_at = utc_now_iso()
+        else:
+            created_at = ensure_utc_iso(created_at)
 
         # Message ID
         if not message_id:
