@@ -1,0 +1,102 @@
+name: Site Proposal
+
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: 'Target freelancing platform'
+        required: true
+        type: choice
+        options:
+          - ponisha
+          - karlancer
+      project_url:
+        description: 'URL of the target project'
+        required: true
+        type: string
+      job_id:
+        description: 'Unique job ID'
+        required: true
+        type: string
+      mode:
+        description: 'Execution mode (preview or submit)'
+        required: false
+        default: 'preview'
+        type: choice
+        options:
+          - preview
+          - submit
+
+permissions:
+  contents: read
+
+jobs:
+  site-proposal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout agw-workers
+        uses: actions/checkout@v4
+
+      - name: Checkout hq-ai-results
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/hq-ai-results
+          token: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
+          path: hq-ai-results
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run site proposal runner
+        env:
+          SITE_INPUT: ${{ inputs.site }}
+          PROJECT_URL_INPUT: ${{ inputs.project_url }}
+          JOB_ID_INPUT: ${{ inputs.job_id }}
+          MODE_INPUT: ${{ inputs.mode }}
+          SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
+          PYTHONPATH: .
+        run: |
+          python3 -m scripts.site_proposal.runner \
+            --site "$SITE_INPUT" \
+            --project-url "$PROJECT_URL_INPUT" \
+            --job-id "$JOB_ID_INPUT" \
+            --mode "$MODE_INPUT" \
+            --results-dir hq-ai-results
+
+      - name: Commit and push results
+        if: always()
+        env:
+          SITE_INPUT: ${{ inputs.site }}
+          JOB_ID_INPUT: ${{ inputs.job_id }}
+        run: |
+          cd hq-ai-results
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -d "jobs/$JOB_ID_INPUT" ] && git add "jobs/$JOB_ID_INPUT"
+          [ -f "state/site_submit_counts.json" ] && git add "state/site_submit_counts.json"
+          if git diff --staged --quiet; then
+            echo "No changes to commit in hq-ai-results."
+            exit 0
+          fi
+          git commit -m "site-proposal: $SITE_INPUT job $JOB_ID_INPUT [skip ci]"
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Push attempt $i of $MAX_RETRIES..."
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              echo "Successfully pushed results to hq-ai-results."
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          echo "Failed to push results to hq-ai-results after $MAX_RETRIES attempts."
+          exit 1
