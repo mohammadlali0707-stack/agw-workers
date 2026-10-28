@@ -1,0 +1,40 @@
+name: HQ line fallback
+# owner 2026-10-28: answers Mohammad on the private emergency line when the server is down. Nothing private is printed in this public log.
+run-name: line fallback
+on:
+  workflow_dispatch:
+    inputs:
+      cid: { description: comment id, required: true }
+permissions:
+  contents: read
+jobs:
+  answer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools
+      - name: Set up Antigravity CLI
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TOKEN_B64: ${{ secrets.AGW_TOKEN_ACC6 }}
+          INSTALL_ID: ${{ secrets.AGW_INSTALL_ID_ACC6 }}
+        run: |
+          curl -sSfL -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" -o /tmp/cli.tar.gz
+          mkdir -p /tmp/agx && tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+          CLI_BIN=$(find /tmp/agx -type f \( -name antigravity -o -name agy \) | head -1)
+          [ -z "$CLI_BIN" ] && CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
+          install -m 0755 "$CLI_BIN" /tmp/agy
+          mkdir -p ~/.gemini/antigravity-cli ~/.gemini/config
+          printf '%s' "$TOKEN_B64" | base64 -d > ~/.gemini/antigravity-cli/antigravity-oauth-token
+          chmod 600 ~/.gemini/antigravity-cli/antigravity-oauth-token
+          printf '%s' "$INSTALL_ID" > ~/.gemini/antigravity-cli/installation_id
+          echo '{"userSettings":{}}' > ~/.gemini/config/config.json
+          echo "cli ready"
+      - name: Answer
+        env:
+          LINE_PAT: ${{ secrets.ACC6_PAT }}
+          CID: ${{ inputs.cid }}
+        run: python3 tools/hqline.py > /dev/null 2>&1 || echo "answer step failed"
