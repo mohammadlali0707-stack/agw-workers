@@ -37,6 +37,7 @@ from cluster_chat.rooms import (
     STANDARD_ROOMS,
     RoomManager,
 )
+from cluster_chat.telegram_bridge import TelegramBridge
 
 logger = logging.getLogger("cluster_chat.server")
 
@@ -288,6 +289,11 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
         if messages_match:
             room = messages_match.group(1)
             self._handle_post_message(room=room, content_length=content_length)
+            return
+
+        # 3. Telegram Webhook endpoint: /api/cluster-chat/telegram/webhook or /api/telegram/webhook
+        if path in ("/api/cluster-chat/telegram/webhook", "/api/telegram/webhook"):
+            self._handle_telegram_webhook(content_length=content_length)
             return
 
         self._send_error_json("Not Found", status=404)
@@ -579,6 +585,34 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
         self.server.trigger_message_hook(msg_dict, forward_telegram=forward_telegram)
         self._send_json({"ok": True, "message": msg_dict}, status=201)
 
+    def _handle_telegram_webhook(self, content_length: int) -> None:
+        """Handle incoming Telegram webhook update."""
+        content_type_header = self.headers.get("Content-Type", "")
+        if "application/json" not in content_type_header.lower():
+            self._send_error_json("Expected Content-Type: application/json", status=415)
+            return
+
+        raw_body = self.rfile.read(content_length)
+        try:
+            update = json.loads(raw_body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            self._send_error_json(f"Invalid JSON body: {e}", status=400)
+            return
+
+        if not isinstance(update, dict):
+            self._send_error_json("Update payload must be a JSON object", status=400)
+            return
+
+        try:
+            result = self.server.telegram_bridge.handle_telegram_update(update)
+            if result is not None:
+                self._send_json({"ok": True, "result": result}, status=200)
+            else:
+                self._send_json({"ok": True, "handled": False}, status=200)
+        except Exception as err:
+            logger.exception("Error processing Telegram webhook update: %s", err)
+            self._send_error_json(f"Internal error processing Telegram update: {err}", status=500)
+
 
 class ThreadingClusterChatServer(http.server.ThreadingHTTPServer):
     """Multi-threaded HTTP server holding storage and room manager references."""
@@ -593,15 +627,30 @@ class ThreadingClusterChatServer(http.server.ThreadingHTTPServer):
         room_manager: RoomManager,
         web_dir: Path,
         on_message_callback: Callable[[dict[str, Any], bool], None] | None = None,
+        telegram_bridge: TelegramBridge | None = None,
     ) -> None:
         super().__init__(server_address, RequestHandlerClass)
         self.storage = storage
         self.room_manager = room_manager
         self.web_dir = web_dir
         self.on_message_callback = on_message_callback
+        self.telegram_bridge: TelegramBridge = (
+            telegram_bridge
+            if telegram_bridge is not None
+            else TelegramBridge(
+                storage=self.storage,
+                room_manager=self.room_manager,
+                data_dir=self.room_manager.data_dir,
+            )
+        )
 
     def trigger_message_hook(self, message: dict[str, Any], forward_telegram: bool = True) -> None:
-        """Execute message callback hook if registered."""
+        """Execute message callback hook if registered and forward to Telegram."""
+        if forward_telegram and self.telegram_bridge is not None:
+            try:
+                self.telegram_bridge.send_message_to_telegram(message)
+            except Exception as e:
+                logger.warning("Failed to forward message to Telegram: %s", e)
         if self.on_message_callback is not None:
             try:
                 self.on_message_callback(message, forward_telegram)
@@ -620,6 +669,7 @@ class ClusterChatServer:
         room_manager: RoomManager | None = None,
         web_dir: str | Path | None = None,
         on_message_callback: Callable[[dict[str, Any], bool], None] | None = None,
+        telegram_bridge: TelegramBridge | None = None,
     ) -> None:
         self.host = host if host is not None else os.environ.get("CLUSTER_CHAT_HOST", "0.0.0.0")
         raw_port = port if port is not None else int(os.environ.get("CLUSTER_CHAT_PORT", "8080"))
@@ -634,6 +684,16 @@ class ClusterChatServer:
             self.web_dir = Path(os.environ.get("CLUSTER_CHAT_WEB_DIR", DEFAULT_WEB_DIR)).resolve()
 
         self.on_message_callback = on_message_callback
+        self.telegram_bridge: TelegramBridge = (
+            telegram_bridge
+            if telegram_bridge is not None
+            else TelegramBridge(
+                storage=self.storage,
+                room_manager=self.room_manager,
+                data_dir=self.room_manager.data_dir,
+            )
+        )
+
         self.httpd = ThreadingClusterChatServer(
             (self.host, self.requested_port),
             ClusterChatRequestHandler,
@@ -641,6 +701,7 @@ class ClusterChatServer:
             room_manager=self.room_manager,
             web_dir=self.web_dir,
             on_message_callback=self.on_message_callback,
+            telegram_bridge=self.telegram_bridge,
         )
 
         self._thread: threading.Thread | None = None

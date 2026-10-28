@@ -30,6 +30,14 @@ from cluster_chat.server import (
     ClusterChatRequestHandler,
     ClusterChatServer,
 )
+from cluster_chat.telegram_bridge import (
+    MAX_TELEGRAM_PHOTO_SIZE,
+    TelegramBridge,
+    encode_multipart_formdata,
+    extract_target_agent,
+    handle_telegram_update,
+    send_attachment_to_telegram,
+)
 
 __all__ = [
     "AttachmentMetadata",
@@ -38,6 +46,12 @@ __all__ = [
     "RoomMessage",
     "ClusterChatServer",
     "ClusterChatRequestHandler",
+    "TelegramBridge",
+    "send_attachment_to_telegram",
+    "handle_telegram_update",
+    "extract_target_agent",
+    "encode_multipart_formdata",
+    "MAX_TELEGRAM_PHOTO_SIZE",
     "STANDARD_ROOMS",
     "PHOTO_MIME_TYPES",
     "EXTENSION_MIME_MAP",
