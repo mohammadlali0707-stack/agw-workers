@@ -60,6 +60,10 @@ LOGIN_TEXT_PATTERNS: List[str] = [
     "جهت ارسال پیشنهاد باید وارد شوید",
     "ابتدا وارد حساب کاربری خود شوید",
     "ابتدا وارد شوید یا ثبت نام کنید",
+    "لطفا شماره موبایل یا ایمیل خود را وارد کنید",
+    "شماره موبایل یا ایمیل خود را وارد کنید",
+    "ثبت‌نام نکرده اید",
+    "ورود به حساب کاربری",
 ]
 
 TEXT_SELECTORS: List[str] = [
@@ -259,7 +263,7 @@ class PonishaAdapter:
                 "error_message": "project_url is missing in proposal_data",
             }
 
-        wait_ms = int(proposal_data.get("_wait_ms", 500))
+        wait_ms = int(proposal_data.get("_wait_ms", 1500))
         try:
             # 1. Navigate to project page
             await page.goto(project_url, wait_until="domcontentloaded")
