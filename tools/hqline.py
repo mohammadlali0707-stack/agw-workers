@@ -29,6 +29,6 @@ env = {k: v for k, v in os.environ.items() if k not in ("LINE_PAT", "ACTIONS_RUN
 try:
     p = subprocess.run(["/tmp/agy", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions", "--print-timeout", "900s", "-p", prompt],
                        cwd=tempfile.mkdtemp(), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=960)
-    a = p.stdout.decode("utf-8", "replace").strip() or "⚠️ جوابی ساخته نشد."
+    a = p.stdout.decode("utf-8", "replace").replace(MARK, "").replace("🛠 **Argon**", "").strip() or "⚠️ جوابی ساخته نشد."
 except Exception as e: a = f"⚠️ پشتیبان گیت‌هاب جواب نداد ({type(e).__name__})."
 gh("POST", f"/repos/{REPO}/issues/{num}/comments", {"body": "🛟 **آرگان (پشتیبان گیت‌هاب)** — سرور در دسترس نبود؛ این جواب مستقیم از گیت‌هاب است.\n\n" + a[-60000:] + "\n\n" + MARK})
