@@ -97,6 +97,82 @@
   }
 
   /**
+   * Asia/Tehran timezone formatting helpers (P9)
+   */
+  function parseUtcDate(ts) {
+    if (ts === null || ts === undefined || typeof ts === "boolean") return null;
+    if (ts instanceof Date) return isNaN(ts.getTime()) ? null : ts;
+    if (typeof ts === "number") {
+      if (!Number.isFinite(ts)) return null;
+      return new Date(ts > 1e11 ? ts : ts * 1000);
+    }
+
+    if (typeof ts !== "string") return null;
+    let s = ts.trim();
+    if (!s) return null;
+
+    // Disallow non-finite strings
+    const lower = s.toLowerCase();
+    if (lower === "nan" || lower === "infinity" || lower === "-infinity" || lower === "inf" || lower === "-inf") {
+      return null;
+    }
+
+    // Prioritize standard ISO date strings (starts with YYYY-MM-DD)
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+      if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(s) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+        s = s.replace(" ", "T") + "Z";
+      }
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
+    // Numeric epoch timestamp string (10 digits seconds or 13 digits ms)
+    if (/^\d{10}(\.\d+)?$/.test(s) || /^\d{13}$/.test(s)) {
+      const num = parseFloat(s);
+      if (!Number.isFinite(num)) return null;
+      return new Date(num > 1e11 ? num : num * 1000);
+    }
+
+    return null;
+  }
+
+  function formatTehranTime(ts) {
+    if (ts === null || ts === undefined || ts === "") return "";
+    const d = parseUtcDate(ts);
+    if (!d) return typeof ts === "string" ? ts : "";
+    try {
+      return new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Tehran",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      }).format(d);
+    } catch (_) {
+      return typeof ts === "string" ? ts : "";
+    }
+  }
+
+  function formatTehranDateTime(ts) {
+    if (ts === null || ts === undefined || ts === "") return "";
+    const d = parseUtcDate(ts);
+    if (!d) return typeof ts === "string" ? ts : "";
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Tehran",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).format(d).replace(", ", " ");
+    } catch (_) {
+      return typeof ts === "string" ? ts : "";
+    }
+  }
+
+  /**
    * Normalize any legacy absolute airboxvip.top or host-bound URL to a root-relative path.
    * Ensures zero hardcoded airboxvip.top links exist in DOM elements or network calls.
    */
@@ -489,13 +565,14 @@
           else avatar = "⚡";
         }
 
+        const lastSeenText = agent.last_seen ? ` (${formatTehranTime(agent.last_seen)})` : "";
         card.innerHTML = `
           <div class="agent-avatar">${avatar}</div>
           <div class="agent-info">
             <div class="agent-name">${escapeHtml(agent.name)} <span class="agent-badge">${escapeHtml(agent.role || "")}</span></div>
             <div class="agent-state">
               <span class="dot ${isOnline ? "online" : "offline"}"></span>
-              ${isOnline ? "آنلاین (آماده پردازش)" : "آفلاین"}
+              ${isOnline ? "آنلاین (آماده پردازش)" : "آفلاین"}${lastSeenText}
             </div>
           </div>
         `;
@@ -779,13 +856,10 @@
     }
 
     let timeFormatted = "";
+    let timeFullTitle = "";
     if (msg.created_at) {
-      try {
-        const dt = new Date(msg.created_at);
-        timeFormatted = dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-      } catch (_) {
-        timeFormatted = msg.created_at;
-      }
+      timeFormatted = formatTehranTime(msg.created_at);
+      timeFullTitle = formatTehranDateTime(msg.created_at);
     }
 
     let bodyHtml = "";
@@ -865,7 +939,7 @@
       <div class="message-header">
         <span class="${senderClass}">${escapeHtml(msg.sender)}</span>
         ${targetHtml}
-        <span class="message-time">${timeFormatted}</span>
+        <span class="message-time"${timeFullTitle ? ` title="${escapeHtml(timeFullTitle)}"` : ""}>${timeFormatted}</span>
       </div>
       ${bodyHtml}
       ${attachmentsHtml}
@@ -1249,6 +1323,9 @@
 
   // Expose global helpers for HTML event handlers, programmatic control, and test harnesses
   window.ClusterChatUI = {
+    parseUtcDate: parseUtcDate,
+    formatTehranTime: formatTehranTime,
+    formatTehranDateTime: formatTehranDateTime,
     unstage: unstageFile,
     openPhoto: openPhoto,
     closePhoto: closePhoto,
@@ -1265,6 +1342,12 @@
     updateAgentStatus: updateAgentStatus,
     switchRoom: switchRoom
   };
+
+  if (typeof window !== "undefined") {
+    window.parseUtcDate = parseUtcDate;
+    window.formatTehranTime = formatTehranTime;
+    window.formatTehranDateTime = formatTehranDateTime;
+  }
 
   // Initialization
   async function init() {

@@ -38,6 +38,14 @@ from cluster_chat.rooms import (
     STANDARD_ROOMS,
     RoomManager,
 )
+from cluster_chat.timezone_utils import (
+    TEHRAN_TZ,
+    ensure_utc_iso,
+    format_tehran_datetime,
+    format_tehran_display,
+    format_tehran_time,
+    utc_now_iso,
+)
 from cluster_chat.telegram_bridge import TelegramBridge
 
 logger = logging.getLogger("cluster_chat.server")
@@ -438,6 +446,9 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/style.css":
             self._serve_static_file("style.css")
+            return
+        if path in ("/timezone_utils.js", "/web/timezone_utils.js"):
+            self._serve_static_file("timezone_utils.js")
             return
         if path.startswith("/web/"):
             rel = path[len("/web/"):]
