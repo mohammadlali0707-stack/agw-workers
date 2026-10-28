@@ -47,6 +47,32 @@ TASK_FLEET_BUTTONS: set[str] = {
 # Main-Menu-Only Reply Keyboard Buttons
 MAIN_MENU_ONLY_BUTTONS: set[str] = LANGUAGE_SWITCH_BUTTONS | TASK_FLEET_BUTTONS
 
+# Core main-menu signature button labels (top-level actions)
+MAIN_MENU_SIGNATURES: set[str] = {
+    "مدیریت وظایف",
+    "وظایف",
+    "وضعیت ناوگان",
+    "ناوگان",
+    "تنظیمات",
+    "راهنما",
+    "وضعیت کلاستر",
+    "گزارش روزانه",
+    "پروژه‌ها",
+    "وضعیت",
+    "خدمات",
+    "کلاستر",
+    "Home",
+    "Status",
+    "Projects",
+    "Tasks",
+    "Fleet Status",
+    "Settings",
+    "Help",
+    "کار برای فلش",
+    "کار برای فلش به ناوگان",
+    "آرگون به ناوگان",
+}
+
 # Sub-menu / Non-home navigation return labels
 NAVIGATION_RETURN_LABELS: set[str] = {
     "بازگشت",
@@ -240,7 +266,8 @@ def is_main_menu_keyboard(
     2. If `is_main_menu` is explicitly True, it is main menu.
     3. If any button contains a return navigation label (e.g., 'بازگشت', '🔙', 'Back'),
        it is a sub-menu (returns False).
-    4. Otherwise, defaults to True (main menu).
+    4. If it contains core main-menu signatures or task/fleet buttons, it is main menu.
+    5. Otherwise, defaults to False (sub-menu / secondary screen).
     """
     if is_main_menu is False:
         return False
@@ -248,11 +275,20 @@ def is_main_menu_keyboard(
         return True
 
     rows = _extract_keyboard_rows(keyboard_or_rows)
+    if not rows:
+        return False
+
     for row in rows:
         for btn in row:
             if is_return_navigation_button(btn):
                 return False
-    return True
+
+    for row in rows:
+        for btn in row:
+            txt = extract_button_text(btn)
+            if any(sig in txt for sig in MAIN_MENU_SIGNATURES):
+                return True
+    return False
 
 
 def _extract_keyboard_rows(keyboard_or_rows: Any) -> list[list[Any]]:
@@ -524,7 +560,7 @@ def process_outgoing_message(
     1. If `reply_markup` is an InlineKeyboardMarkup, the 4 inline action buttons
        are attached idempotently.
     2. If `reply_markup` is a ReplyKeyboardMarkup, it is filtered so sub-menus
-       never contain language or task/fleet buttons.
+       never contain language or task/fleet buttons, and inline action buttons are attached.
     3. If `reply_markup` is absent or None, an InlineKeyboardMarkup containing
        the 4 standard action buttons is attached.
     """
@@ -532,22 +568,48 @@ def process_outgoing_message(
     reply_markup = msg.get("reply_markup")
 
     if reply_markup is None:
-        msg["reply_markup"] = ensure_inline_action_buttons()
+        inline_kb = ensure_inline_action_buttons()
+        msg["reply_markup"] = inline_kb
+        msg["inline_keyboard"] = inline_kb["inline_keyboard"]
         return msg
 
     if isinstance(reply_markup, dict):
-        if "inline_keyboard" in reply_markup:
-            msg["reply_markup"] = ensure_inline_action_buttons(reply_markup)
+        if "inline_keyboard" in reply_markup and "keyboard" not in reply_markup:
+            inline_kb = ensure_inline_action_buttons(reply_markup)
+            msg["reply_markup"] = inline_kb
+            msg["inline_keyboard"] = inline_kb["inline_keyboard"]
         elif "keyboard" in reply_markup:
-            msg["reply_markup"] = filter_reply_keyboard(reply_markup, is_main_menu=is_main_menu)
+            filtered_rk = filter_reply_keyboard(reply_markup, is_main_menu=is_main_menu)
+            inline_kb = ensure_inline_action_buttons(reply_markup.get("inline_keyboard"))
+            res_markup = copy.deepcopy(filtered_rk) if isinstance(filtered_rk, dict) else {"keyboard": getattr(filtered_rk, "keyboard", [])}
+            res_markup["inline_keyboard"] = inline_kb["inline_keyboard"]
+            msg["reply_markup"] = res_markup
+            msg["reply_keyboard"] = filtered_rk
+            msg["inline_keyboard"] = inline_kb["inline_keyboard"]
+        else:
+            inline_kb = ensure_inline_action_buttons(reply_markup)
+            msg["reply_markup"] = inline_kb
+            msg["inline_keyboard"] = inline_kb["inline_keyboard"]
     elif isinstance(reply_markup, InlineKeyboardMarkup):
-        msg["reply_markup"] = ensure_inline_action_buttons(reply_markup)
+        inline_kb = ensure_inline_action_buttons(reply_markup)
+        msg["reply_markup"] = inline_kb
+        msg["inline_keyboard"] = getattr(inline_kb, "inline_keyboard", [])
     elif isinstance(reply_markup, ReplyKeyboardMarkup):
-        msg["reply_markup"] = filter_reply_keyboard(reply_markup, is_main_menu=is_main_menu)
+        filtered_rk = filter_reply_keyboard(reply_markup, is_main_menu=is_main_menu)
+        inline_kb = ensure_inline_action_buttons()
+        msg["reply_markup"] = filtered_rk
+        msg["reply_keyboard"] = filtered_rk
+        msg["inline_keyboard"] = inline_kb["inline_keyboard"]
     elif hasattr(reply_markup, "inline_keyboard"):
-        msg["reply_markup"] = ensure_inline_action_buttons(reply_markup)
+        inline_kb = ensure_inline_action_buttons(reply_markup)
+        msg["reply_markup"] = inline_kb
+        msg["inline_keyboard"] = getattr(inline_kb, "inline_keyboard", [])
     elif hasattr(reply_markup, "keyboard"):
-        msg["reply_markup"] = filter_reply_keyboard(reply_markup, is_main_menu=is_main_menu)
+        filtered_rk = filter_reply_keyboard(reply_markup, is_main_menu=is_main_menu)
+        inline_kb = ensure_inline_action_buttons()
+        msg["reply_markup"] = filtered_rk
+        msg["reply_keyboard"] = filtered_rk
+        msg["inline_keyboard"] = inline_kb["inline_keyboard"]
 
     return msg
 

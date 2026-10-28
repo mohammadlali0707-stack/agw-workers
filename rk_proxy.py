@@ -31,7 +31,13 @@ STANDARD_INLINE_ACTIONS = [
 ]
 
 def get_button_text(btn: Any) -> str:
-    return str(btn.get("text", "")).strip() if isinstance(btn, dict) else str(btn).strip()
+    if isinstance(btn, dict):
+        return str(btn.get("text", "")).strip()
+    if hasattr(btn, "text"):
+        return str(getattr(btn, "text", "")).strip()
+    if isinstance(btn, str):
+        return btn.strip()
+    return str(btn).strip()
 
 def is_main_menu_only_button(btn: Any) -> bool:
     text = get_button_text(btn)
@@ -48,7 +54,7 @@ def is_back_or_return_button(btn: Any) -> bool:
     return bool(text and any(back_lbl in text for back_lbl in SUBMENU_BACK_BUTTONS))
 
 def is_main_menu_keyboard(
-    keyboard_rows: list[list[Any]] | None,
+    keyboard_rows: Any,
     is_main_menu: bool | None = None,
     screen: str | None = None,
 ) -> bool:
@@ -60,37 +66,51 @@ def is_main_menu_keyboard(
             return True
         if s in ("sub", "submenu", "settings", "secondary", "detail", "details"):
             return False
-    if not keyboard_rows:
+    rows = keyboard_rows
+    if isinstance(keyboard_rows, dict):
+        rows = keyboard_rows.get("keyboard", [])
+    elif hasattr(keyboard_rows, "keyboard"):
+        rows = getattr(keyboard_rows, "keyboard", [])
+    if not rows:
         return False
-    for row in keyboard_rows:
-        for btn in row:
+    for row in rows:
+        row_list = row if isinstance(row, list) else [row]
+        for btn in row_list:
             if is_back_or_return_button(btn):
                 return False
-    for row in keyboard_rows:
-        for btn in row:
+    for row in rows:
+        row_list = row if isinstance(row, list) else [row]
+        for btn in row_list:
             txt = get_button_text(btn)
             if any(sig in txt for sig in MAIN_MENU_SIGNATURE_BUTTONS):
                 return True
     return False
 
-def filter_submenu_reply_keyboard(keyboard_rows: list[list[Any]] | None) -> list[list[Any]]:
-    if not keyboard_rows:
-        return []
+def filter_submenu_reply_keyboard(keyboard_rows: Any) -> Any:
+    is_dict = isinstance(keyboard_rows, dict)
+    rows = keyboard_rows.get("keyboard", []) if is_dict else (keyboard_rows or [])
     filtered: list[list[Any]] = []
-    for row in keyboard_rows:
-        clean_row = [btn for btn in row if not is_main_menu_only_button(btn)]
+    for row in rows:
+        row_list = row if isinstance(row, list) else [row]
+        clean_row = [btn for btn in row_list if not is_main_menu_only_button(btn)]
         if clean_row:
             filtered.append(clean_row)
+    if is_dict:
+        res = copy.deepcopy(keyboard_rows)
+        res["keyboard"] = filtered
+        return res
     return filtered
 
-def ensure_main_menu_reply_keyboard(keyboard_rows: list[list[Any]] | None) -> list[list[Any]]:
-    rows: list[list[Any]] = copy.deepcopy(keyboard_rows or [])
-    is_dict = any(isinstance(btn, dict) for r in rows for btn in r)
+def ensure_main_menu_reply_keyboard(keyboard_rows: Any) -> Any:
+    is_dict = isinstance(keyboard_rows, dict)
+    raw_rows = keyboard_rows.get("keyboard", []) if is_dict else (keyboard_rows or [])
+    rows: list[list[Any]] = copy.deepcopy(raw_rows)
+    is_btn_dict = any(isinstance(btn, dict) for r in rows for btn in (r if isinstance(r, list) else [r]))
 
     def _make_btn(text: str) -> Any:
-        return {"text": text} if is_dict else text
+        return {"text": text} if is_btn_dict else text
 
-    existing_texts = {get_button_text(btn) for r in rows for btn in r}
+    existing_texts = {get_button_text(btn) for r in rows for btn in (r if isinstance(r, list) else [r])}
     missing_tasks = [t for t in TASK_FLEET_BUTTONS if not any(t in ext for ext in existing_texts)]
     if missing_tasks:
         rows.append([_make_btn(t) for t in missing_tasks])
@@ -105,6 +125,11 @@ def ensure_main_menu_reply_keyboard(keyboard_rows: list[list[Any]] | None) -> li
         missing_langs.append("🇬🇧 EN")
     if missing_langs:
         rows.append([_make_btn(l) for l in missing_langs])
+
+    if is_dict:
+        res = copy.deepcopy(keyboard_rows)
+        res["keyboard"] = rows
+        return res
     return rows
 
 def process_reply_keyboard(
@@ -129,15 +154,35 @@ def process_reply_keyboard(
     return keyboard_or_markup
 
 def build_inline_action_keyboard(
-    existing_inline_keyboard: list[list[dict[str, Any]]] | None = None,
+    existing_inline_keyboard: Any = None,
 ) -> list[list[dict[str, Any]]]:
-    rows: list[list[dict[str, Any]]] = copy.deepcopy(existing_inline_keyboard or [])
+    raw_rows = existing_inline_keyboard or []
+    if isinstance(raw_rows, dict) and "inline_keyboard" in raw_rows:
+        raw_rows = raw_rows["inline_keyboard"]
+    rows: list[list[dict[str, Any]]] = []
+    for r in raw_rows:
+        row_list = r if isinstance(r, list) else [r]
+        row_copy = []
+        for btn in row_list:
+            if isinstance(btn, dict):
+                row_copy.append(dict(btn))
+            elif hasattr(btn, "to_dict"):
+                row_copy.append(btn.to_dict())
+            elif hasattr(btn, "text"):
+                d = {"text": getattr(btn, "text", "")}
+                if hasattr(btn, "callback_data") and btn.callback_data:
+                    d["callback_data"] = btn.callback_data
+                row_copy.append(d)
+            else:
+                row_copy.append({"text": str(btn)})
+        rows.append(row_copy)
+
     has_fa, has_en, has_words, has_knowledge = False, False, False, False
 
     for row in rows:
         for btn in row:
-            txt = str(btn.get("text", "")).strip()
-            cb = str(btn.get("callback_data", "")).strip()
+            txt = str(btn.get("text", "")).strip() if isinstance(btn, dict) else (getattr(btn, "text", "") or str(btn)).strip()
+            cb = str(btn.get("callback_data", "")).strip() if isinstance(btn, dict) else (getattr(btn, "callback_data", "") or "")
             if "FA" in txt or "فارسی" in txt or "lang_fa" in cb or "bilingual_fa" in cb:
                 has_fa = True
             if "EN" in txt or "انگلیسی" in txt or "lang_en" in cb or "bilingual_en" in cb:
@@ -178,7 +223,9 @@ def process_telegram_payload(
     markup = res.get("reply_markup")
 
     if markup is None:
-        res["reply_markup"] = {"inline_keyboard": build_inline_action_keyboard([])}
+        inline_kb = build_inline_action_keyboard([])
+        res["reply_markup"] = {"inline_keyboard": inline_kb}
+        res["inline_keyboard"] = inline_kb
         return res
 
     if isinstance(markup, dict):
@@ -188,17 +235,24 @@ def process_telegram_payload(
                 markup["keyboard"] = ensure_main_menu_reply_keyboard(rows)
             else:
                 markup["keyboard"] = filter_submenu_reply_keyboard(rows)
-            markup["inline_keyboard"] = build_inline_action_keyboard(markup.get("inline_keyboard", []))
+            inline_kb = build_inline_action_keyboard(markup.get("inline_keyboard", []))
+            markup["inline_keyboard"] = inline_kb
             res["reply_markup"] = markup
+            res["reply_keyboard"] = markup["keyboard"]
+            res["inline_keyboard"] = inline_kb
             return res
 
         if "inline_keyboard" in markup:
-            markup["inline_keyboard"] = build_inline_action_keyboard(markup["inline_keyboard"])
+            inline_kb = build_inline_action_keyboard(markup["inline_keyboard"])
+            markup["inline_keyboard"] = inline_kb
             res["reply_markup"] = markup
+            res["inline_keyboard"] = inline_kb
             return res
 
-        markup["inline_keyboard"] = build_inline_action_keyboard(markup.get("inline_keyboard", []))
+        inline_kb = build_inline_action_keyboard(markup.get("inline_keyboard", []))
+        markup["inline_keyboard"] = inline_kb
         res["reply_markup"] = markup
+        res["inline_keyboard"] = inline_kb
         return res
 
     return res
