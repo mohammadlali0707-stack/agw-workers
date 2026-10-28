@@ -3,6 +3,10 @@ index 60db894..166d11d 100644
 --- a/.github/workflows/remote-ccp-tbs-morning.yml
 +++ b/.github/workflows/remote-ccp-tbs-morning.yml
 @@ -157,13 +157,13 @@ jobs:
+index a737274..362b083 100644
+--- a/.github/workflows/remote-ccp-tbs-morning.yml
++++ b/.github/workflows/remote-ccp-tbs-morning.yml
+@@ -157,13 +157,14 @@ jobs:
          id: guard
          env:
            GH_TOKEN: ${{ secrets.ACC6_PAT }}
@@ -14,6 +18,7 @@ index 60db894..166d11d 100644
            REPORT="Reports/morning/${DATE}.md"
            TITLE="گزارش صبحگاهی — ${DATE}"
 -          FORCE="${{ github.event.inputs.force }}"
++          FORCE="${FORCE:-false}"
            if [ -f "$REPORT" ] && [ "$FORCE" != "true" ]; then
              echo "skip=true" >> "$GITHUB_OUTPUT"
              echo "SKIP: ${REPORT} already exists for ${DATE} and force was not" \
