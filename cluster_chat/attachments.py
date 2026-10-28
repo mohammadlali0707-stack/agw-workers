@@ -23,7 +23,7 @@ DEFAULT_PUBLIC_BASE_URL = ""
 DEFAULT_MAX_UPLOAD_MB = 50
 
 # Core cluster rooms
-STANDARD_ROOMS: tuple[str, ...] = ("main", "dm-argon", "workers-room")
+STANDARD_ROOMS: tuple[str, ...] = ("main", "dm-argon", "workers-room", "workers")
 
 # Photo MIME types
 PHOTO_MIME_TYPES: frozenset[str] = frozenset({
