@@ -21,6 +21,11 @@ from cluster_chat.attachments import (
     sanitize_filename,
     validate_room_name,
 )
+from cluster_chat.client import (
+    format_file_size,
+    list_room_messages,
+    send_room_file,
+)
 from cluster_chat.rooms import (
     DEFAULT_DATA_DIR,
     RoomManager,
@@ -47,6 +52,9 @@ __all__ = [
     "ClusterChatServer",
     "ClusterChatRequestHandler",
     "TelegramBridge",
+    "send_room_file",
+    "list_room_messages",
+    "format_file_size",
     "send_attachment_to_telegram",
     "handle_telegram_update",
     "extract_target_agent",
