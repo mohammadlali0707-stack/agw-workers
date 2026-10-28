@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Cluster Chat File and Photo Upload CLI wrapper.
+
+Allows Mohammad and agents to easily upload files and send messages to cluster rooms.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+
+# Ensure repository root is in sys.path
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from cluster_chat.cli import main
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+    # If invoked directly with flags like --room or --file, default to 'send'
+    if args and args[0] not in ("send", "list", "-h", "--help", "--version"):
+        args = ["send"] + args
+    sys.exit(main(args))
