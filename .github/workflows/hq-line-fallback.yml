@@ -35,6 +35,6 @@ jobs:
           echo "cli ready"
       - name: Answer
         env:
-          LINE_PAT: ${{ secrets.ACC6_PAT }}
+          LINE_PAT: ${{ secrets.HQ_LINE_PAT }}
           CID: ${{ inputs.cid }}
-        run: python3 tools/hqline.py > /dev/null 2>&1 || echo "answer step failed"
+        run: python3 tools/hqline.py 2>/tmp/err.txt >/dev/null || { echo "answer step failed"; grep -o "HTTP Error [0-9]*\|[A-Za-z]*Error" /tmp/err.txt | tail -2; }
