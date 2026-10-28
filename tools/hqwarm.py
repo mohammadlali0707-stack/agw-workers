@@ -75,8 +75,18 @@ def run_work(cid, job, home):
             if git("status", "--porcelain", cwd=cwd).strip(): git("commit", "-q", "-m", f"{job.get('title', 'Argon subtask')[:70]} ({cid})", cwd=cwd)
             head = git("rev-parse", "HEAD", cwd=cwd).strip(); info["head"] = head; info["branch"] = br; info["repo"] = repo
             if head != info["base"] or job.get("branch"):
-                info["pushed"] = subprocess.run(["git", *H, "push", "-q", "origin", f"HEAD:refs/heads/{br}"], cwd=cwd, stdout=subprocess.DEVNULL,
-                                                stderr=subprocess.DEVNULL, timeout=600).returncode == 0
+                info["pushed"] = False   # owner 2026-10-28: parallel workers never fail on push - rebase + retry, last resort own branch
+                for i in range(4):
+                    if subprocess.run(["git", *H, "push", "-q", "origin", f"HEAD:refs/heads/{br}"], cwd=cwd, stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL, timeout=600).returncode == 0: info["pushed"] = True; break
+                    time.sleep(3 + 4 * i)
+                    if git("ls-remote", "--heads", "origin", br, cwd=cwd).strip():
+                        git("fetch", "-q", "origin", br, cwd=cwd)
+                        if subprocess.run(["git", "rebase", "-q", "FETCH_HEAD"], cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300).returncode:
+                            git("rebase", "--abort", cwd=cwd); br = f"{br}-{cid}"; info["branch_note"] = "rebase conflict - pushed to own branch"
+                if not info["pushed"] and subprocess.run(["git", *H, "push", "-q", "origin", f"HEAD:refs/heads/{br}-{cid}"], cwd=cwd, stdout=subprocess.DEVNULL,
+                                                         stderr=subprocess.DEVNULL, timeout=600).returncode == 0: info["pushed"] = True; br = f"{br}-{cid}"
+                info["branch"] = br
             info["diffstat"] = git("diff", "--stat", info["base"], "HEAD", cwd=cwd)[-3000:]
             diff = git("diff", info["base"], "HEAD", cwd=cwd)
         else: diff = ""
