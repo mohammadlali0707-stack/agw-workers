@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cluster Chat Bridge</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar / Room Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-text">
+          <h2>Cluster Chat</h2>
+          <span class="subtext">Bridge &amp; Storage</span>
+        </div>
+      </div>
+
+      <div class="section-title">Rooms</div>
+      <nav id="room-list" class="room-nav">
+        <button class="room-btn active" data-room="main">
+          <span class="room-icon">🌐</span>
+          <span class="room-name">main</span>
+          <span class="room-badge">general</span>
+        </button>
+        <button class="room-btn" data-room="dm-argon">
+          <span class="room-icon">🤖</span>
+          <span class="room-name">dm-argon</span>
+          <span class="room-badge">lead</span>
+        </button>
+        <button class="room-btn" data-room="workers-room">
+          <span class="room-icon">⚙️</span>
+          <span class="room-name">workers-room</span>
+          <span class="room-badge">mesh</span>
+        </button>
+      </nav>
+
+      <div class="section-title">Participant Identity</div>
+      <div class="identity-box">
+        <label for="sender-select">Active Sender:</label>
+        <div class="select-wrapper">
+          <select id="sender-select">
+            <option value="mohammad" selected>mohammad (Lead)</option>
+            <option value="argon">argon (Planner / LeadDesk)</option>
+            <option value="cookie">cookie (Agent Worker)</option>
+            <option value="coca">coca (Agent Worker)</option>
+            <option value="agy-worker">agy-worker (ACC)</option>
+            <option value="__custom__">Custom Sender...</option>
+          </select>
+        </div>
+        <input type="text" id="custom-sender-input" class="hidden" placeholder="Enter sender name...">
+
+        <label for="target-agent-select" style="margin-top: 10px;">Target Agent:</label>
+        <div class="select-wrapper">
+          <select id="target-agent-select">
+            <option value="" selected>Broadcast (All)</option>
+            <option value="argon">argon</option>
+            <option value="cookie">cookie</option>
+            <option value="coca">coca</option>
+            <option value="agy-worker">agy-worker</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="system-status">
+        <div class="status-indicator online"></div>
+        <span id="connection-status">Bridge Live</span>
+        <span class="poll-interval">3s poll</span>
+      </div>
+    </aside>
+
+    <!-- Main Chat Workspace -->
+    <main class="chat-workspace">
+      <!-- Header -->
+      <header class="chat-header">
+        <div class="header-room-info">
+          <span class="room-hash">#</span>
+          <h1 id="current-room-title">main</h1>
+          <span id="current-room-desc" class="room-description">General cluster broadcast channel</span>
+        </div>
+        <div class="header-actions">
+          <button id="refresh-btn" class="btn-secondary" title="Refresh messages">🔄 Refresh</button>
+        </div>
+      </header>
+
+      <!-- Message Area with Drag and Drop Zone -->
+      <div id="chat-container" class="chat-container">
+        <!-- Drag & Drop Overlay -->
+        <div id="drop-overlay" class="drop-overlay">
+          <div class="drop-message">
+            <span class="drop-icon">📥</span>
+            <h3>Drop photos or documents here</h3>
+            <p>Upload directly to <strong id="drop-room-target">main</strong></p>
+          </div>
+        </div>
+
+        <!-- Message List -->
+        <div id="message-list" class="message-list">
+          <div class="empty-state">Loading messages...</div>
+        </div>
+      </div>
+
+      <!-- Attachment Staging Tray -->
+      <div id="staged-tray" class="staged-tray hidden">
+        <div class="staged-header">
+          <span>Staged Attachments (<span id="staged-count">0</span>)</span>
+          <button id="clear-staged-btn" class="btn-link">Clear all</button>
+        </div>
+        <div id="staged-items" class="staged-items"></div>
+      </div>
+
+      <!-- Composer Bar -->
+      <footer class="composer-container">
+        <!-- Hidden file input for attachment picker -->
+        <input type="file" id="file-input" multiple class="hidden">
+
+        <form id="composer-form" class="composer-form">
+          <button type="button" id="attach-btn" class="btn-attach" title="Attach file or photo">
+            📎
+          </button>
+
+          <textarea
+            id="message-text"
+            class="message-input"
+            rows="1"
+            placeholder="Type a message or paste a screenshot (Enter to send, Shift+Enter for newline)..."
+          ></textarea>
+
+          <button type="submit" id="send-btn" class="btn-send" title="Send message">
+            <span>Send</span> 🚀
+          </button>
+        </form>
+
+        <div class="composer-tips">
+          <span>💡 <strong>Tip:</strong> Paste screenshots directly with <kbd>Ctrl+V</kbd> / <kbd>Cmd+V</kbd>, drag &amp; drop files anywhere, or click 📎 to browse.</span>
+        </div>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Fullscreen Image Modal / Lightbox -->
+  <div id="image-modal" class="image-modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <button id="modal-close" class="modal-close" title="Close preview">×</button>
+      <img id="modal-img" src="" alt="Photo preview">
+      <div class="modal-footer">
+        <span id="modal-caption" class="modal-caption"></span>
+        <a id="modal-download" class="btn-primary" href="" target="_blank" download>Download Original</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

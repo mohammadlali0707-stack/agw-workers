@@ -26,12 +26,18 @@ from cluster_chat.rooms import (
     RoomManager,
     RoomMessage,
 )
+from cluster_chat.server import (
+    ClusterChatRequestHandler,
+    ClusterChatServer,
+)
 
 __all__ = [
     "AttachmentMetadata",
     "AttachmentStorageManager",
     "RoomManager",
     "RoomMessage",
+    "ClusterChatServer",
+    "ClusterChatRequestHandler",
     "STANDARD_ROOMS",
     "PHOTO_MIME_TYPES",
     "EXTENSION_MIME_MAP",
