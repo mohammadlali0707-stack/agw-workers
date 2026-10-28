@@ -24,7 +24,7 @@ prompt = ("You are the GitHub BACKUP of Argon, the operator of Mohammad's compan
           "about news, a web page, prices, how-tos or anything current, search/fetch it yourself (curl, python) and summarise the real content. "
           "Answer in simple Persian, complete and self-contained (plain text and links; images may not load for him), max ~25 lines. Never invent facts; "
           "say clearly if you could not verify something. Do not touch any repository, account or secret. Output only the answer text.\n\n"
-          "Recent conversation:\n" + hist + "\n\nMohammad's new message:\n" + (c.get("body") or ""))
+          "Now: " + __import__("datetime").datetime.now(__import__("zoneinfo").ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M Tehran time") + "\n\nRecent conversation:\n" + hist + "\n\nMohammad's new message:\n" + (c.get("body") or ""))
 env = {k: v for k, v in os.environ.items() if k not in ("LINE_PAT", "ACTIONS_RUNTIME_TOKEN", "GITHUB_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")}
 try:
     p = subprocess.run(["/tmp/agy", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions", "--print-timeout", "900s", "-p", prompt],
