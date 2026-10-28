@@ -1,0 +1,19 @@
+diff --git a/.github/workflows/remote-ccp-tbs-morning.yml b/.github/workflows/remote-ccp-tbs-morning.yml
+index 60db894..166d11d 100644
+--- a/.github/workflows/remote-ccp-tbs-morning.yml
++++ b/.github/workflows/remote-ccp-tbs-morning.yml
+@@ -157,13 +157,13 @@ jobs:
+         id: guard
+         env:
+           GH_TOKEN: ${{ secrets.ACC6_PAT }}
++          FORCE: ${{ github.event.inputs.force }}
+         run: |
+           exec >>/tmp/private_step.log 2>&1   # public repo: no private output in logs
+           export GITHUB_REPOSITORY=mohammadlali0707-stack/Claud-Cloud-Project
+           DATE="$(date -u +%F)"
+           REPORT="Reports/morning/${DATE}.md"
+           TITLE="گزارش صبحگاهی — ${DATE}"
+-          FORCE="${{ github.event.inputs.force }}"
+           if [ -f "$REPORT" ] && [ "$FORCE" != "true" ]; then
+             echo "skip=true" >> "$GITHUB_OUTPUT"
+             echo "SKIP: ${REPORT} already exists for ${DATE} and force was not" \
