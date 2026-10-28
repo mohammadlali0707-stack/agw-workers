@@ -386,7 +386,7 @@ def build_sub_menu_keyboard(
 
 def get_standard_inline_action_row(message_id: int | str | None = None) -> list[dict[str, str]]:
     """Return the 4 standard inline action buttons row with optional message_id suffix."""
-    suffix = f":{message_id}" if message_id is not None else ""
+    suffix = f":{message_id}" if message_id is not None else ":1"
     return [
         {"text": "🇮🇷 FA", "callback_data": f"bilingual_fa{suffix}"},
         {"text": "🇬🇧 EN", "callback_data": f"bilingual_en{suffix}"},
@@ -399,9 +399,11 @@ def has_all_four_action_buttons(inline_keyboard: list[list[dict[str, Any]]]) -> 
     """Verify whether all 4 required inline action buttons are present."""
     found: set[str] = set()
     for row in inline_keyboard:
-        for btn in row:
-            txt = str(btn.get("text", "")).strip()
-            cb = str(btn.get("callback_data", "")).split(":")[0].strip()
+        row_list = row if isinstance(row, list) else [row]
+        for btn in row_list:
+            txt = extract_button_text(btn)
+            cb_raw = str(btn.get("callback_data", "") if isinstance(btn, dict) else getattr(btn, "callback_data", ""))
+            cb = cb_raw.split(":")[0].strip()
 
             # Persian check
             if "FA" in txt or "فارسی" in txt or cb in ("lang_fa", "bilingual_fa", "fa"):
@@ -419,21 +421,58 @@ def has_all_four_action_buttons(inline_keyboard: list[list[dict[str, Any]]]) -> 
     return len(found) == 4
 
 
+def get_missing_action_buttons(
+    rows: list[list[Any]],
+    message_id: int | str | None = None,
+) -> list[dict[str, str]]:
+    """Determine which of the 4 standard inline action buttons are missing."""
+    has_fa, has_en, has_words, has_knowledge = False, False, False, False
+    for row in rows:
+        row_list = row if isinstance(row, list) else [row]
+        for btn in row_list:
+            txt = extract_button_text(btn)
+            cb_raw = str(btn.get("callback_data", "") if isinstance(btn, dict) else getattr(btn, "callback_data", ""))
+            cb = cb_raw.split(":")[0].strip()
+
+            if "FA" in txt or "فارسی" in txt or cb in ("lang_fa", "bilingual_fa", "fa"):
+                has_fa = True
+            if "EN" in txt or "انگلیسی" in txt or cb in ("lang_en", "bilingual_en", "en"):
+                has_en = True
+            if "Words" in txt or cb in ("words", "bilingual_words"):
+                has_words = True
+            if "Knowledge" in txt or cb in ("knowledge", "bilingual_knowledge"):
+                has_knowledge = True
+
+    suffix = f":{message_id}" if message_id is not None else ":1"
+    missing: list[dict[str, str]] = []
+    if not has_fa:
+        missing.append({"text": "🇮🇷 FA", "callback_data": f"bilingual_fa{suffix}"})
+    if not has_en:
+        missing.append({"text": "🇬🇧 EN", "callback_data": f"bilingual_en{suffix}"})
+    if not has_words:
+        missing.append({"text": "📘 Words", "callback_data": f"bilingual_words{suffix}"})
+    if not has_knowledge:
+        missing.append({"text": "Knowledge", "callback_data": f"bilingual_knowledge{suffix}"})
+    return missing
+
+
 def build_inline_action_keyboard(
     custom_buttons: list[list[dict[str, Any]]] | None = None,
     message_id: int | str | None = None,
 ) -> dict[str, Any]:
     """
     Construct an InlineKeyboardMarkup containing any message-specific custom buttons,
-    followed by the 4 standard action buttons: Persian, English, Words, Knowledge.
+    followed by the missing standard action buttons (Persian, English, Words, Knowledge).
     """
     rows: list[list[dict[str, Any]]] = []
     if custom_buttons:
         for r in custom_buttons:
-            rows.append([dict(b) for b in r])
+            row_list = r if isinstance(r, list) else [r]
+            rows.append([dict(b) if isinstance(b, dict) else b for b in row_list])
 
-    if not has_all_four_action_buttons(rows):
-        rows.append(get_standard_inline_action_row(message_id=message_id))
+    missing = get_missing_action_buttons(rows, message_id=message_id)
+    if missing:
+        rows.append(missing)
 
     return {"inline_keyboard": rows}
 
@@ -445,16 +484,17 @@ def ensure_inline_action_buttons(
     """
     Ensure an outgoing bot message has the 4 inline action buttons attached:
     - If reply_markup is None: returns InlineKeyboardMarkup with the 4 action buttons.
-    - If reply_markup is InlineKeyboardMarkup: appends 4 action buttons if missing.
+    - If reply_markup is InlineKeyboardMarkup: appends missing action buttons without duplicates.
     - If reply_markup is ReplyKeyboardMarkup: attaches 'inline_keyboard' dual representation.
     """
     if not reply_markup:
         return {"inline_keyboard": [get_standard_inline_action_row(message_id=message_id)]}
 
     if "inline_keyboard" in reply_markup:
-        rows = [list(r) for r in reply_markup.get("inline_keyboard", [])]
-        if not has_all_four_action_buttons(rows):
-            rows.append(get_standard_inline_action_row(message_id=message_id))
+        rows = [list(r) if isinstance(r, list) else [r] for r in reply_markup.get("inline_keyboard", [])]
+        missing = get_missing_action_buttons(rows, message_id=message_id)
+        if missing:
+            rows.append(missing)
         res = dict(reply_markup)
         res["inline_keyboard"] = rows
         return res
@@ -536,15 +576,24 @@ class HQService:
 
         if reply_markup is None:
             payload["reply_markup"] = standard_inline
-        elif "inline_keyboard" in reply_markup:
+            payload["inline_keyboard"] = standard_inline["inline_keyboard"]
+        elif "inline_keyboard" in reply_markup and "keyboard" not in reply_markup:
             payload["reply_markup"] = ensure_inline_action_buttons(reply_markup, message_id=message_id)
+            payload["inline_keyboard"] = payload["reply_markup"]["inline_keyboard"]
         elif "keyboard" in reply_markup:
             filtered_rk = filter_reply_keyboard(reply_markup, is_main_menu=is_main_menu)
             payload["reply_keyboard"] = filtered_rk
-            payload["reply_markup"] = standard_inline
+            payload["reply_markup"] = {
+                "inline_keyboard": standard_inline["inline_keyboard"],
+                "keyboard": filtered_rk.get("keyboard", []) if isinstance(filtered_rk, dict) else getattr(filtered_rk, "keyboard", []),
+                "resize_keyboard": filtered_rk.get("resize_keyboard", True) if isinstance(filtered_rk, dict) else getattr(filtered_rk, "resize_keyboard", True),
+                "one_time_keyboard": filtered_rk.get("one_time_keyboard", False) if isinstance(filtered_rk, dict) else getattr(filtered_rk, "one_time_keyboard", False),
+            }
             payload["inline_keyboard"] = standard_inline["inline_keyboard"]
         else:
             payload["reply_markup"] = ensure_inline_action_buttons(reply_markup, message_id=message_id)
+            if isinstance(payload["reply_markup"], dict) and "inline_keyboard" in payload["reply_markup"]:
+                payload["inline_keyboard"] = payload["reply_markup"]["inline_keyboard"]
 
         return payload
 
