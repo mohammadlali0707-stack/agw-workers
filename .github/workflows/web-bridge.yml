@@ -1,0 +1,108 @@
+name: Cluster-Chat Web Bridge
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Target HTTP/HTTPS URL to fetch"
+        required: true
+        type: string
+      room:
+        description: "Destination cluster-chat room"
+        required: false
+        type: choice
+        options:
+          - main
+          - dm-argon
+          - workers
+        default: main
+      mode:
+        description: "Content extraction mode"
+        required: false
+        type: choice
+        options:
+          - markdown
+          - html
+          - file
+        default: markdown
+      request_id:
+        description: "Request identifier"
+        required: false
+        type: string
+        default: manual
+  push:
+    paths:
+      - 'relay_queue/web_requests/*.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cluster-chat-web-bridge-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  web-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install cryptography
+
+      - name: Execute Web Bridge Runner
+        env:
+          RELAY_SHARED_KEY: ${{ secrets.RELAY_SHARED_KEY }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_URL: ${{ inputs.url }}
+          INPUT_ROOM: ${{ inputs.room }}
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          ARGS="--process-queue"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ -n "$INPUT_URL" ]; then
+              ARGS="--url \"$INPUT_URL\" --room \"${INPUT_ROOM:-main}\" --mode \"${INPUT_MODE:-markdown}\" --request-id \"${INPUT_REQUEST_ID:-manual}\" $ARGS"
+            fi
+          fi
+          echo "Running: python3 scripts/web_bridge_runner.py $ARGS"
+          eval python3 scripts/web_bridge_runner.py $ARGS
+
+      - name: Commit and push relay queue updates
+        env:
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -d "relay_queue" ]; then
+            git add relay_queue/
+          fi
+          if git diff --staged --quiet; then
+            echo "No changes in relay_queue to commit."
+            exit 0
+          fi
+          git commit -m "relay: process web bridge fetch [skip ci]"
+          BRANCH="${BRANCH_NAME:-main}"
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Push attempt $i of $MAX_RETRIES..."
+            if git pull --rebase origin "$BRANCH" && git push origin "$BRANCH"; then
+              echo "Successfully pushed relay queue updates."
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          echo "Failed to push relay queue changes after $MAX_RETRIES attempts."
+          exit 1
