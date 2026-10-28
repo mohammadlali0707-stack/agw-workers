@@ -25,6 +25,33 @@ from cluster_chat.attachments import (
 DEFAULT_DATA_DIR = "./data/cluster-chat"
 
 
+def _parse_timestamp(val: Any) -> float | None:
+    """Parse numeric or ISO 8601 timestamp string into Unix timestamp float."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        f = float(val)
+        return f if f < 1e11 else f / 1000.0
+    s = str(val).strip()
+    if not s:
+        return None
+    try:
+        f = float(s)
+        return f if f < 1e11 else f / 1000.0
+    except ValueError:
+        pass
+    clean_s = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(clean_s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+
 @dataclass
 class RoomMessage:
     """Represents a message sent to a cluster chat room."""
@@ -85,6 +112,7 @@ class RoomManager:
 
         self.known_rooms: set[str] = set(known_rooms or STANDARD_ROOMS)
         self._lock = threading.Lock()
+        self._attachments_cache: dict[str, dict[str, Any]] = {}
 
     def get_room_file(self, room: str) -> Path:
         """Resolve room message storage JSONL file safely."""
@@ -165,7 +193,7 @@ class RoomManager:
 
         msg_dict = message.to_dict()
 
-        # Thread-safe persistent append to room's JSONL
+        # Thread-safe persistent append to room's JSONL & cache attachments
         room_file = self.get_room_file(validated_room)
         line = json.dumps(msg_dict, ensure_ascii=False) + "\n"
 
@@ -173,8 +201,26 @@ class RoomManager:
             with open(room_file, "a", encoding="utf-8") as f:
                 f.write(line)
                 f.flush()
+            for att in processed_attachments:
+                if isinstance(att, dict) and "attachment_id" in att:
+                    self._attachments_cache[att["attachment_id"]] = att
 
         return msg_dict
+
+    def find_attachment_in_rooms(self, attachment_id: str) -> dict[str, Any] | None:
+        """Find an attachment metadata record by attachment_id across all rooms."""
+        clean_id = str(attachment_id).strip()
+        with self._lock:
+            if clean_id in self._attachments_cache:
+                return self._attachments_cache[clean_id]
+            for room_name in self.list_rooms():
+                msgs = self.get_messages(room=room_name, limit=0)
+                for m in msgs:
+                    for att in m.get("attachments", []):
+                        if isinstance(att, dict) and att.get("attachment_id") == clean_id:
+                            self._attachments_cache[clean_id] = att
+                            return att
+        return None
 
     def get_messages(
         self,
@@ -182,8 +228,10 @@ class RoomManager:
         limit: int = 50,
         before_id: str | None = None,
         target_agent: str | None = None,
+        since: str | float | int | None = None,
+        after: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Retrieve recent messages for a room, optionally filtered by target_agent or before_id."""
+        """Retrieve messages for a room with incremental polling (since/after) or limit."""
         room_file = self.get_room_file(room)
         if not room_file.exists():
             return []
@@ -201,6 +249,39 @@ class RoomManager:
                         all_messages.append(record)
                     except json.JSONDecodeError:
                         continue
+
+        # Incremental polling: after=<message_id>
+        if after:
+            clean_after = str(after).strip()
+            match_idx = None
+            for idx, m in enumerate(all_messages):
+                if m.get("message_id") == clean_after:
+                    match_idx = idx
+                    break
+            if match_idx is not None:
+                all_messages = all_messages[match_idx + 1 :]
+
+        # Incremental polling: since=<message_id_or_timestamp>
+        if since is not None:
+            clean_since = str(since).strip()
+            match_idx = None
+            for idx, m in enumerate(all_messages):
+                if m.get("message_id") == clean_since:
+                    match_idx = idx
+                    break
+            if match_idx is not None:
+                all_messages = all_messages[match_idx + 1 :]
+            else:
+                since_ts = _parse_timestamp(since)
+                if since_ts is not None:
+                    filtered: list[dict[str, Any]] = []
+                    for m in all_messages:
+                        m_ts = _parse_timestamp(m.get("created_at"))
+                        if m_ts is not None and m_ts > since_ts:
+                            filtered.append(m)
+                        elif m_ts is None and m.get("created_at", "") > clean_since:
+                            filtered.append(m)
+                    all_messages = filtered
 
         # Optional before_id truncation
         if before_id:
@@ -220,8 +301,12 @@ class RoomManager:
                 if m.get("target_agent") is None or m.get("target_agent") == clean_target
             ]
 
-        # Return up to limit messages (most recent)
+        # Limit slicing:
+        # If since or after was provided (incremental polling forward), return earliest new messages
+        # If neither was provided (history query), return latest messages
         if limit > 0 and len(all_messages) > limit:
+            if since is not None or after is not None:
+                return all_messages[:limit]
             return all_messages[-limit:]
 
         return all_messages

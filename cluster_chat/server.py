@@ -21,6 +21,7 @@ import socket
 import threading
 from typing import Any, Callable
 import urllib.parse
+import uuid
 
 from cluster_chat.attachments import (
     DEFAULT_MAX_UPLOAD_MB,
@@ -64,21 +65,153 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
 
     server: "ThreadingClusterChatServer"  # Type hint for attached server
 
+    def setup(self) -> None:
+        self._pending_cookies: list[str] = []
+        super().setup()
+
     # Suppress default log messages to stderr unless configured
     def log_message(self, format: str, *args: Any) -> None:
         logger.debug("%s - - [%s] %s", self.address_string(), self.log_date_time_string(), format % args)
 
-    def _set_cors_headers(self) -> None:
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+    def is_trusted_proxy(self) -> bool:
+        """Check if incoming peer is allowed to set reverse-proxy headers."""
+        trust_val = os.environ.get("CLUSTER_CHAT_TRUST_PROXY", "true").strip().lower()
+        if trust_val in ("0", "false", "no"):
+            return False
+        trusted_proxies = os.environ.get("TRUSTED_PROXIES", "").strip()
+        if trusted_proxies:
+            client_ip = self.client_address[0] if self.client_address else ""
+            allowed = [p.strip() for p in trusted_proxies.split(",") if p.strip()]
+            return client_ip in allowed
+        return True
 
-    def _send_json(self, data: dict[str, Any], status: int = 200) -> None:
+    def get_client_ip(self) -> str:
+        """Extract client IP, trusting X-Forwarded-For if behind a trusted reverse proxy/relay."""
+        if self.is_trusted_proxy():
+            xff = self.headers.get("X-Forwarded-For")
+            if xff:
+                return xff.split(",")[0].strip()
+        return self.client_address[0] if self.client_address else "127.0.0.1"
+
+    def is_secure_request(self) -> bool:
+        """Determine if request is over HTTPS directly or through reverse-proxy / domestic relay."""
+        if self.is_trusted_proxy():
+            xfp = self.headers.get("X-Forwarded-Proto")
+            if xfp:
+                return xfp.split(",")[0].strip().lower() == "https"
+        return getattr(self.server, "is_ssl", False)
+
+    def get_request_host(self) -> str:
+        """Extract host:port, trusting X-Forwarded-Host if behind a trusted reverse proxy/relay."""
+        if self.is_trusted_proxy():
+            xfh = self.headers.get("X-Forwarded-Host")
+            if xfh:
+                return xfh.split(",")[0].strip()
+        host = self.headers.get("Host")
+        if host:
+            return host.strip()
+        srv_host, srv_port = self.server.server_address[:2]
+        return f"{srv_host}:{srv_port}"
+
+    def get_base_url(self) -> str:
+        """Derive base URL dynamically from CLUSTER_CHAT_PUBLIC_URL or reverse-proxy/Host headers."""
+        env_url = (os.environ.get("CLUSTER_CHAT_PUBLIC_URL") or os.environ.get("CLUSTER_CHAT_PUBLIC_BASE_URL", "")).strip()
+        if env_url:
+            return env_url.rstrip("/")
+        proto = "https" if self.is_secure_request() else "http"
+        return f"{proto}://{self.get_request_host()}"
+
+    def parse_cookies(self) -> dict[str, str]:
+        """Parse incoming Cookie header into dictionary."""
+        cookie_header = self.headers.get("Cookie", "")
+        if not cookie_header:
+            return {}
+        cookies: dict[str, str] = {}
+        for item in cookie_header.split(";"):
+            if "=" in item:
+                k, v = item.strip().split("=", 1)
+                cookies[k.strip()] = v.strip()
+        return cookies
+
+    def set_cookie(
+        self,
+        name: str,
+        value: str,
+        max_age: int | None = 86400,
+        path: str = "/",
+        http_only: bool = True,
+        same_site: str = "Lax",
+        secure: bool | None = None,
+    ) -> None:
+        """Set cookie omitting Domain (host-agnostic) and only setting Secure when HTTPS."""
+        if secure is None:
+            secure = self.is_secure_request()
+        parts = [f"{name}={value}", f"Path={path}"]
+        if max_age is not None:
+            parts.append(f"Max-Age={max_age}")
+        if http_only:
+            parts.append("HttpOnly")
+        if same_site:
+            parts.append(f"SameSite={same_site}")
+        if secure:
+            parts.append("Secure")
+        # NOTE: Fixed 'Domain' attribute is deliberately omitted to allow
+        # seamless cookie binding to direct raw VPS IP:port or domestic relays!
+        cookie_line = "; ".join(parts)
+        self._pending_cookies.append(cookie_line)
+
+    def _set_cors_headers(self) -> None:
+        """Configure CORS to accept direct IP origins, same-origin, or configured ALLOWED_ORIGINS."""
+        origin = self.headers.get("Origin")
+        allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
+
+        if not origin:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        else:
+            req_host = self.get_request_host().lower()
+            parsed_origin = urllib.parse.urlparse(origin)
+            origin_host = parsed_origin.netloc.lower()
+            is_same_host = (origin_host == req_host)
+
+            allowed_list = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+            origin_allowed = (
+                is_same_host
+                or (not allowed_origins_env)
+                or (allowed_origins_env == "*")
+                or (origin in allowed_list)
+                or ("*" in allowed_list)
+            )
+
+            if origin_allowed:
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Access-Control-Allow-Credentials", "true")
+                self.send_header("Vary", "Origin")
+            elif allowed_list:
+                self.send_header("Access-Control-Allow-Origin", allowed_list[0])
+            else:
+                self.send_header("Access-Control-Allow-Origin", "*")
+
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD, PUT, DELETE")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-Requested-With, Cache-Control, Pragma, "
+            "X-Forwarded-Proto, X-Forwarded-Host, X-Forwarded-For",
+        )
+        self.send_header("Access-Control-Max-Age", "86400")
+
+    def _send_json(self, data: dict[str, Any], status: int = 200, cache_control: str | None = None) -> None:
         """Send JSON response with proper headers."""
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
+            if "no-cache" in cache_control.lower() or "no-store" in cache_control.lower():
+                self.send_header("Pragma", "no-cache")
+        for cookie_str in self._pending_cookies:
+            self.send_header("Set-Cookie", cookie_str)
+        self._pending_cookies.clear()
         self._set_cors_headers()
         self.end_headers()
         self.wfile.write(body)
@@ -93,27 +226,120 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
         self._set_cors_headers()
         self.end_headers()
 
+    def do_HEAD(self) -> None:
+        """Handle HEAD requests for health probes and static file headers."""
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        if path in (
+            "/api/cluster-chat/health",
+            "/health",
+            "/api/health",
+            "/api/ping",
+            "/ping",
+            "/api/cluster-chat/ping",
+        ):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+            self._set_cors_headers()
+            self.end_headers()
+            return
+        self.send_response(200)
+        self._set_cors_headers()
+        self.end_headers()
+
+    def _stream_file_response(self, safe_path: Path, query: dict[str, list[str]]) -> None:
+        """Stream a validated safe file path to the client with range/disposition headers."""
+        download_val = query.get("download", ["0"])[0].lower()
+        is_download = download_val in ("1", "true", "yes")
+
+        file_size = safe_path.stat().st_size
+        mime_type = detect_mime_type(safe_path.name)
+        disposition = "attachment" if is_download else "inline"
+        safe_filename = re.sub(r'[\r\n"\\\x00-\x1f]', '_', safe_path.name)
+
+        self.send_response(200)
+        self.send_header("Content-Type", mime_type)
+        self.send_header("Content-Length", str(file_size))
+        self.send_header("Content-Disposition", f'{disposition}; filename="{safe_filename}"')
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self._set_cors_headers()
+        self.end_headers()
+
+        chunk_size = 64 * 1024
+        with open(safe_path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+
     def do_GET(self) -> None:
         """Handle GET requests for files, messages, rooms, and Web UI."""
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
         query = urllib.parse.parse_qs(parsed.query)
 
-        # 1. Health check
-        if path in ("/api/cluster-chat/health", "/health"):
-            self._send_json({"status": "ok", "service": "cluster-chat"})
+        # 1. Health check & transport probe
+        if path in (
+            "/api/cluster-chat/health",
+            "/health",
+            "/api/health",
+            "/api/ping",
+            "/ping",
+            "/api/cluster-chat/ping",
+        ):
+            host = self.get_request_host()
+            self._send_json(
+                {
+                    "ok": True,
+                    "status": "ok",
+                    "service": "cluster-chat",
+                    "host": host,
+                    "transport": ["ws", "sse", "poll"],
+                    "direct_ip_supported": True,
+                },
+                cache_control="no-store, no-cache, must-revalidate",
+            )
             return
 
-        # 2. Room list endpoint
+        # 2. Session / auth status
+        if path in ("/api/auth/session", "/api/auth/status", "/api/session"):
+            cookies = self.parse_cookies()
+            auth_header = self.headers.get("Authorization", "")
+            sess_id = cookies.get("cluster_chat_session") or (
+                auth_header.replace("Bearer ", "").strip() if auth_header.startswith("Bearer ") else None
+            )
+            session_data = self.server.sessions.get(sess_id) if (sess_id and hasattr(self.server, "sessions")) else None
+            is_auth = (session_data is not None) or bool(sess_id)
+            user = session_data.get("user") if session_data else None
+            resp_payload: dict[str, Any] = {
+                "ok": True,
+                "authenticated": is_auth,
+                "session_id": sess_id,
+                "direct_ip_supported": True,
+            }
+            if user:
+                resp_payload["user"] = user
+            self._send_json(
+                resp_payload,
+                cache_control="no-store, no-cache, must-revalidate",
+            )
+            return
+
+        # 3. Room list endpoint
         if path in ("/api/cluster-chat/rooms", "/api/rooms"):
             rooms = self.server.room_manager.list_rooms()
             self._send_json({"ok": True, "rooms": rooms})
             return
 
-        # 3. Room messages endpoint: /api/cluster-chat/rooms/<room>/messages or /api/rooms/<room>/messages
+        # 4. Room messages & incremental polling endpoint
+        # Matches /api/cluster-chat/rooms/<room>/messages, /api/rooms/<room>/messages,
+        # or root endpoints /api/cluster-chat/messages, /api/messages, /messages
         room_messages_match = re.match(r"^/(?:api/cluster-chat|api)/rooms/([^/]+)/messages$", path)
-        if room_messages_match:
-            room = room_messages_match.group(1)
+        is_direct_messages = path in ("/api/cluster-chat/messages", "/api/messages", "/messages")
+        if room_messages_match or is_direct_messages:
+            room = room_messages_match.group(1) if room_messages_match else query.get("room", ["main"])[0]
             if not is_valid_room_name(room):
                 self._send_error_json(f"Invalid room name '{room}'", status=400)
                 return
@@ -125,18 +351,47 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
 
             before_id = query.get("before_id", [None])[0]
             target_agent = query.get("target_agent", [None])[0]
+            since = query.get("since", [None])[0]
+            after = query.get("after", [None])[0]
 
             messages = self.server.room_manager.get_messages(
                 room=room,
                 limit=limit,
                 before_id=before_id,
                 target_agent=target_agent,
+                since=since,
+                after=after,
             )
-            self._send_json({"ok": True, "room": room, "messages": messages})
+            self._send_json(
+                {
+                    "ok": True,
+                    "room": room,
+                    "messages": messages,
+                    "count": len(messages),
+                },
+                cache_control="no-store, no-cache, must-revalidate",
+            )
             return
 
-        # 4. Safe file serving: /api/cluster-chat/files/<room>/<date>/<filename> or /files/<room>/<date>/<filename>
-        file_match = re.match(r"^/(?:api/cluster-chat/files|files)/([^/]+)/([^/]+)/([^/]+)$", path)
+        # 5. Safe file serving:
+        # a. Direct attachment ID lookup: /api/cluster-chat/attachments/<id>, /api/attachments/<id>, /attachments/<id>
+        att_match = re.match(r"^/(?:api/cluster-chat/attachments|api/attachments|attachments)/([^/]+)$", path)
+        if att_match:
+            att_id = att_match.group(1)
+            att_meta = self.server.room_manager.find_attachment_in_rooms(att_id)
+            if not att_meta:
+                self._send_error_json("Attachment not found", status=404)
+                return
+            local_path_str = att_meta.get("local_path", "")
+            safe_path = Path(local_path_str).resolve()
+            if not safe_path.is_relative_to(self.server.storage.upload_dir.resolve()) or not safe_path.is_file():
+                self._send_error_json("Attachment file not found on disk", status=404)
+                return
+            self._stream_file_response(safe_path=safe_path, query=query)
+            return
+
+        # b. Room/date/filename path: /api/cluster-chat/files/<room>/<date>/<filename>, /files/..., /uploads/...
+        file_match = re.match(r"^/(?:api/cluster-chat/files|api/files|files|uploads|api/uploads)/([^/]+)/([^/]+)/([^/]+)$", path)
         if file_match:
             room = file_match.group(1)
             date_str = file_match.group(2)
@@ -156,31 +411,7 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
                 self._send_error_json("File not found", status=404)
                 return
 
-            # Check download query param
-            download_val = query.get("download", ["0"])[0].lower()
-            is_download = download_val in ("1", "true", "yes")
-
-            file_size = safe_path.stat().st_size
-            mime_type = detect_mime_type(safe_path.name)
-            disposition = "attachment" if is_download else "inline"
-            safe_filename = re.sub(r'[\r\n"\\\x00-\x1f]', '_', safe_path.name)
-
-            self.send_response(200)
-            self.send_header("Content-Type", mime_type)
-            self.send_header("Content-Length", str(file_size))
-            self.send_header("Content-Disposition", f'{disposition}; filename="{safe_filename}"')
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self._set_cors_headers()
-            self.end_headers()
-
-            # Stream file in 64 KB chunks to avoid memory pressure
-            chunk_size = 64 * 1024
-            with open(safe_path, "rb") as f:
-                while True:
-                    chunk = f.read(chunk_size)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
+            self._stream_file_response(safe_path=safe_path, query=query)
             return
 
         # 5. Static Web UI files
@@ -275,6 +506,51 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
             )
             return
 
+        # 0. Session and auth endpoints
+        if path in ("/api/auth/session", "/api/auth/login", "/api/login"):
+            raw_body = self.rfile.read(content_length)
+            user = None
+            if raw_body:
+                try:
+                    payload = json.loads(raw_body.decode("utf-8"))
+                    if isinstance(payload, dict):
+                        user = payload.get("user") or payload.get("username")
+                        if user is not None:
+                            user = str(user).strip()
+                except Exception:
+                    pass
+            session_id = f"sess_{uuid.uuid4().hex}"
+            if hasattr(self.server, "sessions"):
+                self.server.sessions[session_id] = {
+                    "session_id": session_id,
+                    "user": user,
+                }
+            self.set_cookie("cluster_chat_session", session_id)
+            resp_payload: dict[str, Any] = {
+                "ok": True,
+                "authenticated": True,
+                "session_id": session_id,
+            }
+            if user:
+                resp_payload["user"] = user
+            self._send_json(
+                resp_payload,
+                cache_control="no-store, no-cache, must-revalidate",
+            )
+            return
+
+        if path in ("/api/auth/logout", "/api/logout"):
+            cookies = self.parse_cookies()
+            sess_id = cookies.get("cluster_chat_session")
+            if sess_id and hasattr(self.server, "sessions") and sess_id in self.server.sessions:
+                self.server.sessions.pop(sess_id, None)
+            self.set_cookie("cluster_chat_session", "", max_age=0)
+            self._send_json(
+                {"ok": True, "authenticated": False, "logged_out": True},
+                cache_control="no-store, no-cache, must-revalidate",
+            )
+            return
+
         # 1. Upload endpoints: /api/cluster-chat/upload, /api/rooms/<room>/upload, /api/cluster-chat/rooms/<room>/upload
         upload_match = re.match(r"^/(?:api/cluster-chat|api)/rooms/([^/]+)/upload$", path)
         is_upload = (path in ("/api/cluster-chat/upload", "/api/upload")) or bool(upload_match)
@@ -286,8 +562,9 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
 
         # 2. Post message endpoint: /api/cluster-chat/rooms/<room>/messages or /api/rooms/<room>/messages
         messages_match = re.match(r"^/(?:api/cluster-chat|api)/rooms/([^/]+)/messages$", path)
-        if messages_match:
-            room = messages_match.group(1)
+        is_direct_post = path in ("/api/cluster-chat/messages", "/api/messages", "/messages")
+        if messages_match or is_direct_post:
+            room = messages_match.group(1) if messages_match else None
             self._handle_post_message(room=room, content_length=content_length)
             return
 
@@ -536,14 +813,8 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
             status=201,
         )
 
-    def _handle_post_message(self, room: str, content_length: int) -> None:
+    def _handle_post_message(self, room: str | None, content_length: int) -> None:
         """Handle standard text/attachment message posting to a room."""
-        try:
-            validated_room = validate_room_name(room)
-        except ValueError as ve:
-            self._send_error_json(str(ve), status=400)
-            return
-
         content_type_header = self.headers.get("Content-Type", "")
         if "application/json" not in content_type_header.lower():
             self._send_error_json("Expected Content-Type: application/json", status=415)
@@ -558,6 +829,13 @@ class ClusterChatRequestHandler(http.server.BaseHTTPRequestHandler):
 
         if not isinstance(payload, dict):
             self._send_error_json("JSON body must be an object", status=400)
+            return
+
+        target_room = room or payload.get("room", "main")
+        try:
+            validated_room = validate_room_name(target_room)
+        except ValueError as ve:
+            self._send_error_json(str(ve), status=400)
             return
 
         sender = payload.get("sender")
@@ -634,6 +912,8 @@ class ThreadingClusterChatServer(http.server.ThreadingHTTPServer):
         self.room_manager = room_manager
         self.web_dir = web_dir
         self.on_message_callback = on_message_callback
+        self.is_ssl = False
+        self.sessions: dict[str, dict[str, Any]] = {}
         self.telegram_bridge: TelegramBridge = (
             telegram_bridge
             if telegram_bridge is not None
@@ -684,6 +964,8 @@ class ClusterChatServer:
             self.web_dir = Path(os.environ.get("CLUSTER_CHAT_WEB_DIR", DEFAULT_WEB_DIR)).resolve()
 
         self.on_message_callback = on_message_callback
+        self.is_ssl = False
+        self.sessions: dict[str, dict[str, Any]] = {}
         self.telegram_bridge: TelegramBridge = (
             telegram_bridge
             if telegram_bridge is not None
