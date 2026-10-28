@@ -2,7 +2,8 @@
  * cluster_chat/web/app.js
  *
  * Client application for Cluster Chat Bridge.
- * Manages room navigation, live polling, clipboard screenshot paste,
+ * Manages full-viewport chat (100dvh flex layout), compact room navigation,
+ * default-hidden agent status modal, live polling, clipboard screenshot paste,
  * drag-and-drop file upload, inline photo previews, and agent document cards.
  */
 
@@ -17,17 +18,18 @@
     stagedFiles: [],
     pollingTimer: null,
     pollIntervalMs: 3000,
-    knownRooms: ["main", "dm-argon", "workers-room"],
+    knownRooms: ["main", "dm-argon", "workers"],
     roomDescriptions: {
-      "main": "General cluster broadcast channel",
-      "dm-argon": "Direct agent chat with LeadDesk Argon",
-      "workers-room": "LeadDesk agent worker mesh channel"
+      "main": "کانال عمومی پیام‌های کلاستر | General cluster broadcast channel",
+      "dm-argon": "گفتگوی مستقیم با آرگون | Direct agent chat with LeadDesk Argon",
+      "workers": "کانال ارتباطی ایجنت‌های ورکر | LeadDesk agent worker mesh channel",
+      "workers-room": "کانال ارتباطی ایجنت‌های ورکر | LeadDesk agent worker mesh channel"
     },
     renderedMessageIds: new Set(),
     isAtBottom: true
   };
 
-  // DOM Elements
+  // DOM Elements with safe lookups
   const elements = {
     roomList: document.getElementById("room-list"),
     currentRoomTitle: document.getElementById("current-room-title"),
@@ -39,7 +41,7 @@
     chatContainer: document.getElementById("chat-container"),
     dropOverlay: document.getElementById("drop-overlay"),
     messageList: document.getElementById("message-list"),
-    stagedTray: document.getElementById("staged-tray"),
+    stagedTray: document.getElementById("staged-tray") || document.getElementById("attachment-preview"),
     stagedCount: document.getElementById("staged-count"),
     stagedItems: document.getElementById("staged-items"),
     clearStagedBtn: document.getElementById("clear-staged-btn"),
@@ -49,6 +51,13 @@
     attachBtn: document.getElementById("attach-btn"),
     sendBtn: document.getElementById("send-btn"),
     refreshBtn: document.getElementById("refresh-btn"),
+    agentStatusToggle: document.getElementById("agent-status-toggle"),
+    agentStatusModal: document.getElementById("agent-status-modal"),
+    agentModalClose: document.getElementById("agent-modal-close"),
+    agentModalBackdrop: document.getElementById("agent-modal-backdrop"),
+    agentCardsContainer: document.getElementById("agent-cards-container"),
+    statusBadgeText: document.getElementById("status-badge-text"),
+    connectionStatus: document.getElementById("connection-status"),
     imageModal: document.getElementById("image-modal"),
     modalImg: document.getElementById("modal-img"),
     modalCaption: document.getElementById("modal-caption"),
@@ -94,7 +103,7 @@
       if (btnElement) {
         const originalText = btnElement.innerHTML;
         btnElement.classList.add("copied");
-        btnElement.innerHTML = "✓ Copied!";
+        btnElement.innerHTML = "✓ کپی شد";
         setTimeout(() => {
           btnElement.classList.remove("copied");
           btnElement.innerHTML = originalText;
@@ -106,6 +115,83 @@
     }
   }
 
+  // Toggle Agent Status & Identity Modal / Drawer
+  function toggleAgentStatusModal(show) {
+    if (!elements.agentStatusModal) return;
+    const isHidden = elements.agentStatusModal.classList.contains("hidden");
+    const willShow = typeof show === "boolean" ? show : isHidden;
+
+    if (willShow) {
+      elements.agentStatusModal.classList.remove("hidden");
+      if (elements.agentStatusToggle) {
+        elements.agentStatusToggle.setAttribute("aria-expanded", "true");
+      }
+    } else {
+      elements.agentStatusModal.classList.add("hidden");
+      if (elements.agentStatusToggle) {
+        elements.agentStatusToggle.setAttribute("aria-expanded", "false");
+      }
+    }
+  }
+
+  // Safely update Agent Status grid and compact header badge
+  function updateAgentStatus(agents) {
+    if (!Array.isArray(agents)) return;
+    const onlineAgents = agents.filter(a => (a.status || "").toLowerCase() === "online");
+    const count = onlineAgents.length;
+
+    if (elements.statusBadgeText) {
+      elements.statusBadgeText.textContent = `ایجنت‌ها (${count} آنلاین)`;
+    }
+
+    if (elements.agentCardsContainer) {
+      elements.agentCardsContainer.innerHTML = "";
+      agents.forEach(agent => {
+        const card = document.createElement("div");
+        const isOnline = (agent.status || "").toLowerCase() === "online";
+        card.className = "agent-card " + (isOnline ? "online" : "offline");
+        card.dataset.agent = agent.name;
+
+        let avatar = agent.avatar;
+        if (!avatar) {
+          if (agent.name === "argon") avatar = "🤖";
+          else if (agent.name === "mohammad") avatar = "👑";
+          else if (agent.name === "cookie") avatar = "🍪";
+          else if (agent.name === "coca") avatar = "🥤";
+          else avatar = "⚡";
+        }
+
+        card.innerHTML = `
+          <div class="agent-avatar">${avatar}</div>
+          <div class="agent-info">
+            <div class="agent-name">${escapeHtml(agent.name)} <span class="agent-badge">${escapeHtml(agent.role || "")}</span></div>
+            <div class="agent-state">
+              <span class="dot ${isOnline ? "online" : "offline"}"></span>
+              ${isOnline ? "آنلاین (آماده پردازش)" : "آفلاین"}
+            </div>
+          </div>
+        `;
+        elements.agentCardsContainer.appendChild(card);
+      });
+    }
+  }
+
+  // Fetch agent status from server endpoint (safely updates UI)
+  async function loadAgentStatus() {
+    try {
+      const res = await fetch("/api/cluster-chat/agents");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.ok && Array.isArray(data.agents)) {
+          updateAgentStatus(data.agents);
+        }
+      }
+    } catch (e) {
+      // Safe fallback - default cards remain visible inside modal
+      console.warn("Could not fetch agents status:", e);
+    }
+  }
+
   // Load active rooms from server API
   async function loadRooms() {
     try {
@@ -113,7 +199,9 @@
       if (res.ok) {
         const data = await res.json();
         if (data.ok && Array.isArray(data.rooms)) {
-          state.knownRooms = Array.from(new Set([...state.knownRooms, ...data.rooms]));
+          // Normalize room list: prefer "workers" over "workers-room" for UI tabs
+          const mapped = data.rooms.map(r => (r === "workers-room" ? "workers" : r));
+          state.knownRooms = Array.from(new Set([...state.knownRooms, ...mapped]));
           renderRoomButtons();
         }
       }
@@ -122,25 +210,38 @@
     }
   }
 
-  // Render sidebar room buttons
+  // Render header room navigation pills
   function renderRoomButtons() {
+    if (!elements.roomList) return;
     elements.roomList.innerHTML = "";
-    state.knownRooms.forEach(room => {
+
+    // Guarantee main, dm-argon, workers are present
+    const standardDisplayRooms = ["main", "dm-argon", "workers"];
+    const allRooms = Array.from(new Set([...standardDisplayRooms, ...state.knownRooms]));
+
+    allRooms.forEach(room => {
+      // Skip redundant workers-room button if workers is displayed
+      if (room === "workers-room" && allRooms.includes("workers")) {
+        return;
+      }
+
       const btn = document.createElement("button");
-      btn.className = "room-btn" + (room === state.currentRoom ? " active" : "");
+      btn.type = "button";
+      const isActive = room === state.currentRoom || (room === "workers" && state.currentRoom === "workers-room");
+      btn.className = "room-btn" + (isActive ? " active" : "");
       btn.dataset.room = room;
 
       let icon = "💬";
-      let badge = "room";
+      let badge = "اتاق";
       if (room === "main") {
         icon = "🌐";
-        badge = "general";
+        badge = "عمومی";
       } else if (room === "dm-argon") {
         icon = "🤖";
-        badge = "lead";
-      } else if (room === "workers-room") {
+        badge = "آرگون";
+      } else if (room === "workers" || room === "workers-room") {
         icon = "⚙️";
-        badge = "mesh";
+        badge = "ورکرها";
       }
 
       btn.innerHTML = `
@@ -160,29 +261,39 @@
     state.currentRoom = room;
     state.renderedMessageIds.clear();
 
-    // Update UI headers
-    elements.currentRoomTitle.textContent = room;
-    elements.dropRoomTarget.textContent = room;
-    elements.currentRoomDesc.textContent =
-      state.roomDescriptions[room] || "Active cluster communication channel";
+    // Update UI headers safely
+    if (elements.currentRoomTitle) {
+      elements.currentRoomTitle.textContent = room;
+    }
+    if (elements.dropRoomTarget) {
+      elements.dropRoomTarget.textContent = room;
+    }
+    if (elements.currentRoomDesc) {
+      elements.currentRoomDesc.textContent =
+        state.roomDescriptions[room] || "کانال ارتباطی فعال کلاستر";
+    }
 
     // Update active class on buttons
     document.querySelectorAll(".room-btn").forEach(btn => {
-      if (btn.dataset.room === room) {
+      const btnRoom = btn.dataset.room;
+      if (btnRoom === room || (btnRoom === "workers" && room === "workers-room")) {
         btn.classList.add("active");
       } else {
         btn.classList.remove("active");
       }
     });
 
-    elements.messageList.innerHTML = '<div class="empty-state">Loading messages...</div>';
+    if (elements.messageList) {
+      elements.messageList.innerHTML = '<div class="empty-state">در حال بارگذاری پیام‌ها...</div>';
+    }
     fetchMessages(true);
   }
 
   // Fetch messages for current room
   async function fetchMessages(forceScroll = false) {
     try {
-      const res = await fetch(`/api/cluster-chat/rooms/${encodeURIComponent(state.currentRoom)}/messages?limit=100`);
+      const roomParam = encodeURIComponent(state.currentRoom);
+      const res = await fetch(`/api/cluster-chat/rooms/${roomParam}/messages?limit=100`);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
@@ -197,14 +308,20 @@
 
   // Render messages in chat window
   function renderMessages(messages, forceScroll = false) {
+    if (!elements.messageList || !elements.chatContainer) return;
+
     if (!messages || messages.length === 0) {
-      elements.messageList.innerHTML = '<div class="empty-state">No messages in #' + escapeHtml(state.currentRoom) + ' yet. Start the conversation!</div>';
+      elements.messageList.innerHTML =
+        '<div class="empty-state">هیچ پیامی در اتاق #' +
+        escapeHtml(state.currentRoom) +
+        ' وجود ندارد. گفتگو را آغاز کنید!</div>';
       return;
     }
 
-    // Check if user is scrolled near bottom
     const isNearBottom =
-      elements.chatContainer.scrollHeight - elements.chatContainer.scrollTop - elements.chatContainer.clientHeight < 120;
+      elements.chatContainer.scrollHeight -
+        elements.chatContainer.scrollTop -
+        elements.chatContainer.clientHeight < 120;
 
     elements.messageList.innerHTML = "";
 
@@ -259,7 +376,7 @@
                 <div class="photo-meta">
                   <span class="photo-name" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</span>
                   <span class="photo-size">${sizeStr}</span>
-                  <a class="btn-link" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download photo">⬇️</a>
+                  <a class="btn-link" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="دانلود عکس">⬇️</a>
                 </div>
               </div>
             `;
@@ -288,12 +405,12 @@
                 </div>
                 <div class="doc-actions">
                   ${att.local_path ? `
-                    <button class="btn-badge" onclick="window.ClusterChatUI.copyPath('${localPathEscaped}', this)" title="Copy local path for local agent use">
-                      📋 Path
+                    <button type="button" class="btn-badge" onclick="window.ClusterChatUI.copyPath('${localPathEscaped}', this)" title="کپی مسیر محلی برای ایجنت">
+                      📋 مسیر
                     </button>
                   ` : ""}
-                  <a class="btn-badge" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download file">
-                    ⬇️ Save
+                  <a class="btn-badge" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="ذخیره فایل">
+                    ⬇️ دریافت
                   </a>
                 </div>
               </div>
@@ -340,38 +457,43 @@
 
   // Render staging tray preview
   function renderStagedTray() {
+    if (!elements.stagedTray) return;
+
     if (state.stagedFiles.length === 0) {
       elements.stagedTray.classList.add("hidden");
-      elements.stagedItems.innerHTML = "";
+      if (elements.stagedItems) elements.stagedItems.innerHTML = "";
       return;
     }
 
     elements.stagedTray.classList.remove("hidden");
-    elements.stagedCount.textContent = state.stagedFiles.length;
-    elements.stagedItems.innerHTML = "";
+    if (elements.stagedCount) elements.stagedCount.textContent = state.stagedFiles.length;
+    if (elements.stagedItems) {
+      elements.stagedItems.innerHTML = "";
 
-    state.stagedFiles.forEach((file, idx) => {
-      const item = document.createElement("div");
-      item.className = "staged-item";
+      state.stagedFiles.forEach((file, idx) => {
+        const item = document.createElement("div");
+        item.className = "staged-item";
 
-      const isImage = file.type && file.type.startsWith("image/");
-      let thumbHtml = "📄";
-      if (isImage) {
-        const objUrl = URL.createObjectURL(file);
-        thumbHtml = `<img class="staged-thumb" src="${objUrl}" alt="thumb">`;
-      }
+        const isImage = file.type && file.type.startsWith("image/");
+        let thumbHtml = "📄";
+        if (isImage) {
+          const objUrl = URL.createObjectURL(file);
+          thumbHtml = `<img class="staged-thumb" src="${objUrl}" alt="thumb">`;
+        }
 
-      item.innerHTML = `
-        ${thumbHtml}
-        <span title="${escapeHtml(file.name)}">${escapeHtml(file.name)} (${formatBytes(file.size)})</span>
-        <button type="button" class="btn-remove" title="Remove attachment" onclick="window.ClusterChatUI.unstage(${idx})">×</button>
-      `;
-      elements.stagedItems.appendChild(item);
-    });
+        item.innerHTML = `
+          ${thumbHtml}
+          <span title="${escapeHtml(file.name)}">${escapeHtml(file.name)} (${formatBytes(file.size)})</span>
+          <button type="button" class="btn-remove" title="حذف پیوست" onclick="window.ClusterChatUI.unstage(${idx})">×</button>
+        `;
+        elements.stagedItems.appendChild(item);
+      });
+    }
   }
 
   // Send message with or without attachments
   async function sendMessage() {
+    if (!elements.messageText) return;
     const text = elements.messageText.value.trim();
     const hasFiles = state.stagedFiles.length > 0;
 
@@ -379,21 +501,23 @@
       return;
     }
 
-    // Determine active sender
-    let activeSender = elements.senderSelect.value;
+    // Determine active sender safely
+    let activeSender = (elements.senderSelect && elements.senderSelect.value) || "mohammad";
     if (activeSender === "__custom__") {
-      activeSender = elements.customSenderInput.value.trim();
+      activeSender = elements.customSenderInput ? elements.customSenderInput.value.trim() : "";
       if (!activeSender) {
-        alert("Please specify a custom sender name.");
-        elements.customSenderInput.focus();
+        alert("لطفاً نام فرستنده دلخواه را وارد کنید.");
+        if (elements.customSenderInput) elements.customSenderInput.focus();
         return;
       }
     }
 
-    const activeTarget = elements.targetAgentSelect.value || null;
+    const activeTarget = (elements.targetAgentSelect && elements.targetAgentSelect.value) || null;
 
-    elements.sendBtn.disabled = true;
-    elements.sendBtn.innerHTML = "<span>Sending...</span> ⏳";
+    if (elements.sendBtn) {
+      elements.sendBtn.disabled = true;
+      elements.sendBtn.innerHTML = "<span>در حال ارسال...</span> ⏳";
+    }
 
     try {
       if (hasFiles) {
@@ -431,7 +555,8 @@
           forward_telegram: true
         };
 
-        const res = await fetch(`/api/cluster-chat/rooms/${encodeURIComponent(state.currentRoom)}/messages`, {
+        const roomParam = encodeURIComponent(state.currentRoom);
+        const res = await fetch(`/api/cluster-chat/rooms/${roomParam}/messages`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -444,86 +569,152 @@
       }
 
       // Reset composer
-      elements.messageText.value = "";
+      if (elements.messageText) {
+        elements.messageText.value = "";
+        elements.messageText.style.height = "";
+      }
       state.stagedFiles = [];
       renderStagedTray();
       await fetchMessages(true);
     } catch (err) {
       console.error("Failed to send message:", err);
-      alert("Error sending message: " + err.message);
+      alert("خطا در ارسال پیام: " + err.message);
     } finally {
-      elements.sendBtn.disabled = false;
-      elements.sendBtn.innerHTML = "<span>Send</span> 🚀";
-      elements.messageText.focus();
+      if (elements.sendBtn) {
+        elements.sendBtn.disabled = false;
+        elements.sendBtn.innerHTML = "<span>ارسال</span> 🚀";
+      }
+      if (elements.messageText) {
+        elements.messageText.focus();
+      }
     }
   }
 
   // Open Lightbox Photo Modal
   function openPhoto(publicUrl, filename, downloadUrl) {
-    elements.modalImg.src = publicUrl;
-    elements.modalCaption.textContent = filename;
-    elements.modalDownload.href = downloadUrl;
-    elements.modalDownload.setAttribute("download", filename);
+    if (!elements.imageModal) return;
+    if (elements.modalImg) elements.modalImg.src = publicUrl;
+    if (elements.modalCaption) elements.modalCaption.textContent = filename;
+    if (elements.modalDownload) {
+      elements.modalDownload.href = downloadUrl;
+      elements.modalDownload.setAttribute("download", filename);
+    }
     elements.imageModal.classList.remove("hidden");
   }
 
   function closePhoto() {
+    if (!elements.imageModal) return;
     elements.imageModal.classList.add("hidden");
-    elements.modalImg.src = "";
+    if (elements.modalImg) elements.modalImg.src = "";
   }
 
   // Setup Event Listeners
   function setupEvents() {
     // Sender selector custom toggle
-    elements.senderSelect.addEventListener("change", e => {
-      if (e.target.value === "__custom__") {
-        elements.customSenderInput.classList.remove("hidden");
-        elements.customSenderInput.focus();
-      } else {
-        elements.customSenderInput.classList.add("hidden");
-      }
-    });
+    if (elements.senderSelect) {
+      elements.senderSelect.addEventListener("change", e => {
+        if (e.target.value === "__custom__") {
+          if (elements.customSenderInput) {
+            elements.customSenderInput.classList.remove("hidden");
+            elements.customSenderInput.focus();
+          }
+        } else {
+          if (elements.customSenderInput) {
+            elements.customSenderInput.classList.add("hidden");
+          }
+        }
+      });
+    }
 
     // Refresh button
-    elements.refreshBtn.addEventListener("click", () => fetchMessages(true));
+    if (elements.refreshBtn) {
+      elements.refreshBtn.addEventListener("click", () => fetchMessages(true));
+    }
 
     // Attachment button click
-    elements.attachBtn.addEventListener("click", () => {
-      elements.fileInput.click();
-    });
+    if (elements.attachBtn && elements.fileInput) {
+      elements.attachBtn.addEventListener("click", () => {
+        elements.fileInput.click();
+      });
+    }
 
     // File input change
-    elements.fileInput.addEventListener("change", e => {
-      stageFiles(e.target.files);
-      elements.fileInput.value = "";
-    });
+    if (elements.fileInput) {
+      elements.fileInput.addEventListener("change", e => {
+        stageFiles(e.target.files);
+        elements.fileInput.value = "";
+      });
+    }
 
     // Clear staged attachments
-    elements.clearStagedBtn.addEventListener("click", () => {
-      state.stagedFiles = [];
-      renderStagedTray();
-    });
+    if (elements.clearStagedBtn) {
+      elements.clearStagedBtn.addEventListener("click", () => {
+        state.stagedFiles = [];
+        renderStagedTray();
+      });
+    }
+
+    // Agent status modal toggle
+    if (elements.agentStatusToggle) {
+      elements.agentStatusToggle.addEventListener("click", () => {
+        toggleAgentStatusModal();
+      });
+    }
+
+    // Agent status modal close
+    if (elements.agentModalClose) {
+      elements.agentModalClose.addEventListener("click", () => {
+        toggleAgentStatusModal(false);
+      });
+    }
+
+    if (elements.agentModalBackdrop) {
+      elements.agentModalBackdrop.addEventListener("click", () => {
+        toggleAgentStatusModal(false);
+      });
+    }
 
     // Composer form submission
-    elements.composerForm.addEventListener("submit", e => {
-      e.preventDefault();
-      sendMessage();
-    });
-
-    // Textarea enter key submit (Shift+Enter for newline)
-    elements.messageText.addEventListener("keydown", e => {
-      if (e.key === "Enter" && !e.shiftKey) {
+    if (elements.composerForm) {
+      elements.composerForm.addEventListener("submit", e => {
         e.preventDefault();
         sendMessage();
-      }
-    });
+      });
+    }
+
+    // Textarea enter key submit (Shift+Enter for newline) & auto-resizing
+    if (elements.messageText) {
+      elements.messageText.addEventListener("input", () => {
+        elements.messageText.style.height = "auto";
+        elements.messageText.style.height = Math.min(elements.messageText.scrollHeight, 120) + "px";
+      });
+
+      elements.messageText.addEventListener("keydown", e => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+    }
 
     // Lightbox close
-    elements.modalClose.addEventListener("click", closePhoto);
-    elements.imageModal.querySelector(".modal-backdrop").addEventListener("click", closePhoto);
+    if (elements.modalClose) {
+      elements.modalClose.addEventListener("click", closePhoto);
+    }
+    if (elements.imageModal) {
+      const backdrop = elements.imageModal.querySelector(".modal-backdrop");
+      if (backdrop) backdrop.addEventListener("click", closePhoto);
+    }
+
+    // Global keyboard listener (Escape dismisses modals)
     document.addEventListener("keydown", e => {
-      if (e.key === "Escape" && !elements.imageModal.classList.contains("hidden")) {
-        closePhoto();
+      if (e.key === "Escape") {
+        if (elements.imageModal && !elements.imageModal.classList.contains("hidden")) {
+          closePhoto();
+        }
+        if (elements.agentStatusModal && !elements.agentStatusModal.classList.contains("hidden")) {
+          toggleAgentStatusModal(false);
+        }
       }
     });
 
@@ -540,7 +731,6 @@
         if (item.kind === "file" || (item.type && item.type.startsWith("image/"))) {
           const file = item.getAsFile();
           if (file) {
-            // Give generated name if clipboard image has generic name
             let filename = file.name;
             if (!filename || filename === "image.png") {
               const ext = file.type === "image/jpeg" ? ".jpg" : ".png";
@@ -558,52 +748,57 @@
     });
 
     // Drag and Drop Handling over chat container
-    let dragCounter = 0;
+    if (elements.dropOverlay) {
+      let dragCounter = 0;
 
-    const dragEnterHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter++;
-      elements.dropOverlay.classList.add("active");
-    };
+      const dragEnterHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter++;
+        elements.dropOverlay.classList.add("active");
+      };
 
-    const dragLeaveHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter--;
-      if (dragCounter <= 0) {
+      const dragLeaveHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter--;
+        if (dragCounter <= 0) {
+          dragCounter = 0;
+          elements.dropOverlay.classList.remove("active");
+        }
+      };
+
+      const dragOverHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      const dropHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
         dragCounter = 0;
         elements.dropOverlay.classList.remove("active");
-      }
-    };
 
-    const dragOverHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          stageFiles(e.dataTransfer.files);
+        }
+      };
 
-    const dropHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter = 0;
-      elements.dropOverlay.classList.remove("active");
-
-      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        stageFiles(e.dataTransfer.files);
-      }
-    };
-
-    window.addEventListener("dragenter", dragEnterHandler);
-    window.addEventListener("dragleave", dragLeaveHandler);
-    window.addEventListener("dragover", dragOverHandler);
-    window.addEventListener("drop", dropHandler);
+      window.addEventListener("dragenter", dragEnterHandler);
+      window.addEventListener("dragleave", dragLeaveHandler);
+      window.addEventListener("dragover", dragOverHandler);
+      window.addEventListener("drop", dropHandler);
+    }
   }
 
-  // Expose global helpers for inline HTML event handlers
+  // Expose global helpers for inline HTML event handlers & programmatic control
   window.ClusterChatUI = {
     unstage: unstageFile,
     openPhoto: openPhoto,
-    copyPath: copyToClipboard
+    copyPath: copyToClipboard,
+    toggleAgentModal: toggleAgentStatusModal,
+    updateAgentStatus: updateAgentStatus,
+    switchRoom: switchRoom
   };
 
   // Initialization
@@ -611,6 +806,7 @@
     renderRoomButtons();
     setupEvents();
     await loadRooms();
+    await loadAgentStatus();
     await fetchMessages(true);
 
     // Live polling every 3 seconds
