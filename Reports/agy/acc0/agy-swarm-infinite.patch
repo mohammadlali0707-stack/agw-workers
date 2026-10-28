@@ -1,0 +1,51 @@
+diff --git a/.github/workflows/agy-swarm-infinite.yml b/.github/workflows/agy-swarm-infinite.yml
+index bb9cb45..4be81dc 100644
+--- a/.github/workflows/agy-swarm-infinite.yml
++++ b/.github/workflows/agy-swarm-infinite.yml
+@@ -79,26 +79,35 @@ jobs:
+       - name: Install AGY CLI
+         if: steps.filter.outputs.action == 'proceed'
+         env:
+-          HF_TOKEN: ${{ secrets.AGW_HF_TOKEN || secrets.HF_TOKEN }}  # Notion AI 2026-10-23: AGW_HF_TOKEN returned 401
++          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+         run: |
+           set -e
+-          mkdir -p /tmp/agx /tmp/agy-bin
++          mkdir -p /tmp/agx
+           AUTH_HEADER=""
+           if [ -n "$HF_TOKEN" ]; then
+             AUTH_HEADER="Authorization: Bearer $HF_TOKEN"
+           fi
+-          # Notion AI 2026-10-23: -s without -f saved HF error pages (429/5xx) as the tarball -> "tar: Error is not recoverable"
++          # Download canonical CLI binary from fleet dataset with retries and integrity verification
+           for i in 1 2 3 4 5; do
+-            curl -sS -L --fail --retry 4 --retry-delay 6 --retry-all-errors ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
+-              "https://huggingface.co/datasets/mohammadlali/agx/resolve/main/antigravity.tar.gz" \
+-              -o /tmp/agx/antigravity.tar.gz && gzip -t /tmp/agx/antigravity.tar.gz && break
+-            echo "AGY CLI download attempt $i failed, retrying..."; sleep $((10 * i))
++            curl -fsSL --retry 3 ${AUTH_HEADER:+-H "$AUTH_HEADER"} \
++              "https://huggingface.co/datasets/stranger777777/agw-cli-bin/resolve/main/cli_linux_x64.tar.gz" \
++              -o /tmp/cli.tar.gz && gzip -t /tmp/cli.tar.gz && break
++            echo "AGY CLI download attempt $i failed, retrying..."
++            sleep $((5 * i))
+           done
+-          tar -xzf /tmp/agx/antigravity.tar.gz -C /tmp/agx/
++          [ -s /tmp/cli.tar.gz ] && gzip -t /tmp/cli.tar.gz || { echo "::error::AGY CLI tarball missing or corrupt"; exit 1; }
++          tar -xzf /tmp/cli.tar.gz -C /tmp/agx
+           CLI_BIN=$(find /tmp/agx -type f \( -name "antigravity" -o -name "agy" \) | head -1)
+-          install -m 0755 "$CLI_BIN" /tmp/agy-bin/agy
+-          echo "/tmp/agy-bin" >> "$GITHUB_PATH"
+-
++          if [ -z "$CLI_BIN" ]; then
++            CLI_BIN=$(find /tmp/agx -type f -executable | head -1)
++          fi
++          [ -n "$CLI_BIN" ] && [ -f "$CLI_BIN" ] || { echo "::error::AGY CLI executable not found in archive"; exit 1; }
++          AGY_BIN_DIR="${RUNNER_TEMP:-/tmp}/agy-bin"
++          mkdir -p "$AGY_BIN_DIR"
++          install -m 0755 "$CLI_BIN" "$AGY_BIN_DIR/agy"
++          echo "$AGY_BIN_DIR" >> "$GITHUB_PATH"
++          export PATH="$AGY_BIN_DIR:$PATH"
++          agy --version 2>/dev/null || echo "agy ready"
+       - name: Fetch Issue Discussion Context
+         if: steps.filter.outputs.action == 'proceed'
+         id: context
