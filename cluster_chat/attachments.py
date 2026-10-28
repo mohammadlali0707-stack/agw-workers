@@ -190,9 +190,12 @@ class AttachmentStorageManager:
         raw_base_url = (
             public_base_url
             if public_base_url is not None
-            else os.environ.get("CLUSTER_CHAT_PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE_URL)
+            else (
+                os.environ.get("CLUSTER_CHAT_PUBLIC_URL")
+                or os.environ.get("CLUSTER_CHAT_PUBLIC_BASE_URL", DEFAULT_PUBLIC_BASE_URL)
+            )
         )
-        self.public_base_url: str = raw_base_url.rstrip("/")
+        self.public_base_url: str = (raw_base_url or "").rstrip("/")
 
         raw_max_mb = (
             max_upload_mb

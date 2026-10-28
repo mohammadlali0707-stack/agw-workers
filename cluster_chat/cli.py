@@ -97,6 +97,8 @@ def _cli_list(args: argparse.Namespace) -> int:
             room=args.room,
             limit=args.limit,
             target_agent=args.target_agent,
+            since=getattr(args, "since", None),
+            after=getattr(args, "after", None),
             api_url=args.api_url,
             data_dir=args.data_dir,
         )
@@ -232,6 +234,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--target-agent", "-t",
         default=None,
         help="Filter messages by target agent",
+    )
+    list_p.add_argument(
+        "--since",
+        default=None,
+        help="Filter messages created after this timestamp or message ID",
+    )
+    list_p.add_argument(
+        "--after",
+        default=None,
+        help="Filter messages created strictly after this message ID",
     )
     list_p.add_argument(
         "--api-url", "-u",

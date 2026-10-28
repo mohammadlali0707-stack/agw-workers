@@ -43,6 +43,8 @@
       </div>
 
       <div class="header-end">
+        <span id="header-status-badge" class="connection-badge polling" title="Active connection mode">Connecting...</span>
+
         <!-- Compact Agent Status Toggle Button / Badge in Header -->
         <button
           type="button"
@@ -208,9 +210,9 @@
 
           <!-- System Status Footer -->
           <div class="system-status">
-            <div class="status-indicator online"></div>
+            <div id="status-indicator" class="status-indicator polling"></div>
             <span id="connection-status">اتصال کلاستر برقرار است (Bridge Live)</span>
-            <span class="poll-interval">بروزرسانی ۳ ثانیه</span>
+            <span id="poll-interval" class="poll-interval">2.5s poll</span>
           </div>
         </div>
       </div>

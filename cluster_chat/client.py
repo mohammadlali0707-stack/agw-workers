@@ -278,6 +278,8 @@ def list_room_messages(
     room: str,
     limit: int = 20,
     target_agent: str | None = None,
+    since: str | float | int | None = None,
+    after: str | None = None,
     api_url: str | None = None,
     room_manager: RoomManager | None = None,
     data_dir: str | Path | None = None,
@@ -288,6 +290,8 @@ def list_room_messages(
         room: Room name to query.
         limit: Maximum number of recent messages to return.
         target_agent: Optional filter by target agent.
+        since: Optional message ID or ISO/Unix timestamp for incremental polling.
+        after: Optional message ID to return messages strictly after.
         api_url: Optional Cluster Chat HTTP base URL.
         room_manager: Optional preconfigured RoomManager.
         data_dir: Optional custom data directory for local mode.
@@ -303,6 +307,10 @@ def list_room_messages(
         params: dict[str, str] = {"limit": str(limit)}
         if clean_target:
             params["target_agent"] = clean_target
+        if since is not None:
+            params["since"] = str(since)
+        if after is not None:
+            params["after"] = str(after)
 
         query_str = urllib.parse.urlencode(params)
         endpoint = f"{api_base}/api/cluster-chat/rooms/{validated_room}/messages?{query_str}"
@@ -325,6 +333,8 @@ def list_room_messages(
         room=validated_room,
         limit=limit,
         target_agent=clean_target,
+        since=since,
+        after=after,
     )
 
 
