@@ -82,17 +82,17 @@
         </div>
       </div>
 
-      <!-- Attachment Staging Tray (Shown above compose row only when files queued) -->
-      <div id="staged-tray" class="staged-tray hidden">
-        <div class="staged-header">
-          <span>فایل‌های پیوست (<span id="staged-count">0</span>)</span>
-          <button type="button" id="clear-staged-btn" class="btn-link">پاک کردن همه</button>
-        </div>
-        <div id="staged-items" class="staged-items"></div>
-      </div>
-
-      <!-- Clean Compose Bar (flex: 0 0 auto) -->
+      <!-- Clean Compose Bar (flex: 0 0 auto; width: 100%; box-sizing: border-box;) -->
       <footer class="composer-container">
+        <!-- Attachment Staging Tray / Preview Strip (Cleanly above input row, hidden when empty) -->
+        <div id="staged-tray" class="staged-tray attachment-preview hidden">
+          <div class="staged-header">
+            <span>فایل‌های پیوست (<span id="staged-count">0</span>)</span>
+            <button type="button" id="clear-staged-btn" class="btn-link">پاک کردن همه</button>
+          </div>
+          <div id="staged-items" class="staged-items"></div>
+        </div>
+
         <input type="file" id="file-input" multiple class="hidden">
 
         <form id="composer-form" class="composer-form">

@@ -41,7 +41,7 @@
     chatContainer: document.getElementById("chat-container"),
     dropOverlay: document.getElementById("drop-overlay"),
     messageList: document.getElementById("message-list"),
-    stagedTray: document.getElementById("staged-tray"),
+    stagedTray: document.getElementById("staged-tray") || document.getElementById("attachment-preview"),
     stagedCount: document.getElementById("staged-count"),
     stagedItems: document.getElementById("staged-items"),
     clearStagedBtn: document.getElementById("clear-staged-btn"),
@@ -569,7 +569,10 @@
       }
 
       // Reset composer
-      elements.messageText.value = "";
+      if (elements.messageText) {
+        elements.messageText.value = "";
+        elements.messageText.style.height = "";
+      }
       state.stagedFiles = [];
       renderStagedTray();
       await fetchMessages(true);
@@ -679,8 +682,13 @@
       });
     }
 
-    // Textarea enter key submit (Shift+Enter for newline)
+    // Textarea enter key submit (Shift+Enter for newline) & auto-resizing
     if (elements.messageText) {
+      elements.messageText.addEventListener("input", () => {
+        elements.messageText.style.height = "auto";
+        elements.messageText.style.height = Math.min(elements.messageText.scrollHeight, 120) + "px";
+      });
+
       elements.messageText.addEventListener("keydown", e => {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();

@@ -564,15 +564,18 @@ html[dir="rtl"], body[dir="rtl"] {
   border-color: var(--success);
 }
 
-/* Staged Tray (Shown above compose row only when files queued) */
-.staged-tray {
+/* Staged Tray / Attachment Preview Strip (Cleanly above input row, hidden when empty) */
+.staged-tray,
+.attachment-preview {
   background-color: #0c1322;
-  border-top: 1px solid var(--border-color);
-  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-color);
+  padding: 8px 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .staged-header {
@@ -623,24 +626,28 @@ html[dir="rtl"], body[dir="rtl"] {
   color: var(--danger);
 }
 
-/* Clean Compose Bar (flex: 0 0 auto) */
+/* Clean Compose Bar (flex: 0 0 auto; width: 100%; box-sizing: border-box;) */
 .composer-container {
   flex: 0 0 auto;
+  width: 100%;
+  box-sizing: border-box;
   background-color: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
-  padding: 8px 16px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
 .composer-form {
   display: flex;
+  align-items: center;
   gap: 8px;
-  align-items: flex-end;
+  padding: 8px 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .btn-attach {
+  flex: 0 0 auto;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
@@ -676,6 +683,7 @@ html[dir="rtl"], body[dir="rtl"] {
   line-height: 1.4;
   min-height: 38px;
   max-height: 120px;
+  box-sizing: border-box;
 }
 
 .message-input:focus {
@@ -683,6 +691,7 @@ html[dir="rtl"], body[dir="rtl"] {
 }
 
 .btn-send {
+  flex: 0 0 auto;
   background-color: var(--accent);
   color: #0f172a;
   border: none;
@@ -694,6 +703,7 @@ html[dir="rtl"], body[dir="rtl"] {
   cursor: pointer;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   transition: background-color 0.15s ease;
   flex-shrink: 0;
@@ -1040,7 +1050,15 @@ html[dir="rtl"], body[dir="rtl"] {
   }
 
   .composer-container {
-    padding: 6px 10px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .composer-form {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
   }
 
   .message-item {
