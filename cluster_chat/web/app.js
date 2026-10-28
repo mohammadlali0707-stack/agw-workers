@@ -2,8 +2,13 @@
  * cluster_chat/web/app.js
  *
  * Client application for Cluster Chat Bridge.
- * Manages room navigation, live polling, clipboard screenshot paste,
- * drag-and-drop file upload, inline photo previews, and agent document cards.
+ * Supports:
+ * - Host-agnostic root-relative URLs (zero airboxvip.top dependencies)
+ * - Dynamic WebSocket / SSE origin resolution from window.location
+ * - Resilient Connection Manager with automatic 4-second timeout & HTTP polling fallback (?since=)
+ * - Message deduplication via client-side Set of renderedMessageIds
+ * - Plain HTTP direct-IP browser compatibility (document.execCommand clipboard fallback)
+ * - Room navigation, staging uploads, inline photo previews & document cards
  */
 
 (function () {
@@ -15,8 +20,6 @@
     sender: "mohammad",
     targetAgent: "",
     stagedFiles: [],
-    pollingTimer: null,
-    pollIntervalMs: 3000,
     knownRooms: ["main", "dm-argon", "workers-room"],
     roomDescriptions: {
       "main": "General cluster broadcast channel",
@@ -24,6 +27,8 @@
       "workers-room": "LeadDesk agent worker mesh channel"
     },
     renderedMessageIds: new Set(),
+    lastMessageId: null,
+    lastMessageTimestamp: null,
     isAtBottom: true
   };
 
@@ -53,7 +58,11 @@
     modalImg: document.getElementById("modal-img"),
     modalCaption: document.getElementById("modal-caption"),
     modalDownload: document.getElementById("modal-download"),
-    modalClose: document.getElementById("modal-close")
+    modalClose: document.getElementById("modal-close"),
+    statusIndicator: document.getElementById("status-indicator"),
+    connectionStatus: document.getElementById("connection-status"),
+    pollInterval: document.getElementById("poll-interval"),
+    headerStatusBadge: document.getElementById("header-status-badge")
   };
 
   // Format bytes into human-readable size
@@ -76,37 +85,389 @@
       .replace(/'/g, "&#039;");
   }
 
-  // Copy text to system clipboard with visual button feedback
+  /**
+   * Normalize any legacy absolute airboxvip.top or host-bound URL to a root-relative path.
+   * Ensures zero hardcoded airboxvip.top links exist in DOM elements or network calls.
+   */
+  function normalizeAttachmentUrl(url) {
+    if (!url || typeof url !== "string") return "";
+    let clean = url.trim();
+
+    // Strip legacy airboxvip.top domains (http, https, wss, ws, scheme-relative)
+    clean = clean.replace(/^(?:https?:)?\/\/(?:[a-zA-Z0-9-]+\.)*airboxvip\.top(?::\d+)?/i, "");
+
+    // If it's an absolute URL pointing to any host, convert cluster-chat endpoints to root-relative
+    if (/^https?:\/\//i.test(clean)) {
+      try {
+        const parsed = new URL(clean);
+        if (
+          parsed.host === window.location.host ||
+          parsed.pathname.startsWith("/api/") ||
+          parsed.pathname.startsWith("/uploads/") ||
+          parsed.pathname.startsWith("/files/")
+        ) {
+          clean = parsed.pathname + parsed.search + parsed.hash;
+        }
+      } catch (_) {
+        clean = clean.replace(/^https?:\/\/[^\/]+/i, "");
+      }
+    }
+
+    // Ensure leading slash if not a data URI or blob URI
+    if (!clean.startsWith("/") && !clean.startsWith("blob:") && !clean.startsWith("data:")) {
+      clean = "/" + clean;
+    }
+    return clean;
+  }
+
+  /**
+   * Normalize message body text to eliminate any airboxvip.top absolute references
+   */
+  function normalizeMessageText(text) {
+    if (!text || typeof text !== "string") return "";
+    return text.replace(/https?:\/\/(?:[a-zA-Z0-9-]+\.)*airboxvip\.top(?::\d+)?(\/[^\s<>"']*)/gi, "$1");
+  }
+
+  /**
+   * Plain HTTP Direct-IP Browser Compatibility:
+   * Uses navigator.clipboard.writeText when supported in secure context, with an automatic
+   * fallback to a temporary <textarea> and document.execCommand('copy') for plain http://<IP>:<PORT>.
+   */
   async function copyToClipboard(text, btnElement) {
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
+    if (!text) return false;
+    let success = false;
+
+    // 1. Try modern Clipboard API if available and inside a secure context
+    if (window.isSecureContext && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      try {
         await navigator.clipboard.writeText(text);
-      } else {
+        success = true;
+      } catch (_) {
+        success = false;
+      }
+    }
+
+    // 2. Fallback for plain HTTP direct IP (insecure context) or when Clipboard API fails
+    if (!success) {
+      try {
         const textarea = document.createElement("textarea");
         textarea.value = text;
+        textarea.setAttribute("readonly", "");
         textarea.style.position = "fixed";
+        textarea.style.top = "-9999px";
+        textarea.style.left = "-9999px";
         textarea.style.opacity = "0";
         document.body.appendChild(textarea);
+        textarea.focus();
         textarea.select();
-        document.execCommand("copy");
+        success = document.execCommand("copy");
         document.body.removeChild(textarea);
+      } catch (err) {
+        console.warn("Fallback execCommand copy failed:", err);
+        success = false;
       }
-      if (btnElement) {
-        const originalText = btnElement.innerHTML;
-        btnElement.classList.add("copied");
-        btnElement.innerHTML = "✓ Copied!";
-        setTimeout(() => {
-          btnElement.classList.remove("copied");
-          btnElement.innerHTML = originalText;
-        }, 2000);
+    }
+
+    // 3. Visual user feedback
+    if (success && btnElement) {
+      const originalText = btnElement.innerHTML;
+      btnElement.classList.add("copied");
+      btnElement.innerHTML = "✓ Copied!";
+      setTimeout(() => {
+        btnElement.classList.remove("copied");
+        btnElement.innerHTML = originalText;
+      }, 2000);
+    } else if (!success) {
+      prompt("Copy to clipboard (Ctrl+C, Enter):", text);
+    }
+    return success;
+  }
+
+  /**
+   * Resilient Connection Manager:
+   * - Attempts realtime transport (WebSocket or SSE) first.
+   * - Constructs WebSocket URL dynamically from window.location (ws: / wss:).
+   * - If realtime connection fails to open within 4s, errors out, or closes,
+   *   automatically activates an HTTP polling loop (?since=<lastMessageId>) every 2.5s.
+   * - Applies adaptive backoff up to 10s on network errors.
+   * - Periodically attempts to re-establish the realtime connection in the background.
+   * - Displays non-intrusive connection status badge:
+   *   'Live (Direct)', 'Polling Fallback (Resilient)', 'Offline / Retrying'.
+   */
+  class ResilientConnectionManager {
+    constructor(options) {
+      this.options = options || {};
+      this.mode = "CONNECTING"; // "CONNECTING", "LIVE", "POLLING", "OFFLINE"
+      this.basePollIntervalMs = 2500; // 2.5s
+      this.maxPollIntervalMs = 10000; // 10s
+      this.currentPollInterval = 2500;
+      this.pollTimer = null;
+      this.realtimeTimeoutTimer = null;
+      this.backgroundProbeTimer = null;
+      this.socket = null;
+      this.eventSource = null;
+      this.isPollingActive = false;
+      this.probeIntervalMs = 30000; // 30s background probe
+    }
+
+    start() {
+      this.attemptRealtimeTransport();
+    }
+
+    attemptRealtimeTransport() {
+      if (this.realtimeTimeoutTimer) {
+        clearTimeout(this.realtimeTimeoutTimer);
+        this.realtimeTimeoutTimer = null;
       }
-    } catch (err) {
-      console.error("Clipboard copy failed:", err);
-      alert("Path: " + text);
+      this.cleanupRealtime();
+
+      this.updateStatus("connecting", "Connecting...", "realtime probe");
+
+      // 4-second timeout to fall back to HTTP polling
+      this.realtimeTimeoutTimer = setTimeout(() => {
+        console.warn("Realtime connection timed out (4s); activating resilient HTTP polling fallback.");
+        this.activatePollingFallback("timeout_4s");
+      }, 4000);
+
+      // 1. Try WebSocket with dynamic origin
+      if (typeof WebSocket !== "undefined") {
+        try {
+          const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const wsHost = window.location.host;
+          const wsUrl = `${wsProto}//${wsHost}/ws`;
+
+          this.socket = new WebSocket(wsUrl);
+
+          this.socket.onopen = () => {
+            if (this.realtimeTimeoutTimer) {
+              clearTimeout(this.realtimeTimeoutTimer);
+              this.realtimeTimeoutTimer = null;
+            }
+            this.handleRealtimeSuccess("WebSocket");
+          };
+
+          this.socket.onmessage = (event) => {
+            this.handleIncomingData(event.data);
+          };
+
+          this.socket.onerror = (err) => {
+            console.warn("WebSocket transport error:", err);
+            this.activatePollingFallback("ws_error");
+          };
+
+          this.socket.onclose = () => {
+            console.warn("WebSocket closed unexpectedly.");
+            this.activatePollingFallback("ws_closed");
+          };
+          return;
+        } catch (err) {
+          console.warn("WebSocket initialization exception:", err);
+        }
+      }
+
+      // 2. Try EventSource (SSE) with relative URL
+      if (typeof EventSource !== "undefined") {
+        try {
+          const sseUrl = `/api/sse?room=${encodeURIComponent(state.currentRoom)}`;
+          this.eventSource = new EventSource(sseUrl);
+
+          this.eventSource.onopen = () => {
+            if (this.realtimeTimeoutTimer) {
+              clearTimeout(this.realtimeTimeoutTimer);
+              this.realtimeTimeoutTimer = null;
+            }
+            this.handleRealtimeSuccess("SSE");
+          };
+
+          this.eventSource.onmessage = (event) => {
+            this.handleIncomingData(event.data);
+          };
+
+          this.eventSource.onerror = (err) => {
+            console.warn("SSE transport error:", err);
+            this.activatePollingFallback("sse_error");
+          };
+          return;
+        } catch (err) {
+          console.warn("SSE initialization exception:", err);
+        }
+      }
+
+      // Fallback immediately if neither transport is available
+      this.activatePollingFallback("transport_unsupported");
+    }
+
+    handleRealtimeSuccess(transportName) {
+      this.mode = "LIVE";
+      this.updateStatus("live", "Live (Direct)", transportName);
+      this.stopPollingLoop();
+      this.stopBackgroundProbe();
+    }
+
+    handleIncomingData(rawData) {
+      try {
+        const payload = typeof rawData === "string" ? JSON.parse(rawData) : rawData;
+        if (Array.isArray(payload)) {
+          appendNewMessages(payload);
+        } else if (payload && Array.isArray(payload.messages)) {
+          appendNewMessages(payload.messages);
+        } else if (payload && payload.message) {
+          appendNewMessages([payload.message]);
+        }
+      } catch (e) {
+        console.warn("Failed to parse realtime payload:", e);
+      }
+    }
+
+    cleanupRealtime() {
+      if (this.socket) {
+        try {
+          this.socket.onopen = null;
+          this.socket.onmessage = null;
+          this.socket.onerror = null;
+          this.socket.onclose = null;
+          this.socket.close();
+        } catch (_) {}
+        this.socket = null;
+      }
+      if (this.eventSource) {
+        try {
+          this.eventSource.onopen = null;
+          this.eventSource.onmessage = null;
+          this.eventSource.onerror = null;
+          this.eventSource.close();
+        } catch (_) {}
+        this.eventSource = null;
+      }
+    }
+
+    activatePollingFallback(reason) {
+      if (this.realtimeTimeoutTimer) {
+        clearTimeout(this.realtimeTimeoutTimer);
+        this.realtimeTimeoutTimer = null;
+      }
+      this.cleanupRealtime();
+
+      if (this.mode !== "OFFLINE") {
+        this.mode = "POLLING";
+        this.updateStatus("polling", "Polling Fallback (Resilient)", `${(this.currentPollInterval / 1000).toFixed(1)}s poll`);
+      }
+
+      this.startPollingLoop();
+      this.startBackgroundProbe();
+    }
+
+    startPollingLoop() {
+      if (this.isPollingActive) return;
+      this.isPollingActive = true;
+      this.scheduleNextPoll(100); // Trigger first poll quickly
+    }
+
+    stopPollingLoop() {
+      this.isPollingActive = false;
+      if (this.pollTimer) {
+        clearTimeout(this.pollTimer);
+        this.pollTimer = null;
+      }
+    }
+
+    scheduleNextPoll(delayMs) {
+      if (!this.isPollingActive) return;
+      if (this.pollTimer) {
+        clearTimeout(this.pollTimer);
+      }
+      const delay = typeof delayMs === "number" ? delayMs : this.currentPollInterval;
+      this.pollTimer = setTimeout(async () => {
+        await this.executePoll();
+      }, delay);
+    }
+
+    async executePoll() {
+      if (!this.isPollingActive) return;
+      try {
+        await pollMessages();
+        // Reset adaptive backoff on successful HTTP poll
+        this.currentPollInterval = this.basePollIntervalMs;
+        if (this.mode !== "LIVE") {
+          this.mode = "POLLING";
+          this.updateStatus("polling", "Polling Fallback (Resilient)", `${(this.currentPollInterval / 1000).toFixed(1)}s poll`);
+        }
+      } catch (err) {
+        console.warn("HTTP polling error:", err);
+        // Adaptive backoff on network error (2.5s -> 3.75s -> ... up to 10s)
+        this.currentPollInterval = Math.min(this.maxPollIntervalMs, Math.round(this.currentPollInterval * 1.5));
+        this.mode = "OFFLINE";
+        this.updateStatus("offline", "Offline / Retrying", `retrying in ${(this.currentPollInterval / 1000).toFixed(1)}s`);
+      } finally {
+        if (this.isPollingActive) {
+          this.scheduleNextPoll(this.currentPollInterval);
+        }
+      }
+    }
+
+    startBackgroundProbe() {
+      if (this.backgroundProbeTimer) return;
+      this.backgroundProbeTimer = setInterval(() => {
+        if (this.mode === "POLLING" || this.mode === "OFFLINE") {
+          this.probeRealtimeInBackground();
+        }
+      }, this.probeIntervalMs);
+    }
+
+    stopBackgroundProbe() {
+      if (this.backgroundProbeTimer) {
+        clearInterval(this.backgroundProbeTimer);
+        this.backgroundProbeTimer = null;
+      }
+    }
+
+    probeRealtimeInBackground() {
+      if (typeof WebSocket === "undefined") return;
+      try {
+        const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${wsProto}//${window.location.host}/ws`;
+        const testWs = new WebSocket(wsUrl);
+
+        const timeout = setTimeout(() => {
+          try { testWs.close(); } catch (_) {}
+        }, 3500);
+
+        testWs.onopen = () => {
+          clearTimeout(timeout);
+          testWs.close();
+          // Realtime transport is available again!
+          this.attemptRealtimeTransport();
+        };
+        testWs.onerror = () => {
+          clearTimeout(timeout);
+        };
+        testWs.onclose = () => {
+          clearTimeout(timeout);
+        };
+      } catch (_) {}
+    }
+
+    updateStatus(statusKey, labelText, detailText) {
+      if (elements.statusIndicator) {
+        elements.statusIndicator.className = `status-indicator ${statusKey}`;
+      }
+      if (elements.connectionStatus) {
+        elements.connectionStatus.textContent = labelText;
+      }
+      if (elements.headerStatusBadge) {
+        elements.headerStatusBadge.className = `connection-badge ${statusKey}`;
+        elements.headerStatusBadge.textContent = labelText;
+      }
+      if (elements.pollInterval) {
+        elements.pollInterval.textContent = detailText || "";
+      }
     }
   }
 
-  // Load active rooms from server API
+  // Create global connection manager instance
+  const connectionManager = new ResilientConnectionManager();
+
+  // Load active rooms from server API using relative path
   async function loadRooms() {
     try {
       const res = await fetch("/api/cluster-chat/rooms");
@@ -124,6 +485,7 @@
 
   // Render sidebar room buttons
   function renderRoomButtons() {
+    if (!elements.roomList) return;
     elements.roomList.innerHTML = "";
     state.knownRooms.forEach(room => {
       const btn = document.createElement("button");
@@ -158,13 +520,19 @@
   function switchRoom(room) {
     if (state.currentRoom === room) return;
     state.currentRoom = room;
+
+    // Reset cursor and message deduplication set
     state.renderedMessageIds.clear();
+    state.lastMessageId = null;
+    state.lastMessageTimestamp = null;
 
     // Update UI headers
-    elements.currentRoomTitle.textContent = room;
-    elements.dropRoomTarget.textContent = room;
-    elements.currentRoomDesc.textContent =
-      state.roomDescriptions[room] || "Active cluster communication channel";
+    if (elements.currentRoomTitle) elements.currentRoomTitle.textContent = room;
+    if (elements.dropRoomTarget) elements.dropRoomTarget.textContent = room;
+    if (elements.currentRoomDesc) {
+      elements.currentRoomDesc.textContent =
+        state.roomDescriptions[room] || "Active cluster communication channel";
+    }
 
     // Update active class on buttons
     document.querySelectorAll(".room-btn").forEach(btn => {
@@ -175,150 +543,276 @@
       }
     });
 
-    elements.messageList.innerHTML = '<div class="empty-state">Loading messages...</div>';
-    fetchMessages(true);
+    if (elements.messageList) {
+      elements.messageList.innerHTML = '<div class="empty-state">Loading messages...</div>';
+    }
+
+    loadInitialRoomMessages(room, true);
   }
 
-  // Fetch messages for current room
-  async function fetchMessages(forceScroll = false) {
+  /**
+   * Load initial message history for a room
+   */
+  async function loadInitialRoomMessages(room, forceScroll = false) {
     try {
-      const res = await fetch(`/api/cluster-chat/rooms/${encodeURIComponent(state.currentRoom)}/messages?limit=100`);
+      const res = await fetch(`/api/messages?room=${encodeURIComponent(room)}&limit=100`, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" }
+      });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
       const data = await res.json();
       if (data.ok && Array.isArray(data.messages)) {
-        renderMessages(data.messages, forceScroll);
+        renderInitialMessages(data.messages, forceScroll);
       }
     } catch (err) {
-      console.warn("Failed to fetch messages:", err);
+      console.warn("Failed to load initial room messages:", err);
+      if (elements.messageList) {
+        elements.messageList.innerHTML = `<div class="empty-state">Could not load messages (${escapeHtml(err.message)}). Retrying...</div>`;
+      }
     }
   }
 
-  // Render messages in chat window
-  function renderMessages(messages, forceScroll = false) {
+  /**
+   * Render initial full message list for room
+   */
+  function renderInitialMessages(messages, forceScroll = false) {
+    if (!elements.messageList) return;
+    elements.messageList.innerHTML = "";
+    state.renderedMessageIds.clear();
+    state.lastMessageId = null;
+    state.lastMessageTimestamp = null;
+
     if (!messages || messages.length === 0) {
-      elements.messageList.innerHTML = '<div class="empty-state">No messages in #' + escapeHtml(state.currentRoom) + ' yet. Start the conversation!</div>';
+      elements.messageList.innerHTML =
+        '<div class="empty-state">No messages in #' + escapeHtml(state.currentRoom) + ' yet. Start the conversation!</div>';
       return;
     }
 
-    // Check if user is scrolled near bottom
-    const isNearBottom =
-      elements.chatContainer.scrollHeight - elements.chatContainer.scrollTop - elements.chatContainer.clientHeight < 120;
-
-    elements.messageList.innerHTML = "";
-
     messages.forEach(msg => {
-      const msgItem = document.createElement("div");
-      msgItem.className = "message-item";
-      if (msg.target_agent) {
-        msgItem.classList.add("highlight-target");
-      }
+      if (!msg || !msg.message_id) return;
+      if (state.renderedMessageIds.has(msg.message_id)) return;
 
-      const senderClean = (msg.sender || "unknown").toLowerCase();
-      let senderClass = "sender-badge";
-      if (senderClean === "mohammad") senderClass += " mohammad";
-      else if (senderClean === "argon") senderClass += " argon";
+      state.renderedMessageIds.add(msg.message_id);
+      state.lastMessageId = msg.message_id;
+      state.lastMessageTimestamp = msg.created_at;
 
-      let targetHtml = "";
-      if (msg.target_agent) {
-        targetHtml = `<span class="target-badge">➔ @${escapeHtml(msg.target_agent)}</span>`;
-      }
-
-      let timeFormatted = "";
-      if (msg.created_at) {
-        try {
-          const dt = new Date(msg.created_at);
-          timeFormatted = dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        } catch (_) {
-          timeFormatted = msg.created_at;
-        }
-      }
-
-      let bodyHtml = "";
-      if (msg.text) {
-        bodyHtml = `<div class="message-body">${escapeHtml(msg.text)}</div>`;
-      }
-
-      // Render attachments
-      let attachmentsHtml = "";
-      if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
-        attachmentsHtml = '<div class="attachments-grid">';
-        msg.attachments.forEach(att => {
-          const kind = att.kind || (att.mime_type && att.mime_type.startsWith("image/") ? "photo" : "document");
-          const publicUrl = att.public_url || `/api/cluster-chat/files/${att.room}/${att.created_at ? att.created_at.slice(0, 10) : ""}/${att.filename}`;
-          const downloadUrl = publicUrl + (publicUrl.includes("?") ? "&download=1" : "?download=1");
-          const sizeStr = formatBytes(att.size_bytes);
-
-          if (kind === "photo") {
-            attachmentsHtml += `
-              <div class="photo-card">
-                <div class="photo-thumb-container" onclick="window.ClusterChatUI.openPhoto('${escapeHtml(publicUrl)}', '${escapeHtml(att.filename || "Photo")}', '${escapeHtml(downloadUrl)}')">
-                  <img class="photo-thumb" src="${escapeHtml(publicUrl)}" alt="${escapeHtml(att.filename || "Photo")}" loading="lazy" />
-                </div>
-                <div class="photo-meta">
-                  <span class="photo-name" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</span>
-                  <span class="photo-size">${sizeStr}</span>
-                  <a class="btn-link" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download photo">⬇️</a>
-                </div>
-              </div>
-            `;
-          } else {
-            // Document card
-            let docIcon = "📄";
-            const ext = (att.filename || "").toLowerCase();
-            if (ext.endsWith(".zip") || ext.endsWith(".tar") || ext.endsWith(".gz")) docIcon = "📦";
-            else if (ext.endsWith(".patch") || ext.endsWith(".diff")) docIcon = "🩹";
-            else if (ext.endsWith(".json") || ext.endsWith(".yaml") || ext.endsWith(".yml")) docIcon = "📋";
-            else if (ext.endsWith(".py") || ext.endsWith(".js") || ext.endsWith(".ts")) docIcon = "💻";
-            else if (ext.endsWith(".pdf")) docIcon = "📑";
-
-            const localPathEscaped = escapeHtml(att.local_path || "");
-
-            attachmentsHtml += `
-              <div class="document-card">
-                <span class="doc-icon">${docIcon}</span>
-                <div class="doc-details">
-                  <span class="doc-filename" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</span>
-                  <div class="doc-subinfo">
-                    <span>${sizeStr}</span>
-                    <span>•</span>
-                    <span>${escapeHtml(att.mime_type || "document")}</span>
-                  </div>
-                </div>
-                <div class="doc-actions">
-                  ${att.local_path ? `
-                    <button class="btn-badge" onclick="window.ClusterChatUI.copyPath('${localPathEscaped}', this)" title="Copy local path for local agent use">
-                      📋 Path
-                    </button>
-                  ` : ""}
-                  <a class="btn-badge" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download file">
-                    ⬇️ Save
-                  </a>
-                </div>
-              </div>
-            `;
-          }
-        });
-        attachmentsHtml += "</div>";
-      }
-
-      msgItem.innerHTML = `
-        <div class="message-header">
-          <span class="${senderClass}">${escapeHtml(msg.sender)}</span>
-          ${targetHtml}
-          <span class="message-time">${timeFormatted}</span>
-        </div>
-        ${bodyHtml}
-        ${attachmentsHtml}
-      `;
-
-      elements.messageList.appendChild(msgItem);
+      const msgElem = createMessageElement(msg);
+      elements.messageList.appendChild(msgElem);
     });
 
-    if (forceScroll || isNearBottom) {
+    if (forceScroll && elements.chatContainer) {
       elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
     }
+  }
+
+  /**
+   * Incremental HTTP Polling:
+   * Requests new messages using GET /api/messages?since=<lastMessageIdOrTimestamp>
+   * Returns empty array if no new messages exist.
+   */
+  async function pollMessages() {
+    if (!state.currentRoom) return;
+
+    const params = new URLSearchParams();
+    params.set("room", state.currentRoom);
+    if (state.lastMessageId) {
+      params.set("since", state.lastMessageId);
+    } else if (state.lastMessageTimestamp) {
+      params.set("since", state.lastMessageTimestamp);
+    } else {
+      params.set("limit", "100");
+    }
+
+    // Using root-relative endpoint GET /api/messages?since=...
+    const res = await fetch(`/api/messages?${params.toString()}`, {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
+      }
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.messages)) {
+      appendNewMessages(data.messages);
+    }
+  }
+
+  /**
+   * Append newly received messages to the chat view with deduplication
+   * Guarantees no message is rendered twice across polling and realtime reconnects.
+   */
+  function appendNewMessages(messages) {
+    if (!elements.messageList || !Array.isArray(messages) || messages.length === 0) return;
+
+    // Filter out messages already rendered in DOM
+    const newMessages = messages.filter(
+      msg => msg && msg.message_id && !state.renderedMessageIds.has(msg.message_id)
+    );
+
+    if (newMessages.length === 0) return;
+
+    // Remove empty-state placeholder if present
+    const emptyState = elements.messageList.querySelector(".empty-state");
+    if (emptyState) {
+      emptyState.remove();
+    }
+
+    // Check if user is near bottom before appending
+    const isNearBottom = elements.chatContainer
+      ? elements.chatContainer.scrollHeight - elements.chatContainer.scrollTop - elements.chatContainer.clientHeight < 120
+      : true;
+
+    let hasOwnMessage = false;
+
+    newMessages.forEach(msg => {
+      state.renderedMessageIds.add(msg.message_id);
+      state.lastMessageId = msg.message_id;
+      state.lastMessageTimestamp = msg.created_at;
+
+      if ((msg.sender || "").toLowerCase() === state.sender.toLowerCase()) {
+        hasOwnMessage = true;
+      }
+
+      const msgElem = createMessageElement(msg);
+      elements.messageList.appendChild(msgElem);
+    });
+
+    if (elements.chatContainer && (isNearBottom || hasOwnMessage)) {
+      elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
+    }
+  }
+
+  /**
+   * Create a single chat message DOM element
+   */
+  function createMessageElement(msg) {
+    const msgItem = document.createElement("div");
+    msgItem.className = "message-item";
+    msgItem.dataset.messageId = msg.message_id;
+
+    if (msg.target_agent) {
+      msgItem.classList.add("highlight-target");
+    }
+
+    const senderClean = (msg.sender || "unknown").toLowerCase();
+    let senderClass = "sender-badge";
+    if (senderClean === "mohammad") senderClass += " mohammad";
+    else if (senderClean === "argon") senderClass += " argon";
+
+    let targetHtml = "";
+    if (msg.target_agent) {
+      targetHtml = `<span class="target-badge">➔ @${escapeHtml(msg.target_agent)}</span>`;
+    }
+
+    let timeFormatted = "";
+    if (msg.created_at) {
+      try {
+        const dt = new Date(msg.created_at);
+        timeFormatted = dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      } catch (_) {
+        timeFormatted = msg.created_at;
+      }
+    }
+
+    let bodyHtml = "";
+    const cleanText = normalizeMessageText(msg.text || "");
+    if (msg.text) {
+      // Normalize any legacy airboxvip.top text links in the body to root-relative paths
+      bodyHtml = `<div class="message-body">${escapeHtml(cleanText)}</div>`;
+    }
+
+    // Render attachments with root-relative paths
+    let attachmentsHtml = "";
+    if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+      attachmentsHtml = '<div class="attachments-grid">';
+      msg.attachments.forEach(att => {
+        const kind = att.kind || (att.mime_type && att.mime_type.startsWith("image/") ? "photo" : "document");
+        const rawUrl = att.public_url || att.url || `/api/cluster-chat/files/${att.room || state.currentRoom}/${att.created_at ? att.created_at.slice(0, 10) : ""}/${att.filename}`;
+        
+        // Normalize any legacy airboxvip.top URL to relative path before DOM rendering
+        const publicUrl = normalizeAttachmentUrl(rawUrl);
+        const downloadUrl = normalizeAttachmentUrl(publicUrl + (publicUrl.includes("?") ? "&download=1" : "?download=1"));
+        const sizeStr = formatBytes(att.size_bytes);
+
+        if (kind === "photo") {
+          attachmentsHtml += `
+            <div class="photo-card">
+              <div class="photo-thumb-container" onclick="window.ClusterChatUI.openPhoto('${escapeHtml(publicUrl)}', '${escapeHtml(att.filename || "Photo")}', '${escapeHtml(downloadUrl)}')">
+                <img class="photo-thumb" src="${escapeHtml(publicUrl)}" alt="${escapeHtml(att.filename || "Photo")}" loading="lazy" />
+              </div>
+              <div class="photo-meta">
+                <span class="photo-name" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</span>
+                <span class="photo-size">${sizeStr}</span>
+                <a class="btn-link" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download photo">⬇️</a>
+              </div>
+            </div>
+          `;
+        } else {
+          // Document card
+          let docIcon = "📄";
+          const ext = (att.filename || "").toLowerCase();
+          if (ext.endsWith(".zip") || ext.endsWith(".tar") || ext.endsWith(".gz")) docIcon = "📦";
+          else if (ext.endsWith(".patch") || ext.endsWith(".diff")) docIcon = "🩹";
+          else if (ext.endsWith(".json") || ext.endsWith(".yaml") || ext.endsWith(".yml")) docIcon = "📋";
+          else if (ext.endsWith(".py") || ext.endsWith(".js") || ext.endsWith(".ts")) docIcon = "💻";
+          else if (ext.endsWith(".pdf")) docIcon = "📑";
+
+          const localPathEscaped = escapeHtml(att.local_path || "");
+
+          attachmentsHtml += `
+            <div class="document-card">
+              <span class="doc-icon">${docIcon}</span>
+              <div class="doc-details">
+                <span class="doc-filename" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}</span>
+                <div class="doc-subinfo">
+                  <span>${sizeStr}</span>
+                  <span>•</span>
+                  <span>${escapeHtml(att.mime_type || "document")}</span>
+                </div>
+              </div>
+              <div class="doc-actions">
+                ${att.local_path ? `
+                  <button class="btn-badge" onclick="window.ClusterChatUI.copyToClipboard('${localPathEscaped}', this)" title="Copy local path for local agent use">
+                    📋 Path
+                  </button>
+                ` : ""}
+                <button class="btn-badge" onclick="window.ClusterChatUI.copyToClipboard('${escapeHtml(publicUrl)}', this)" title="Copy relative URL">
+                  🔗 Link
+                </button>
+                <a class="btn-badge" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(att.filename)}" title="Download file">
+                  ⬇️ Save
+                </a>
+              </div>
+            </div>
+          `;
+        }
+      });
+      attachmentsHtml += "</div>";
+    }
+
+    const messageTextEscaped = escapeHtml(cleanText);
+
+    msgItem.innerHTML = `
+      <div class="message-header">
+        <span class="${senderClass}">${escapeHtml(msg.sender)}</span>
+        ${targetHtml}
+        <span class="message-time">${timeFormatted}</span>
+        ${msg.text ? `
+          <button class="btn-badge-sm" onclick="window.ClusterChatUI.copyToClipboard('${messageTextEscaped}', this)" title="Copy message text">📋</button>
+        ` : ""}
+      </div>
+      ${bodyHtml}
+      ${attachmentsHtml}
+    `;
+
+    return msgItem;
   }
 
   // Stage files for upload
@@ -340,6 +834,7 @@
 
   // Render staging tray preview
   function renderStagedTray() {
+    if (!elements.stagedTray || !elements.stagedItems) return;
     if (state.stagedFiles.length === 0) {
       elements.stagedTray.classList.add("hidden");
       elements.stagedItems.innerHTML = "";
@@ -347,7 +842,7 @@
     }
 
     elements.stagedTray.classList.remove("hidden");
-    elements.stagedCount.textContent = state.stagedFiles.length;
+    if (elements.stagedCount) elements.stagedCount.textContent = state.stagedFiles.length;
     elements.stagedItems.innerHTML = "";
 
     state.stagedFiles.forEach((file, idx) => {
@@ -370,7 +865,7 @@
     });
   }
 
-  // Send message with or without attachments
+  // Send message with or without attachments using root-relative paths
   async function sendMessage() {
     const text = elements.messageText.value.trim();
     const hasFiles = state.stagedFiles.length > 0;
@@ -389,6 +884,7 @@
         return;
       }
     }
+    state.sender = activeSender;
 
     const activeTarget = elements.targetAgentSelect.value || null;
 
@@ -397,7 +893,7 @@
 
     try {
       if (hasFiles) {
-        // Multipart upload
+        // Multipart upload via relative URL
         const formData = new FormData();
         formData.append("room", state.currentRoom);
         formData.append("sender", activeSender);
@@ -423,7 +919,7 @@
           throw new Error(errData.error || `Upload failed with HTTP ${res.status}`);
         }
       } else {
-        // Plain message JSON
+        // Plain message JSON via relative URL
         const payload = {
           sender: activeSender,
           text: text,
@@ -447,7 +943,9 @@
       elements.messageText.value = "";
       state.stagedFiles = [];
       renderStagedTray();
-      await fetchMessages(true);
+
+      // Trigger immediate incremental poll to fetch the new message
+      await connectionManager.executePoll();
     } catch (err) {
       console.error("Failed to send message:", err);
       alert("Error sending message: " + err.message);
@@ -458,11 +956,14 @@
     }
   }
 
-  // Open Lightbox Photo Modal
+  // Open Lightbox Photo Modal with normalized root-relative URLs
   function openPhoto(publicUrl, filename, downloadUrl) {
-    elements.modalImg.src = publicUrl;
+    const cleanPublicUrl = normalizeAttachmentUrl(publicUrl);
+    const cleanDownloadUrl = normalizeAttachmentUrl(downloadUrl);
+
+    elements.modalImg.src = cleanPublicUrl;
     elements.modalCaption.textContent = filename;
-    elements.modalDownload.href = downloadUrl;
+    elements.modalDownload.href = cleanDownloadUrl;
     elements.modalDownload.setAttribute("download", filename);
     elements.imageModal.classList.remove("hidden");
   }
@@ -475,57 +976,75 @@
   // Setup Event Listeners
   function setupEvents() {
     // Sender selector custom toggle
-    elements.senderSelect.addEventListener("change", e => {
-      if (e.target.value === "__custom__") {
-        elements.customSenderInput.classList.remove("hidden");
-        elements.customSenderInput.focus();
-      } else {
-        elements.customSenderInput.classList.add("hidden");
-      }
-    });
+    if (elements.senderSelect) {
+      elements.senderSelect.addEventListener("change", e => {
+        if (e.target.value === "__custom__") {
+          elements.customSenderInput.classList.remove("hidden");
+          elements.customSenderInput.focus();
+        } else {
+          elements.customSenderInput.classList.add("hidden");
+          state.sender = e.target.value;
+        }
+      });
+    }
 
     // Refresh button
-    elements.refreshBtn.addEventListener("click", () => fetchMessages(true));
+    if (elements.refreshBtn) {
+      elements.refreshBtn.addEventListener("click", () => {
+        loadInitialRoomMessages(state.currentRoom, true);
+      });
+    }
 
     // Attachment button click
-    elements.attachBtn.addEventListener("click", () => {
-      elements.fileInput.click();
-    });
+    if (elements.attachBtn && elements.fileInput) {
+      elements.attachBtn.addEventListener("click", () => {
+        elements.fileInput.click();
+      });
 
-    // File input change
-    elements.fileInput.addEventListener("change", e => {
-      stageFiles(e.target.files);
-      elements.fileInput.value = "";
-    });
+      // File input change
+      elements.fileInput.addEventListener("change", e => {
+        stageFiles(e.target.files);
+        elements.fileInput.value = "";
+      });
+    }
 
     // Clear staged attachments
-    elements.clearStagedBtn.addEventListener("click", () => {
-      state.stagedFiles = [];
-      renderStagedTray();
-    });
+    if (elements.clearStagedBtn) {
+      elements.clearStagedBtn.addEventListener("click", () => {
+        state.stagedFiles = [];
+        renderStagedTray();
+      });
+    }
 
     // Composer form submission
-    elements.composerForm.addEventListener("submit", e => {
-      e.preventDefault();
-      sendMessage();
-    });
-
-    // Textarea enter key submit (Shift+Enter for newline)
-    elements.messageText.addEventListener("keydown", e => {
-      if (e.key === "Enter" && !e.shiftKey) {
+    if (elements.composerForm) {
+      elements.composerForm.addEventListener("submit", e => {
         e.preventDefault();
         sendMessage();
-      }
-    });
+      });
+    }
+
+    // Textarea enter key submit (Shift+Enter for newline)
+    if (elements.messageText) {
+      elements.messageText.addEventListener("keydown", e => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+    }
 
     // Lightbox close
-    elements.modalClose.addEventListener("click", closePhoto);
-    elements.imageModal.querySelector(".modal-backdrop").addEventListener("click", closePhoto);
-    document.addEventListener("keydown", e => {
-      if (e.key === "Escape" && !elements.imageModal.classList.contains("hidden")) {
-        closePhoto();
-      }
-    });
+    if (elements.modalClose && elements.imageModal) {
+      elements.modalClose.addEventListener("click", closePhoto);
+      const backdrop = elements.imageModal.querySelector(".modal-backdrop");
+      if (backdrop) backdrop.addEventListener("click", closePhoto);
+      document.addEventListener("keydown", e => {
+        if (e.key === "Escape" && !elements.imageModal.classList.contains("hidden")) {
+          closePhoto();
+        }
+      });
+    }
 
     // Clipboard Paste Listener (Supports screenshots and files pasted directly)
     window.addEventListener("paste", e => {
@@ -540,7 +1059,6 @@
         if (item.kind === "file" || (item.type && item.type.startsWith("image/"))) {
           const file = item.getAsFile();
           if (file) {
-            // Give generated name if clipboard image has generic name
             let filename = file.name;
             if (!filename || filename === "image.png") {
               const ext = file.type === "image/jpeg" ? ".jpg" : ".png";
@@ -558,52 +1076,63 @@
     });
 
     // Drag and Drop Handling over chat container
-    let dragCounter = 0;
+    if (elements.dropOverlay) {
+      let dragCounter = 0;
 
-    const dragEnterHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter++;
-      elements.dropOverlay.classList.add("active");
-    };
+      const dragEnterHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter++;
+        elements.dropOverlay.classList.add("active");
+      };
 
-    const dragLeaveHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter--;
-      if (dragCounter <= 0) {
+      const dragLeaveHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounter--;
+        if (dragCounter <= 0) {
+          dragCounter = 0;
+          elements.dropOverlay.classList.remove("active");
+        }
+      };
+
+      const dragOverHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      const dropHandler = e => {
+        e.preventDefault();
+        e.stopPropagation();
         dragCounter = 0;
         elements.dropOverlay.classList.remove("active");
-      }
-    };
 
-    const dragOverHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          stageFiles(e.dataTransfer.files);
+        }
+      };
 
-    const dropHandler = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounter = 0;
-      elements.dropOverlay.classList.remove("active");
-
-      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        stageFiles(e.dataTransfer.files);
-      }
-    };
-
-    window.addEventListener("dragenter", dragEnterHandler);
-    window.addEventListener("dragleave", dragLeaveHandler);
-    window.addEventListener("dragover", dragOverHandler);
-    window.addEventListener("drop", dropHandler);
+      window.addEventListener("dragenter", dragEnterHandler);
+      window.addEventListener("dragleave", dragLeaveHandler);
+      window.addEventListener("dragover", dragOverHandler);
+      window.addEventListener("drop", dropHandler);
+    }
   }
 
-  // Expose global helpers for inline HTML event handlers
+  // Expose global helpers for HTML event handlers and test harness
   window.ClusterChatUI = {
     unstage: unstageFile,
     openPhoto: openPhoto,
-    copyPath: copyToClipboard
+    closePhoto: closePhoto,
+    copyPath: copyToClipboard,
+    copyToClipboard: copyToClipboard,
+    normalizeAttachmentUrl: normalizeAttachmentUrl,
+    normalizeMessageText: normalizeMessageText,
+    getConnectionManager: () => connectionManager,
+    getState: () => state,
+    appendNewMessages: appendNewMessages,
+    renderInitialMessages: renderInitialMessages,
+    createMessageElement: createMessageElement
   };
 
   // Initialization
@@ -611,12 +1140,10 @@
     renderRoomButtons();
     setupEvents();
     await loadRooms();
-    await fetchMessages(true);
+    await loadInitialRoomMessages(state.currentRoom, true);
 
-    // Live polling every 3 seconds
-    state.pollingTimer = setInterval(() => {
-      fetchMessages(false);
-    }, state.pollIntervalMs);
+    // Start resilient connection manager (attempts realtime with 4s fallback to 2.5s polling)
+    connectionManager.start();
   }
 
   if (document.readyState === "loading") {

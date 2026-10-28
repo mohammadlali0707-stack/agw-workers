@@ -65,9 +65,9 @@
       </div>
 
       <div class="system-status">
-        <div class="status-indicator online"></div>
-        <span id="connection-status">Bridge Live</span>
-        <span class="poll-interval">3s poll</span>
+        <div id="status-indicator" class="status-indicator polling"></div>
+        <span id="connection-status">Connecting...</span>
+        <span id="poll-interval" class="poll-interval">2.5s poll</span>
       </div>
     </aside>
 
@@ -81,6 +81,7 @@
           <span id="current-room-desc" class="room-description">General cluster broadcast channel</span>
         </div>
         <div class="header-actions">
+          <span id="header-status-badge" class="connection-badge polling" title="Active connection mode">Connecting...</span>
           <button id="refresh-btn" class="btn-secondary" title="Refresh messages">🔄 Refresh</button>
         </div>
       </header>
