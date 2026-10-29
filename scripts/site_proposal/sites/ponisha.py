@@ -319,6 +319,14 @@ class PonishaAdapter:
                 text_loc = await _first_matching_locator(page, TEXT_SELECTORS)
 
             if not text_loc:
+                try:
+                    b = await page.inner_text("body")
+                except Exception:
+                    b = ""
+                if any(w in b for w in ("ویرایش پیشنهاد", "پیشنهاد شما ثبت", "انصراف از پیشنهاد")):
+                    return {"status": "already_bid", "filled_values": {}, "error_message": None}
+                if "کارفرما این پیشنهاد را انتخاب کرده" in b:
+                    return {"status": "awarded_to_other", "filled_values": {}, "error_message": "کارفرما فریلنسر دیگری را انتخاب کرده است."}
                 return {
                     "status": "form_error",
                     "filled_values": {},
@@ -369,6 +377,15 @@ class PonishaAdapter:
                         except Exception:
                             pass
 
+            if proposal_data.get("bid_amount") is not None:
+                try:
+                    ms = page.locator("xpath=//*[normalize-space(text())='به مبلغ']/following::input[1]")
+                    if await ms.count() > 0 and await ms.first.is_visible() and not (await ms.first.input_value()).strip():
+                        await ms.first.fill(str(proposal_data["bid_amount"]))
+                        filled_values["milestone_amount"] = await ms.first.input_value()
+                except Exception:
+                    pass
+
             # 9. Agree to terms checkbox if present
             try:
                 for chk_sel in [
@@ -395,27 +412,46 @@ class PonishaAdapter:
                     "error_message": None,
                 }
 
-            # Submit mode: Click submit button
-            submit_btn = await _first_matching_locator(page, SUBMIT_BUTTON_SELECTORS)
-            if not submit_btn:
-                return {
-                    "status": "form_error",
-                    "filled_values": filled_values,
-                    "error_message": "دکمه ثبت نهایی پیشنهاد در صفحه یافت نشد.",
-                }
-
-            await submit_btn.click()
-            if wait_ms > 0 and hasattr(page, "wait_for_timeout"):
+            # Submit mode (owner 2026-10-29): click the modal's own "ثبت پیشنهاد" button and CONFIRM the result
+            submit_btn = None
+            for sel in ["button:has-text('ثبت پیشنهاد')", "button:has-text('ارسال نهایی')", "button:has-text('ثبت نهایی')", "button:has-text('تایید و ارسال')"]:
+                loc = page.locator(sel)
                 try:
-                    await page.wait_for_timeout(min(wait_ms * 2, 2000))
+                    n = await loc.count()
+                    for i in range(n - 1, -1, -1):
+                        if await loc.nth(i).is_visible():
+                            submit_btn = loc.nth(i); break
                 except Exception:
                     pass
-
-            return {
-                "status": "submitted",
-                "filled_values": filled_values,
-                "error_message": None,
-            }
+                if submit_btn: break
+            if not submit_btn:
+                return {"status": "form_error", "filled_values": filled_values, "error_message": "دکمه ثبت نهایی پیشنهاد در صفحه یافت نشد."}
+            await submit_btn.click()
+            msg = ""
+            for _ in range(16):
+                await page.wait_for_timeout(500)
+                try:
+                    for sel in ["[role='alert']", ".Toastify__toast", ".toast", ".ant-message", ".swal2-popup", ".text-danger", ".invalid-feedback", ".error"]:
+                        loc = page.locator(sel)
+                        if await loc.count() > 0 and await loc.first.is_visible():
+                            t = (await loc.first.inner_text()).strip()
+                            if t: msg = t[:300]
+                except Exception:
+                    pass
+                try:
+                    still = await text_loc.is_visible()
+                except Exception:
+                    still = False
+                if not still: break
+            body = ""
+            try:
+                body = await page.inner_text("body")
+            except Exception:
+                pass
+            ok_words = ("با موفقیت", "ثبت شد", "ارسال شد")
+            if (msg and any(w in msg for w in ok_words)) or not still:
+                return {"status": "submitted", "filled_values": filled_values, "error_message": None, "site_message": msg or None}
+            return {"status": "not_confirmed", "filled_values": filled_values, "error_message": msg or "فرم بعد از کلیک بسته نشد؛ ارسال تایید نشد."}
 
         except Exception as exc:
             logger.exception("Unexpected error in Ponisha flow")
