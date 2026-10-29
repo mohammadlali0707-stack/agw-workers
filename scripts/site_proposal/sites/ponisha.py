@@ -289,8 +289,29 @@ class PonishaAdapter:
                     "error_message": "نشست کاربری منقضی شده یا نیاز به لاگین مجدد دارد.",
                 }
 
-            # 4. Check if proposal form / textarea is visible; if not, expand it
-            text_loc = await _first_matching_locator(page, TEXT_SELECTORS)
+            # 4. Check if proposal form / textarea is visible; if not, expand it (popups closed first; up to 3 tries)
+            text_loc = None
+            for _try in range(3):
+                try:
+                    await page.wait_for_timeout(2500)
+                    await page.keyboard.press("Escape")
+                    for xs in ["[aria-label='close']", "[aria-label='Close']", "button.close", ".modal-close"]:
+                        xl = page.locator(xs)
+                        if await xl.count() > 0 and await xl.first.is_visible():
+                            await xl.first.click(timeout=2000)
+                except Exception:
+                    pass
+                text_loc = await _first_matching_locator(page, TEXT_SELECTORS)
+                if text_loc: break
+                eb = await _first_matching_locator(page, EXPAND_BUTTON_SELECTORS)
+                if eb:
+                    try:
+                        await eb.click(timeout=5000)
+                        await page.wait_for_timeout(2500)
+                    except Exception:
+                        pass
+                text_loc = await _first_matching_locator(page, TEXT_SELECTORS)
+                if text_loc: break
             if not text_loc:
                 expand_btn = await _first_matching_locator(page, EXPAND_BUTTON_SELECTORS)
                 if expand_btn:
