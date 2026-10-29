@@ -66,6 +66,10 @@ jobs:
           JOB_ID_INPUT: ${{ inputs.job_id }}
           MODE_INPUT: ${{ inputs.mode }}
           SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
+          SITE_SESSION_PONISHA: ${{ secrets.SITE_SESSION_PONISHA }}
+          SITE_SESSION_KARLANCER: ${{ secrets.SITE_SESSION_KARLANCER }}
+          SITE_SESSION_PARSCODERS: ${{ secrets.SITE_SESSION_PARSCODERS }}
+          SITE_SESSION_FREELANCER: ${{ secrets.SITE_SESSION_FREELANCER }}
           PYTHONPATH: .
         run: |
           python3 -m scripts.site_proposal.runner \
