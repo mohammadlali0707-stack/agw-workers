@@ -406,6 +406,13 @@ class PonishaAdapter:
                         filled_values["milestone_amount"] = await ms.first.input_value()
                 except Exception:
                     pass
+                try:   # secure-payment step title (required, the field just before "به مبلغ")
+                    mt = page.locator("xpath=//*[normalize-space(text())='به مبلغ']/preceding::input[1]")
+                    if await mt.count() > 0 and await mt.first.is_visible() and not (await mt.first.input_value()).strip():
+                        await mt.first.fill(str(proposal_data.get("milestone_title") or "تحویل کامل پروژه"))
+                        filled_values["milestone_title"] = await mt.first.input_value()
+                except Exception:
+                    pass
 
             # 9. Agree to terms checkbox if present
             try:
