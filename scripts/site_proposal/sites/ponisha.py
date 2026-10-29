@@ -426,6 +426,17 @@ class PonishaAdapter:
                 if submit_btn: break
             if not submit_btn:
                 return {"status": "form_error", "filled_values": filled_values, "error_message": "دکمه ثبت نهایی پیشنهاد در صفحه یافت نشد."}
+            posts = []
+            async def _on_resp(resp):
+                try:
+                    if resp.request.method in ("POST", "PUT") and "ponisha" in resp.url:
+                        t = ""
+                        try: t = (await resp.text())[:400]
+                        except Exception: pass
+                        posts.append(f"{resp.status} {resp.url.split('?')[0][-60:]} {t}")
+                except Exception:
+                    pass
+            page.on("response", _on_resp)
             await submit_btn.click()
             msg = ""
             for _ in range(16):
@@ -450,8 +461,13 @@ class PonishaAdapter:
                 pass
             ok_words = ("با موفقیت", "ثبت شد", "ارسال شد")
             if (msg and any(w in msg for w in ok_words)) or not still:
-                return {"status": "submitted", "filled_values": filled_values, "error_message": None, "site_message": msg or None}
-            return {"status": "not_confirmed", "filled_values": filled_values, "error_message": msg or "فرم بعد از کلیک بسته نشد؛ ارسال تایید نشد."}
+                return {"status": "submitted", "filled_values": filled_values, "error_message": None, "site_message": (msg or "") + " | POST: " + " || ".join(posts)[:600]}
+            modal = ""
+            try:
+                modal = (await page.locator("[role='dialog'], .modal, .MuiDialog-root").last.inner_text())[:1500]
+            except Exception:
+                pass
+            return {"status": "not_confirmed", "filled_values": filled_values, "error_message": (msg or "فرم بعد از کلیک بسته نشد؛ ارسال تایید نشد.") + " | POST: " + " || ".join(posts)[:900] + " | MODAL: " + modal.replace(str(proposal_data.get("proposal_text", "")), "[text]")}
 
         except Exception as exc:
             logger.exception("Unexpected error in Ponisha flow")
