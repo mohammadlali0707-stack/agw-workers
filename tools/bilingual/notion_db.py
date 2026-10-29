@@ -83,7 +83,7 @@ class NotionClient:
         req.add_header("Content-Type", "application/json")
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 429 and _tries < 5:
@@ -95,6 +95,11 @@ class NotionClient:
                 return self._req(method, path, body, _tries + 1)
             raw = e.read().decode("utf-8", "replace")
             raise RuntimeError(f"Notion API {method} {path} -> {e.code}: {raw[:300]}") from None
+        except (TimeoutError, ConnectionError, urllib.error.URLError) as e:   # transient network slowness: retry with backoff
+            if _tries < 4:
+                time.sleep(3 * 2 ** _tries)
+                return self._req(method, path, body, _tries + 1)
+            raise RuntimeError(f"Notion API {method} {path} -> network error after retries: {type(e).__name__}") from None
 
     def get_database(self, db_id: str) -> dict:
         norm_id = db_id.replace("-", "")
