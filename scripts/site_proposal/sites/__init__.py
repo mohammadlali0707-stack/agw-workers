@@ -7,10 +7,14 @@ Each adapter provides `async def run_site_flow(page, context, proposal_data: dic
 from typing import Any, Dict, Type, Union
 from .ponisha import PonishaAdapter, run_site_flow as ponisha_flow
 from .karlancer import KarlancerAdapter, run_site_flow as karlancer_flow
+from .parscoders import ParscodersAdapter
+from .freelancer import FreelancerAdapter
 
 ADAPTER_MAP: Dict[str, Type[Union[PonishaAdapter, KarlancerAdapter]]] = {
     "ponisha": PonishaAdapter,
     "karlancer": KarlancerAdapter,
+    "parscoders": ParscodersAdapter,
+    "freelancer": FreelancerAdapter,
 }
 
 SUPPORTED_SITES = list(ADAPTER_MAP.keys())
