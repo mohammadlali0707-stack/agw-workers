@@ -195,175 +195,122 @@ async def _detect_login_required(page: Any) -> bool:
     return False
 
 
+_FA = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _num(s):
+    import re
+    m = re.search(r"\d[\d,]*", (s or "").translate(_FA))
+    return int(m.group(0).replace(",", "")) if m else None
+
+
+async def _body(page):
+    try:
+        return await page.evaluate("() => document.body.innerText")
+    except Exception:
+        return ""
+
+
+async def _click_text(page, sel, txt):
+    """Click first visible element matching sel whose trimmed text == txt."""
+    return await page.evaluate(
+        """([sel, txt]) => { const e = [...document.querySelectorAll(sel)].find(e => (e.innerText||'').trim() === txt && e.getBoundingClientRect().width > 0);
+             if (e) { e.scrollIntoView({block:'center'}); e.click(); return true } return false }""", [sel, txt])
+
+
+async def _errors(page):
+    try:
+        return await page.evaluate("""() => [...document.querySelectorAll('.text-danger,.error,.invalid-feedback,[class*=error],[class*=toast],[class*=alert],[class*=snack]')]
+            .filter(e => e.offsetParent !== null).map(e => (e.innerText||'').trim()).filter(t => t && t.length < 300).slice(0, 8)""")
+    except Exception:
+        return []
+
+
 class KarlancerAdapter:
-    """Adapter for interacting with Karlancer bid forms."""
+    """Karlancer flow (rewritten 2026-10-29 from live form):
+    project page -> div 'ثبت پیشنهاد روی پروژه' -> tips modal 'ادامه و ثبت پیشنهاد' ->
+    form: input[placeholder='تعداد روز'], input[placeholder='قیمت'] (toman), textarea, button#submitBid.
+    Each bid costs tokens (free plan: 10 tokens / period). Checks balance first."""
 
     @classmethod
-    async def run_site_flow(
-        cls,
-        page: Any,
-        context: Any,
-        proposal_data: Dict[str, Any],
-        mode: str = "preview",
-    ) -> Dict[str, Any]:
-        """Execute the proposal flow on Karlancer.
-
-        Args:
-            page: Playwright Page instance.
-            context: Playwright BrowserContext instance.
-            proposal_data: Dictionary containing project proposal details.
-            mode: 'preview' (default, fill and stop) or 'submit' (submit proposal).
-
-        Returns:
-            Dict containing:
-                - status: 'preview_ready' | 'submitted' | 'login_required' | 'captcha_detected' | 'form_error'
-                - filled_values: dict of values populated in the form
-                - error_message: str or None
-        """
-        filled_values: Dict[str, Any] = {}
-
-        project_url = proposal_data.get("project_url")
-        if not project_url:
-            return {
-                "status": "form_error",
-                "filled_values": {},
-                "error_message": "project_url is missing in proposal_data",
-            }
-
-        wait_ms = int(proposal_data.get("_wait_ms", 500))
+    async def run_site_flow(cls, page: Any, context: Any, proposal_data: Dict[str, Any], mode: str = "preview") -> Dict[str, Any]:
+        import re
+        fv: Dict[str, Any] = {}
+        url = proposal_data.get("project_url")
+        if not url:
+            return {"status": "form_error", "filled_values": {}, "error_message": "project_url is missing"}
+        submit = str(mode).strip().lower() == "submit"
         try:
-            # 1. Navigate to project page
-            await page.goto(project_url, wait_until="domcontentloaded")
-            if wait_ms > 0 and hasattr(page, "wait_for_timeout"):
-                try:
-                    await page.wait_for_timeout(wait_ms)
-                except Exception:
-                    pass
-
-            # 2. Check for captcha
+            # 0. token balance from dashboard
+            await page.goto("https://www.karlancer.com/panel/dashboard", wait_until="domcontentloaded")
+            await page.wait_for_timeout(5000)
+            b = await _body(page)
+            if "خروج" not in b:
+                return {"status": "login_required", "filled_values": {}, "error_message": "Karlancer session expired (no logout link on dashboard)"}
+            m = re.search(r"توکن‌های شما\s*\n\s*([۰-۹0-9]+)", b)
+            fv["tokens_left"] = _num(m.group(1)) if m else None
+            # 1. project page
+            await page.goto(url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(5000)
             if await _detect_captcha(page):
-                return {
-                    "status": "captcha_detected",
-                    "filled_values": {},
-                    "error_message": "کپچا در صفحه تشخیص داده شد؛ عملیات متوقف گردید.",
-                }
-
-            # 3. Check for login requirement
-            if await _detect_login_required(page):
-                return {
-                    "status": "login_required",
-                    "filled_values": {},
-                    "error_message": "نشست کاربری منقضی شده یا نیاز به لاگین مجدد دارد.",
-                }
-
-            # 4. Check if proposal form / textarea is visible; if not, open modal/form
-            text_loc = await _first_matching_locator(page, TEXT_SELECTORS)
-            if not text_loc:
-                expand_btn = await _first_matching_locator(page, EXPAND_BUTTON_SELECTORS)
-                if expand_btn:
-                    try:
-                        await expand_btn.click()
-                        if wait_ms > 0 and hasattr(page, "wait_for_timeout"):
-                            await page.wait_for_timeout(wait_ms)
-                    except Exception as e:
-                        logger.warning(f"Failed clicking expand button on Karlancer: {e}")
-
-                # Re-check login and captcha in case expand opened a modal or redirected
-                if await _detect_captcha(page):
-                    return {
-                        "status": "captcha_detected",
-                        "filled_values": {},
-                        "error_message": "کپچا در صفحه تشخیص داده شد؛ عملیات متوقف گردید.",
-                    }
-
-                if await _detect_login_required(page):
-                    return {
-                        "status": "login_required",
-                        "filled_values": {},
-                        "error_message": "نشست کاربری منقضی شده یا نیاز به لاگین مجدد دارد.",
-                    }
-
-                text_loc = await _first_matching_locator(page, TEXT_SELECTORS)
-
-            if not text_loc:
-                return {
-                    "status": "form_error",
-                    "filled_values": {},
-                    "error_message": "فرم ارسال پیشنهاد یا فیلد متن پیشنهاد در صفحه یافت نشد.",
-                }
-
-            # 5. Fill proposal text
-            proposal_text = str(proposal_data.get("proposal_text", ""))
-            await text_loc.fill(proposal_text)
-            filled_values["proposal_text"] = await text_loc.input_value()
-
-            # 6. Fill bid amount if provided
-            if proposal_data.get("bid_amount") is not None:
-                amount_loc = await _first_matching_locator(page, AMOUNT_SELECTORS)
-                if amount_loc:
-                    amount_str = str(proposal_data["bid_amount"])
-                    await amount_loc.fill(amount_str)
-                    raw_val = await amount_loc.input_value()
-                    clean_val = raw_val.replace(",", "").strip()
-                    filled_values["bid_amount"] = int(clean_val) if clean_val.isdigit() else raw_val
-
-            # 7. Fill delivery days if provided
+                return {"status": "captcha_detected", "filled_values": fv, "error_message": "captcha on page"}
+            b = await _body(page)
+            fv["url"] = page.url
+            if re.search(r"پیشنهاد شما ثبت شده|ویرایش پیشنهاد|شما (قبلا|قبلاً) (برای این پروژه )?پیشنهاد", b):
+                return {"status": "already_bid", "filled_values": fv, "error_message": "already bid on this project"}
+            if re.search(r"پروژه (بسته شده|منقضی|به اتمام رسیده)|مهلت ارسال پیشنهاد (تمام|به پایان)", b):
+                return {"status": "closed", "filled_values": fv, "error_message": "project closed"}
+            if not await _click_text(page, "div.pointer, button, a", "ثبت پیشنهاد روی پروژه"):
+                return {"status": "form_error", "filled_values": fv, "error_message": "bid button not found", "body": b[:1500]}
+            await page.wait_for_timeout(2500)
+            await _click_text(page, "button", "ادامه و ثبت پیشنهاد")
+            await page.wait_for_timeout(3000)
+            b = await _body(page)
+            m = re.search(r"ثبت پیشنهاد روی این پروژه:\s*([۰-۹0-9]+)\s*توکن", b)
+            fv["token_cost"] = _num(m.group(1)) if m else None
+            m = re.search(r"عنوان پروژه:\s*(.+)", b)
+            fv["title"] = m.group(1).strip()[:120] if m else ""
+            if fv.get("token_cost") and fv.get("tokens_left") is not None and fv["token_cost"] > fv["tokens_left"]:
+                return {"status": "no_tokens", "filled_values": fv, "error_message": f"need {fv['token_cost']} tokens, have {fv['tokens_left']}"}
+            days = page.locator("input[placeholder='تعداد روز']").first
+            price = page.locator("input[placeholder='قیمت']").first
+            text = page.locator("textarea[placeholder*='روند انجام پروژه']").first
+            if not await text.count() or not await price.count():
+                return {"status": "form_error", "filled_values": fv, "error_message": "bid form fields not found", "body": b[:1500]}
             if proposal_data.get("delivery_days") is not None:
-                days_loc = await _first_matching_locator(page, DAYS_SELECTORS)
-                if days_loc:
-                    days_str = str(proposal_data["delivery_days"])
-                    await days_loc.fill(days_str)
-                    raw_val = await days_loc.input_value()
-                    clean_val = raw_val.strip()
-                    filled_values["delivery_days"] = int(clean_val) if clean_val.isdigit() else raw_val
-
-            # 8. Check mode: Preview vs Submit
-            is_submit_mode = str(mode).strip().lower() == "submit"
-            if not is_submit_mode:
-                # Preview mode: Never click submit button
-                return {
-                    "status": "preview_ready",
-                    "filled_values": filled_values,
-                    "error_message": None,
-                }
-
-            # Submit mode: Click submit button
-            submit_btn = await _first_matching_locator(page, SUBMIT_BUTTON_SELECTORS)
-            if not submit_btn:
-                return {
-                    "status": "form_error",
-                    "filled_values": filled_values,
-                    "error_message": "دکمه ثبت نهایی پیشنهاد در صفحه یافت نشد.",
-                }
-
-            await submit_btn.click()
-            if wait_ms > 0 and hasattr(page, "wait_for_timeout"):
-                try:
-                    await page.wait_for_timeout(min(wait_ms * 2, 2000))
-                except Exception:
-                    pass
-
-            return {
-                "status": "submitted",
-                "filled_values": filled_values,
-                "error_message": None,
-            }
-
+                await days.click(); await days.fill(""); await days.press_sequentially(str(int(proposal_data["delivery_days"])), delay=40)
+                fv["delivery_days"] = await days.input_value()
+            if proposal_data.get("bid_amount") is not None:
+                amt = int(round(int(proposal_data["bid_amount"]) / 1000.0) * 1000)
+                await price.click(); await price.fill(""); await price.press_sequentially(str(amt), delay=30)
+                fv["bid_amount"] = await price.input_value()
+            await text.click(); await text.fill(str(proposal_data.get("proposal_text", "")))
+            fv["proposal_len"] = len(await text.input_value())
+            await page.wait_for_timeout(800)
+            if not submit:
+                fv["errors"] = await _errors(page)
+                return {"status": "preview_ready", "filled_values": fv, "error_message": None}
+            btn = page.locator("button#submitBid").first
+            if not await btn.count():
+                return {"status": "form_error", "filled_values": fv, "error_message": "submitBid button not found"}
+            await btn.scroll_into_view_if_needed(); await btn.click()
+            await page.wait_for_timeout(6000)
+            fv["after_errors"] = await _errors(page)
+            still = await page.locator("button#submitBid").count() and await page.locator("button#submitBid").first.is_visible()
+            # 2. confirm via my bids page
+            await page.goto("https://www.karlancer.com/panel/bids", wait_until="domcontentloaded")
+            await page.wait_for_timeout(5000)
+            bb = await _body(page)
+            t = (fv.get("title") or "")[:25]
+            if t and t in bb:
+                return {"status": "submitted", "filled_values": fv, "error_message": None}
+            return {"status": "form_error", "filled_values": fv,
+                    "error_message": f"not confirmed in /panel/bids (form still open={bool(still)}); errors={fv['after_errors']}", "body": bb[:1200]}
         except Exception as exc:
             logger.exception("Unexpected error in Karlancer flow")
-            return {
-                "status": "form_error",
-                "filled_values": filled_values,
-                "error_message": str(exc),
-            }
+            return {"status": "form_error", "filled_values": fv, "error_message": f"{type(exc).__name__}: {exc}"[:400]}
 
-    async def __call__(
-        self,
-        page: Any,
-        context: Any,
-        proposal_data: Dict[str, Any],
-        mode: str = "preview",
-    ) -> Dict[str, Any]:
+    async def __call__(self, page: Any, context: Any, proposal_data: Dict[str, Any], mode: str = "preview") -> Dict[str, Any]:
         return await self.run_site_flow(page, context, proposal_data, mode)
 
 
