@@ -10,6 +10,8 @@ on:
         options:
           - ponisha
           - karlancer
+          - parscoders
+          - freelancer
       project_url:
         description: 'URL of the target project'
         required: true
