@@ -385,8 +385,11 @@ async def run_proposal(
 
                     page = await context.new_page()
 
-                    # Run site adapter flow
-                    if hasattr(adapter, "run_site_flow") and callable(adapter.run_site_flow):
+                    # Run site adapter flow (explore = dump form only, never submits)
+                    if proposal_data.get("_explore"):
+                        from scripts.site_proposal.sites.explore import explore
+                        flow_result = await explore(page, proposal_data)
+                    elif hasattr(adapter, "run_site_flow") and callable(adapter.run_site_flow):
                         flow_result = await adapter.run_site_flow(page, context, proposal_data, mode)
                     elif callable(adapter):
                         flow_result = await adapter(page, context, proposal_data, mode)
