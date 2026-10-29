@@ -87,6 +87,13 @@ def get_today_tehran() -> str:
 
 def load_site_sessions(site: str) -> tuple[dict[str, Any], str | None]:
     """Safely load session credentials for the given site without leaking secrets."""
+    one = os.environ.get("SITE_SESSION_" + site.strip().upper(), "").strip()   # owner 2026-10-29: per-site secret wins (easier to renew one site)
+    if one:
+        try:
+            sess = json.loads(one)
+            if isinstance(sess, dict) and (sess.get("cookies") or sess.get("localStorage")): return sess, None
+        except Exception:
+            pass
     raw = os.environ.get("SITE_SESSIONS", "").strip()
     if not raw:
         return {}, "SITE_SESSIONS environment variable is not configured"
