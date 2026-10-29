@@ -344,7 +344,7 @@ class PonishaAdapter:
                     b = await page.inner_text("body")
                 except Exception:
                     b = ""
-                if any(w in b for w in ("ویرایش پیشنهاد", "پیشنهاد شما ثبت", "انصراف از پیشنهاد")):
+                if any(w in b for w in ("شما برای این پروژه پیشنهاد ارسال کرده", "ویرایش پیشنهاد", "پیشنهاد شما ثبت", "انصراف از پیشنهاد")):
                     return {"status": "already_bid", "filled_values": {}, "error_message": None}
                 if "کارفرما این پیشنهاد را انتخاب کرده" in b:
                     return {"status": "awarded_to_other", "filled_values": {}, "error_message": "کارفرما فریلنسر دیگری را انتخاب کرده است."}
@@ -487,7 +487,7 @@ class PonishaAdapter:
                 body = await page.inner_text("body")
             except Exception:
                 pass
-            ok_words = ("با موفقیت", "ثبت شد", "ارسال شد")
+            ok_words = ("با موفقیت", "ثبت شد", "ارسال شد", "شما برای این پروژه پیشنهاد ارسال کرده")
             if (msg and any(w in msg for w in ok_words)) or not still:
                 return {"status": "submitted", "filled_values": filled_values, "error_message": None, "site_message": (msg or "") + " | POST: " + " || ".join(posts)[:600]}
             modal = ""
