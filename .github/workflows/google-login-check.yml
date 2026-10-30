@@ -1,0 +1,29 @@
+name: google-login-check
+# owner 2026-10-30: verifies the shared Google site-login session (secret GOOGLE_SITE_COOKIES) still works.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -q playwright && python -m playwright install --with-deps chromium >/dev/null
+      - name: Check accounts
+        env:
+          GOOGLE_SITE_COOKIES: ${{ secrets.GOOGLE_SITE_COOKIES }}
+        run: |
+          python - <<'PY'
+          import sys, re; sys.path.insert(0, "tools"); import google_login
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              b = p.chromium.launch(); ctx = b.new_context(storage_state=google_login.storage_state())
+              pg = ctx.new_page(); pg.goto("https://accounts.google.com/AccountChooser?hl=en", timeout=60000); pg.wait_for_timeout(3000)
+              found = sorted(set(re.findall(r"[a-z0-9.]+@gmail\.com", pg.content())) & set(google_login.ACCOUNTS.values()))
+              print("signed-in site accounts:", found)
+              pg.goto("https://myaccount.google.com/?hl=en", timeout=60000); print("myaccount ok:", "myaccount.google.com" in pg.url)
+              b.close()
+              sys.exit(0 if len(found) == 2 else 1)
+          PY
