@@ -15,18 +15,21 @@ jobs:
       - name: Check accounts
         env:
           GOOGLE_SITE_COOKIES: ${{ secrets.GOOGLE_SITE_COOKIES }}
+          GOOGLE_SITE_COOKIES_MOMONA: ${{ secrets.GOOGLE_SITE_COOKIES_MOMONA }}
           GOOGLE_LOCK_TOKEN: ${{ secrets.ACC6_PAT }}
         run: |
           python - <<'PY'
           import sys, re; sys.path.insert(0, "tools"); import google_login
           from playwright.sync_api import sync_playwright
           with sync_playwright() as p:
-            with google_login.session("google-login-check") as gl:
-              b = p.chromium.launch(); ctx = b.new_context(storage_state=gl.storage_state())
-              pg = ctx.new_page(); pg.goto("https://accounts.google.com/AccountChooser?hl=en", timeout=60000); pg.wait_for_timeout(3000)
-              emails = set(re.findall(r"[a-z0-9.]+@gmail\.com", pg.content()))
-              print("signed in:", gl.account in emails, "| other accounts in session:", len(emails - {gl.account}))
-              pg.goto("https://myaccount.google.com/?hl=en", timeout=60000); ok = "myaccount.google.com" in pg.url; print("myaccount ok:", ok)
-              b.close()
-            sys.exit(0 if ok and gl.account in emails else 1)
+            bad = 0
+            for name in google_login.ACCOUNTS:
+              with google_login.session("google-login-check", account=name) as gl:
+                b = p.chromium.launch(); ctx = b.new_context(storage_state=gl.storage_state())
+                pg = ctx.new_page(); pg.goto("https://accounts.google.com/AccountChooser?hl=en", timeout=60000); pg.wait_for_timeout(3000)
+                emails = set(re.findall(r"[a-z0-9.]+@gmail\.com", pg.content()))
+                pg.goto("https://myaccount.google.com/?hl=en", timeout=60000); ok = "myaccount.google.com" in pg.url and gl.account in emails
+                print(name, "signed in:", ok, "| other accounts in session:", len(emails - {gl.account})); bad += not ok
+                b.close()
+            sys.exit(1 if bad else 0)
           PY
