@@ -96,7 +96,7 @@ jobs:
 
           outfile = os.environ['OUTFILE']
           page_url = os.environ['PAGE_URL']
-          webhook_url = os.environ.get('N8N_MOTAMEM_WEBHOOK', '')
+          webhook_url = os.environ.get('N8N_WEBHOOK', '')
 
           with open(f'/tmp/out/{outfile}.html', encoding='utf-8') as f:
               soup = BeautifulSoup(f, 'lxml')
@@ -121,6 +121,7 @@ jobs:
           if webhook_url:
               r = requests.post(webhook_url, json=payload, timeout=30)
               print(f'Webhook response: {r.status_code}')
+              r.raise_for_status()
           else:
               with open(f'/tmp/out/{outfile}_parsed.json', 'w', encoding='utf-8') as f:
                   json.dump(payload, f, ensure_ascii=False)
