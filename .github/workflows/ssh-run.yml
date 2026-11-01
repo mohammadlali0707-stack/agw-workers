@@ -1,0 +1,54 @@
+name: SSH — Run command on VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Shell command to run on the VPS'
+        required: true
+        type: string
+      working_dir:
+        description: 'Working directory (default: /root)'
+        required: false
+        default: '/root'
+        type: string
+      timeout:
+        description: 'Timeout in seconds (default: 120)'
+        required: false
+        default: '120'
+        type: string
+      label:
+        description: 'Short label for this run (shown in logs)'
+        required: false
+        default: 'ssh-command'
+        type: string
+
+jobs:
+  run-on-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: ${{ inputs.label }}
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ secrets.SSH_PORT }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          echo "SSH key ready"
+
+      - name: Run command on VPS
+        id: run
+        run: |
+          ssh \
+            -i ~/.ssh/id_rsa \
+            -p ${{ secrets.SSH_PORT }} \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=30 \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "cd ${{ inputs.working_dir }} && timeout ${{ inputs.timeout }} bash -c '${{ inputs.command }}'"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ~/.ssh/id_rsa
