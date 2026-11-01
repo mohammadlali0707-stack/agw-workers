@@ -1,0 +1,135 @@
+name: Motamem SingleFile Saver
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Motamem page URL to save'
+        required: true
+        type: string
+      filename:
+        description: 'Output filename (without .html)'
+        required: true
+        type: string
+
+jobs:
+  save-page:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Install dependencies
+        run: |
+          npm install -g single-file-cli
+          sudo apt-get install -y chromium-browser python3-pip
+          pip3 install requests beautifulsoup4 lxml
+
+      - name: Login to Motamem & get cookies
+        env:
+          MOTAMEM_USER: ${{ secrets.MOTAMEM_USER }}
+          MOTAMEM_PASS: ${{ secrets.MOTAMEM_PASS }}
+        run: |
+          python3 << 'PYEOF'
+          import requests, os
+          from bs4 import BeautifulSoup
+
+          session = requests.Session()
+          session.headers.update({
+              'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120'
+          })
+
+          # Get login page
+          resp = session.get('https://motamem.org/?action=login')
+          print(f'Login page status: {resp.status_code}')
+
+          # Login via WordPress form
+          login_data = {
+              'log': os.environ['MOTAMEM_USER'],
+              'pwd': os.environ['MOTAMEM_PASS'],
+              'wp-submit': 'ورود به متمم',
+              'redirect_to': 'https://motamem.org/',
+              'rememberme': 'forever',
+          }
+          resp = session.post('https://motamem.org/wp-login.php', data=login_data, allow_redirects=True)
+          print(f'Post-login URL: {resp.url}')
+          print(f'Cookies: {list(session.cookies.keys())}')
+
+          # Write Netscape cookie file
+          lines = ['# Netscape HTTP Cookie File']
+          for c in session.cookies:
+              secure = 'TRUE' if c.secure else 'FALSE'
+              expires = str(int(c.expires)) if c.expires else '9999999999'
+              domain = c.domain if c.domain else '.motamem.org'
+              lines.append(f'{domain}\tTRUE\t{c.path}\t{secure}\t{expires}\t{c.name}\t{c.value}')
+
+          with open('/tmp/motamem_cookies.txt', 'w') as f:
+              f.write('\n'.join(lines))
+          print(f'Saved {len(lines)-1} cookies')
+          PYEOF
+
+      - name: Run SingleFile
+        env:
+          PAGE_URL: ${{ inputs.url }}
+          OUTFILE: ${{ inputs.filename }}
+        run: |
+          mkdir -p /tmp/out
+          single-file \
+            "$PAGE_URL" \
+            --browser-executable-path /usr/bin/chromium-browser \
+            --browser-cookies-file /tmp/motamem_cookies.txt \
+            --output-directory /tmp/out \
+            --filename-template "$OUTFILE.html" \
+            --browser-headless true \
+            --browser-args '["--no-sandbox","--disable-dev-shm-usage","--disable-gpu"]'
+          echo "=== Saved file ==="
+          ls -lh /tmp/out/
+
+      - name: Parse & send to n8n webhook
+        env:
+          OUTFILE: ${{ inputs.filename }}
+          PAGE_URL: ${{ inputs.url }}
+          N8N_WEBHOOK: ${{ secrets.N8N_MOTAMEM_WEBHOOK }}
+        run: |
+          python3 << 'PYEOF'
+          import os, json, requests
+          from bs4 import BeautifulSoup
+
+          outfile = os.environ['OUTFILE']
+          page_url = os.environ['PAGE_URL']
+          webhook_url = os.environ.get('N8N_MOTAMEM_WEBHOOK', '')
+
+          with open(f'/tmp/out/{outfile}.html', encoding='utf-8') as f:
+              soup = BeautifulSoup(f, 'lxml')
+
+          for tag in soup(['script', 'style', 'noscript']):
+              tag.decompose()
+
+          title = soup.title.get_text(strip=True) if soup.title else outfile
+          entry = soup.find('div', class_='entry') or soup.find('div', class_='post') or soup.body
+          content = entry.get_text('\n', strip=True)[:20000] if entry else ''
+
+          payload = {
+              'title': title,
+              'url': page_url,
+              'filename': outfile,
+              'content': content,
+          }
+
+          print(f'Title: {title}')
+          print(f'Content length: {len(content)} chars')
+
+          if webhook_url:
+              r = requests.post(webhook_url, json=payload, timeout=30)
+              print(f'Webhook response: {r.status_code}')
+          else:
+              with open(f'/tmp/out/{outfile}_parsed.json', 'w', encoding='utf-8') as f:
+                  json.dump(payload, f, ensure_ascii=False)
+              print('Saved parsed JSON (no webhook configured)')
+          PYEOF
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: motamem-${{ inputs.filename }}
+          path: /tmp/out/
+          retention-days: 7
