@@ -306,6 +306,8 @@ async def run_proposal(
 
     # 3. Load authenticated session
     site_session, session_err = load_site_sessions(site)
+    if session_err and site == "freelancer":   # owner 2026-11-02: freelancer signs in with Google (momona) inside the adapter
+        site_session, session_err = {}, None
     if session_err:
         logger.warning("Session unavailable for %s: %s", site, session_err)
         result_data = {
