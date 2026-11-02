@@ -70,6 +70,8 @@ jobs:
           SITE_SESSION_KARLANCER: ${{ secrets.SITE_SESSION_KARLANCER }}
           SITE_SESSION_PARSCODERS: ${{ secrets.SITE_SESSION_PARSCODERS }}
           SITE_SESSION_FREELANCER: ${{ secrets.SITE_SESSION_FREELANCER }}
+          GOOGLE_SITE_COOKIES_MOMONA: ${{ secrets.GOOGLE_SITE_COOKIES_MOMONA }}
+          GOOGLE_LOCK_TOKEN: ${{ secrets.ACC6_PAT }}
           PYTHONPATH: .
         run: |
           python3 -m scripts.site_proposal.runner \
