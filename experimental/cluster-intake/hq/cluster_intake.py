@@ -21,6 +21,9 @@ class Intake:
             state TEXT NOT NULL, lease_token TEXT, lease_until REAL,
             session_id TEXT
         )''')
+        db.execute('''CREATE TABLE IF NOT EXISTS intake_conflicts (
+            message_id INTEGER PRIMARY KEY, observations INTEGER NOT NULL
+        )''')
         db.commit()
 
     def capture(self, message_id, text, *, trusted_source, owner_verified, room_verified):
@@ -39,6 +42,11 @@ class Intake:
                 if row[1] != 'conflict' and secrets.compare_digest(row[0], digest):
                     result = 'duplicate'
                 else:
+                    # Record a mismatching observation atomically, even after
+                    # dispatch. Do not store the conflicting message itself.
+                    if not secrets.compare_digest(row[0], digest):
+                        self.db.execute('''INSERT INTO intake_conflicts(message_id,observations) VALUES(?,1)
+                            ON CONFLICT(message_id) DO UPDATE SET observations=observations+1''', (message_id,))
                     # A conflict observed before dispatch freezes the item and
                     # invalidates any lease. In-flight dispatch cannot be undone.
                     self.db.execute("UPDATE intake SET state='conflict',lease_token=NULL,lease_until=NULL WHERE message_id=? AND state IN ('pending','claimed')", (message_id,))
@@ -98,3 +106,15 @@ class Intake:
         except Exception:
             self.db.rollback()
             raise
+
+    def inspect(self, message_id):
+        """Local status only; caller must enforce any access control."""
+        if type(message_id) is not int or not 0 < message_id <= 2**63 - 1:
+            return None
+        row = self.db.execute("""SELECT i.state, i.session_id IS NOT NULL,
+               COALESCE(c.observations, 0) FROM intake i
+               LEFT JOIN intake_conflicts c ON c.message_id=i.message_id
+               WHERE i.message_id=?""", (message_id,)).fetchone()
+        if row is None:
+            return None
+        return {'state': row[0], 'session_known': bool(row[1]), 'conflict_observations': row[2]}

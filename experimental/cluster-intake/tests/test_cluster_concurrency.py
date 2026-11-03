@@ -61,5 +61,6 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertEqual(results.count('captured'), 1)
         self.assertEqual(results.count('conflict'), 11)
         self.assertEqual(self.db.execute('SELECT count(*) FROM intake').fetchone()[0], 1)
+        self.assertEqual(self.intake.inspect(1)['conflict_observations'], 11)
 
 if __name__ == '__main__': unittest.main()
