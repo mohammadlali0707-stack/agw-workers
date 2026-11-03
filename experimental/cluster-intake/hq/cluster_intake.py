@@ -34,9 +34,15 @@ class Intake:
             return 'invalid'
         try:
             self.db.execute('BEGIN IMMEDIATE')
-            row = self.db.execute('SELECT digest FROM intake WHERE message_id=?', (message_id,)).fetchone()
+            row = self.db.execute('SELECT digest,state FROM intake WHERE message_id=?', (message_id,)).fetchone()
             if row:
-                result = 'duplicate' if secrets.compare_digest(row[0], digest) else 'conflict'
+                if row[1] != 'conflict' and secrets.compare_digest(row[0], digest):
+                    result = 'duplicate'
+                else:
+                    # A conflict observed before dispatch freezes the item and
+                    # invalidates any lease. In-flight dispatch cannot be undone.
+                    self.db.execute("UPDATE intake SET state='conflict',lease_token=NULL,lease_until=NULL WHERE message_id=? AND state IN ('pending','claimed')", (message_id,))
+                    result = 'conflict'
             elif not _TAG.search(text):
                 result = 'not_addressed'
             else:
