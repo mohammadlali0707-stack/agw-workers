@@ -1,5 +1,6 @@
 """Deterministic historical backtesting engine with exact accounting and no-lookahead execution."""
 
+import math
 from datetime import date
 from typing import List, Optional
 
@@ -39,12 +40,12 @@ class BacktestEngine:
         slow_window: int = 50,
         held_out_ratio: float = 0.3,
     ) -> None:
-        if initial_cash <= 0:
-            raise ValueError(f"initial_cash must be > 0, got {initial_cash}")
-        if fee_rate < 0:
-            raise ValueError(f"fee_rate cannot be negative, got {fee_rate}")
-        if slippage_rate < 0:
-            raise ValueError(f"slippage_rate cannot be negative, got {slippage_rate}")
+        if not math.isfinite(initial_cash) or initial_cash <= 0:
+            raise ValueError(f"initial_cash must be finite and > 0, got {initial_cash}")
+        if not math.isfinite(fee_rate) or not 0 <= fee_rate < 1:
+            raise ValueError(f"fee_rate must be finite and in [0,1), got {fee_rate}")
+        if not math.isfinite(slippage_rate) or not 0 <= slippage_rate < 1:
+            raise ValueError(f"slippage_rate must be finite and in [0,1), got {slippage_rate}")
         if not (0.0 <= held_out_ratio < 1.0):
             raise ValueError(f"held_out_ratio must be in [0.0, 1.0), got {held_out_ratio}")
 

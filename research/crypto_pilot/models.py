@@ -1,5 +1,6 @@
 """Data models and value objects for the crypto research pilot backtester."""
 
+import math
 from dataclasses import dataclass, field
 from datetime import date
 from enum import Enum
@@ -34,6 +35,10 @@ class Candle:
     def __post_init__(self) -> None:
         if not isinstance(self.time, date):
             raise ValidationError(f"Candle time must be a datetime.date instance, got {type(self.time)}")
+        for name in ('open', 'high', 'low', 'close', 'volume'):
+            value = getattr(self, name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValidationError(f'Date {self.time}: {name} must be finite')
         if self.open <= 0:
             raise ValidationError(f"Date {self.time}: open price must be > 0, got {self.open}")
         if self.high <= 0:
