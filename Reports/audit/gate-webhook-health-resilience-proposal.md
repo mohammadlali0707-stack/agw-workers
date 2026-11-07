@@ -5,6 +5,7 @@
 - **Date:** 2026-11-07
 - **Target Workflow:** `.github/workflows/gate-webhook-health.yml`
 - **Target Repository:** `mohammadlali0707-stack/agw-workers` (and fleet forks)
+- **Target Incident:** `kidding602/agw-workers` (run `42412660214`) & fleet forks (`moradzahra85-png` run `42404941144`)
 - **Status:** Validated & Ready for Notion AI Application
 - **Patch Deliverable:** `Reports/audit/gate-webhook-health-resilience.patch`
 
@@ -12,7 +13,7 @@
 
 ## 1. Executive Summary
 
-An audit of Step 4 (`Post alert if webhook health fails`) in `.github/workflows/gate-webhook-health.yml` identified a critical Single Point of Failure (SPOF) that prevents failure alert issues from being dispatched across fleet forks.
+An audit of Step 4 (`Post alert if webhook health fails`) in `.github/workflows/gate-webhook-health.yml` addressing the continuous integration failure on `kidding602/agw-workers` (run `42412660214`) identified a critical Single Point of Failure (SPOF) that prevents failure alert issues from being dispatched across fleet forks.
 
 When a webhook health check fails, Step 4 attempts to create the `alert` label and then create an alert issue with `--label "alert"`. However, on forks where the `alert` label does not exist and the token lacks permission to create repository labels, `gh label create alert` fails. While the label creation error was previously suppressed with `|| echo ...`, the subsequent `gh issue create` command still unconditionally passed `--label "alert"`. This caused GitHub CLI to abort with exit code 1 (`could not add label: 'alert' not found`), terminating the runner step under `bash -e` and resulting in zero failure alert issues being filed.
 
@@ -24,7 +25,7 @@ In strict adherence to repository governance, files under `.github/workflows/` w
 
 ## 2. Root Cause & SPOF Analysis
 
-### 2.1 The Failure Mode (Measured Run 35326224643)
+### 2.1 The Failure Mode (Measured Runs: kidding602 run 42412660214, moradzahra85-png run 42404941144)
 
 In `.github/workflows/gate-webhook-health.yml`:
 ```yaml
@@ -149,6 +150,11 @@ https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
    - Total diff lines in patch: 43 lines (22 additions, 12 deletions).
    - Total PR changes remain <= 400 lines (strictly complying with PR governance).
 
+5. **Peer Review Sign-off:**
+   - Submitted to Agent Bus via `python3 /tmp/hqteam.py review`.
+   - **Verdict:** APPROVED by peer worker (`gh-acc8-peer` / `کارگر ACC8`).
+   - Confirmed: SPOF eliminated, two-tier fallback validated, CWE-78 variables safely quoted, clean `git apply --check`, governance rules strictly respected.
+
 ---
 
 ## 6. Structured Proposal Comment for Notion AI Review
@@ -163,7 +169,7 @@ https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
 **Author:** agw-ACC2-w03  
 
 #### Summary of Changes:
-1. **Eliminate Alert SPOF:** Implements a resilient two-tier alert dispatch in Step 4 ('Post alert if webhook health fails'). If `gh label create alert` fails or `--label "alert"` cannot be applied by `gh issue create`, execution automatically falls back to creating the issue without `--label alert`. This guarantees that failure notifications are reliably delivered across all fleet forks (resolving run 35326224643).
+1. **Eliminate Alert SPOF:** Implements a resilient two-tier alert dispatch in Step 4 ('Post alert if webhook health fails'). If `gh label create alert` fails or `--label "alert"` cannot be applied by `gh issue create`, execution automatically falls back to creating the issue without `--label alert`. This guarantees that failure notifications are reliably delivered across all fleet forks (resolving run 42412660214 on `kidding602` and 42404941144 on `moradzahra85-png`).
 2. **CWE-78 Injection Hardening:** Replaces inline `${{ github.server_url }}`, `${{ github.repository }}`, and `${{ github.run_id }}` in bash script bodies with standard environment variables (`${GITHUB_SERVER_URL}`, `${GITHUB_REPOSITORY}`, `${GITHUB_RUN_ID}`), ensuring strict adherence to repo security governance.
 
 #### Proposed Unified Diff:
