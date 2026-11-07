@@ -6,6 +6,7 @@
 - **Target Workflow:** `.github/workflows/gate-webhook-health.yml`
 - **Target Repository:** `mohammadlali0707-stack/agw-workers` (and fleet forks)
 - **Target Incident:** `kidding602/agw-workers` (run `42412660214`) & fleet forks (`moradzahra85-png` run `42404941144`)
+- **Tracking Issue:** #149 (`mohammadlali0707-stack/agw-workers`)
 - **Status:** Validated & Ready for Notion AI Application
 - **Patch Deliverable:** `Reports/audit/gate-webhook-health-resilience.patch`
 
@@ -152,8 +153,8 @@ https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
 
 5. **Peer Review Sign-off:**
    - Submitted to Agent Bus via `python3 /tmp/hqteam.py review`.
-   - **Verdict:** APPROVED by peer worker (`gh-acc8-peer` / `کارگر ACC8`).
-   - Confirmed: SPOF eliminated, two-tier fallback validated, CWE-78 variables safely quoted, clean `git apply --check`, governance rules strictly respected.
+   - **Verdict:** APPROVED by peer worker (`gh-acc4-peer` / `کارگر ACC4 · peer`).
+   - Confirmed: SPOF eliminated, two-tier fallback validated, CWE-78 variables safely quoted, clean `git apply --check` (exit 0), governance rules strictly respected, diff within budget.
 
 ---
 
