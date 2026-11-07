@@ -1,0 +1,42 @@
+diff --git a/.github/workflows/gate-webhook-health.yml b/.github/workflows/gate-webhook-health.yml
+index ac7410f..8add82b 100644
+--- a/.github/workflows/gate-webhook-health.yml
++++ b/.github/workflows/gate-webhook-health.yml
+@@ -155,14 +155,13 @@ jobs:
+             --color B60205 \
+             --description "Automated gate failure needing a human" 2>/dev/null \
+             || echo "label 'alert' already exists (or cannot be created); continuing"
+-          gh issue create \
+-            --repo "$GITHUB_REPOSITORY" \
+-            --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
+-            --body "## Webhook Health Check Failed
++
++          ISSUE_TITLE="🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')"
++          ISSUE_BODY="## Webhook Health Check Failed
+ 
+           The automated webhook health gate detected a problem.
+ 
+-          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++          **Run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+ 
+           **Common causes:**
+           - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
+@@ -171,5 +170,16 @@ jobs:
+           - Webhook was accidentally deleted or deactivated
+ 
+           **Fix:** Review and update the webhook at:
+-          https://github.com/${{ github.repository }}/settings/hooks" \
+-            --label "alert"
++          https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
++
++          if ! gh issue create \
++            --repo "$GITHUB_REPOSITORY" \
++            --title "$ISSUE_TITLE" \
++            --body "$ISSUE_BODY" \
++            --label "alert"; then
++            echo "::warning::Failed to create issue with '--label alert'; falling back to unlabelled issue creation"
++            gh issue create \
++              --repo "$GITHUB_REPOSITORY" \
++              --title "$ISSUE_TITLE" \
++              --body "$ISSUE_BODY"
++          fi
