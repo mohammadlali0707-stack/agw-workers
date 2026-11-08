@@ -1,8 +1,14 @@
-diff --git a/.github/workflows/gate-webhook-health.yml b/.github/workflows/gate-webhook-health.yml
-index ac7410f..8add82b 100644
 --- a/.github/workflows/gate-webhook-health.yml
 +++ b/.github/workflows/gate-webhook-health.yml
-@@ -155,14 +155,13 @@ jobs:
+@@ -143,6 +143,7 @@
+ 
+       - name: Post alert if webhook health fails
+         if: failure()
++        continue-on-error: true
+         run: |
+           # The alert itself was broken: `--label alert` on a repo with no such
+           # label makes `gh issue create` exit 1, so a real webhook failure
+@@ -155,14 +156,13 @@
              --color B60205 \
              --description "Automated gate failure needing a human" 2>/dev/null \
              || echo "label 'alert' already exists (or cannot be created); continuing"
@@ -21,7 +27,7 @@ index ac7410f..8add82b 100644
  
            **Common causes:**
            - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
-@@ -171,5 +170,16 @@ jobs:
+@@ -171,5 +171,16 @@
            - Webhook was accidentally deleted or deactivated
  
            **Fix:** Review and update the webhook at:

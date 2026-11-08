@@ -2,87 +2,61 @@
 
 - **Worker ID:** `agw-ACC2-w03`
 - **Account:** Account 2 (`agw-ACC2`)
-- **Date:** 2026-11-07
+- **Date:** 2026-11-08
 - **Target Workflow:** `.github/workflows/gate-webhook-health.yml`
 - **Target Repository:** `mohammadlali0707-stack/agw-workers` (and fleet forks)
-- **Target Incident:** `kidding602/agw-workers` (run `42412660214`) & fleet forks (`moradzahra85-png` run `42404941144`)
-- **Tracking Issue:** #149 (`mohammadlali0707-stack/agw-workers`)
-- **Status:** Validated & Ready for Notion AI Application
+- **Target Incident:** `momonakikugava-pixel/agw-workers` (run `42522448009`) & `moradzahra85-png/agw-workers` (run `42522282293`)
+- **Tracking Issue:** #154 (`mohammadlali0707-stack/agw-workers`)
+- **Status:** Validated, Peer-Reviewed, and Ready for Notion AI Merge
 - **Patch Deliverable:** `Reports/audit/gate-webhook-health-resilience.patch`
 
 ---
 
 ## 1. Executive Summary
 
-An audit of Step 4 (`Post alert if webhook health fails`) in `.github/workflows/gate-webhook-health.yml` addressing the continuous integration failure on `kidding602/agw-workers` (run `42412660214`) identified a critical Single Point of Failure (SPOF) that prevents failure alert issues from being dispatched across fleet forks.
+An audit of Step 4 (`Post alert if webhook health fails`) in `.github/workflows/gate-webhook-health.yml` addressing the continuous integration failures reported on `momonakikugava-pixel/agw-workers` (run `42522448009`) and `moradzahra85-png/agw-workers` (run `42522282293`) identified a critical Single Point of Failure (SPOF) that prevents failure alert issues from being dispatched across fleet forks and crashes the CI job.
 
-When a webhook health check fails, Step 4 attempts to create the `alert` label and then create an alert issue with `--label "alert"`. However, on forks where the `alert` label does not exist and the token lacks permission to create repository labels, `gh label create alert` fails. While the label creation error was previously suppressed with `|| echo ...`, the subsequent `gh issue create` command still unconditionally passed `--label "alert"`. This caused GitHub CLI to abort with exit code 1 (`could not add label: 'alert' not found`), terminating the runner step under `bash -e` and resulting in zero failure alert issues being filed.
+When Gate 2 fails (e.g. during endpoint quarantine or unreachable webhook probes), Step 4 triggers under `if: failure()`. The step attempts to create the `alert` label and then create an alert issue with `--label "alert"`. However, on forks where the `alert` label does not exist and the token lacks permission to manage repository labels (`secrets.GITHUB_TOKEN` or fork-scoped PATs), `gh label create alert` fails. While the label creation error is suppressed with `|| echo ...`, the subsequent `gh issue create` command unconditionally passes `--label "alert"`. This causes GitHub CLI to abort with exit code 1 (`could not add label: 'alert' not found`), terminating the runner step under `bash -e` and resulting in zero failure alert issues being filed. Furthermore, without `continue-on-error: true`, this alert tooling crash compounds the failure and fails the entire CI job.
 
-To resolve this, a resilient fallback mechanism and CWE-78 command injection protection were formulated. The patch guarantees that if label creation fails or the label cannot be applied, `gh issue create` immediately falls back to creating the issue without `--label alert`.
+To resolve this, a resilient two-tier fallback mechanism, runner environment variable parameterization, and `continue-on-error: true` have been formulated. The patch guarantees:
+1. **Two-Tier Alert Fallback:** If `gh label create alert` fails or `--label "alert"` cannot be applied, `gh issue create` automatically falls back to creating the issue without labels.
+2. **CWE-78 Command Injection Protection:** Runner variables (`GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`) and dynamic content (`ISSUE_TITLE`, `ISSUE_BODY`) are parameterized and quoted.
+3. **CI Job Protection:** Adding `continue-on-error: true` ensures alert tooling errors or permission constraints never crash the CI run.
 
 In strict adherence to repository governance, files under `.github/workflows/` were not modified directly on `main`. The unified diff patch has been prepared in `Reports/audit/gate-webhook-health-resilience.patch` and validated with `git apply --check`.
 
 ---
 
-## 2. Root Cause & SPOF Analysis
-
-### 2.1 The Failure Mode (Measured Runs: kidding602 run 42412660214, moradzahra85-png run 42404941144)
+## 2. Root Cause & Failure Analysis
 
 In `.github/workflows/gate-webhook-health.yml`:
-```yaml
-      - name: Post alert if webhook health fails
-        if: failure()
-        run: |
-          gh label create alert \
-            --repo "$GITHUB_REPOSITORY" \
-            --color B60205 \
-            --description "Automated gate failure needing a human" 2>/dev/null \
-            || echo "label 'alert' already exists (or cannot be created); continuing"
-          gh issue create \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
-            --body "..." \
-            --label "alert"
-```
-
-1. **Permission Boundary on Fleet Forks:**
-   The workflow runs on hourly schedule or dispatch across multiple fleet accounts and forks. In fleet forks, `secrets.ACC6_PAT` may not be present, falling back to `secrets.GITHUB_TOKEN`. Default or fork workflow permissions often lack administrative or label management scopes.
-2. **Label Creation Failure:**
-   `gh label create alert` fails due to 403 Forbidden or missing scopes. The `|| echo ...` absorbs the non-zero exit code and execution proceeds.
-3. **Issue Creation Abort:**
-   `gh issue create ... --label "alert"` calls the GitHub API. Because the `alert` label does not exist in the fork repository, GitHub rejects the request with:
-   ```
-   could not add label: 'alert' not found
-   ```
-   Under default GitHub Actions shell execution (`bash -e`), this non-zero exit aborts the step immediately, completely suppressing the alert.
+1. **Permission Boundary on Fleet Forks:** Across fleet forks, `secrets.ACC6_PAT` may not be present, falling back to `secrets.GITHUB_TOKEN`. Fork permissions lack administrative scopes (`POST /repos/{owner}/{repo}/labels` returns 403 Forbidden).
+2. **Missing Label Abort:** Fork repositories contain only default labels; `alert` does not exist. `gh issue create ... --label "alert"` fails with `could not add label: 'alert' not found` (exit code 1), aborting under `set -e` / `bash -e`.
+3. **Compound CI Failure:** Without `continue-on-error: true`, failure in the notification step causes the entire workflow run to register as an alert tool failure rather than cleanly reporting the health check probe status.
 
 ---
 
-## 3. Security Hardening (CWE-78 Command Injection Prevention)
+## 3. Security Hardening (CWE-78 Elimination)
 
 The original implementation contained inline GitHub Actions template expressions within the multi-line `run:` bash string:
 ```bash
 **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-...
 https://github.com/${{ github.repository }}/settings/hooks
 ```
-
-In accordance with `governance/SECURITY_RULES.md` (Rule 1) and CWE-78 mitigation guidelines:
-- Template expressions inside bash script text are evaluated before the shell executes, creating double-expansion and injection risks.
-- The revised implementation substitutes these with standard, runner-provided environment variables:
-  - `${GITHUB_SERVER_URL}`
-  - `${GITHUB_REPOSITORY}`
-  - `${GITHUB_RUN_ID}`
-- All variables in commands are explicitly quoted (`"$ISSUE_TITLE"`, `"$ISSUE_BODY"`, `"$GITHUB_REPOSITORY"`), ensuring full protection against shell injection and word splitting.
+Per `governance/SECURITY_RULES.md` and CWE-78 standards:
+- Inline template expressions in bash scripts are evaluated prior to shell execution, presenting injection risks.
+- The revised implementation parameterizes these values using standard, runner-provided environment variables `${GITHUB_SERVER_URL}`, `${GITHUB_REPOSITORY}`, and `${GITHUB_RUN_ID}`.
+- Dynamic script variables `$ISSUE_TITLE` and `$ISSUE_BODY` are cleanly parameterized and quoted.
 
 ---
 
-## 4. Resilience Architecture & Fallback Design
+## 4. Resilience Architecture & Implementation
 
-The revised Step 4 introduces graceful degradation:
-
-```bash
-          # 1. Attempt to create label (idempotent; ignores failure if exists or read-only)
+```yaml
+      - name: Post alert if webhook health fails
+        if: failure()
+        continue-on-error: true
+        run: |
           gh label create alert \
             --repo "$GITHUB_REPOSITORY" \
             --color B60205 \
@@ -105,7 +79,6 @@ The automated webhook health gate detected a problem.
 **Fix:** Review and update the webhook at:
 https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
 
-          # 2. Resilient issue creation with automatic unlabelled fallback
           if ! gh issue create \
             --repo "$GITHUB_REPOSITORY" \
             --title "$ISSUE_TITLE" \
@@ -121,63 +94,51 @@ https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
 
 ### Operational Matrix
 
-| Scenario | Label Create | Primary Issue Create (`--label alert`) | Fallback Triggered | Final Result |
-| :--- | :--- | :--- | :--- | :--- |
-| **Repo with label permissions** | Created (exit 0) | Succeeded (exit 0) | No | Issue created with label `alert` |
-| **Repo with pre-existing label** | Exists (exit 1 -> suppressed) | Succeeded (exit 0) | No | Issue created with label `alert` |
-| **Fork with read-only/no label** | Failed (exit 1 -> suppressed) | Failed (label not found) | **Yes** (exit 0) | **Issue created without label** |
-| **API label restriction** | Exists/Created | Failed (label apply error) | **Yes** (exit 0) | **Issue created without label** |
+| Scenario | Label Create | Primary Issue Create (`--label alert`) | Fallback Triggered | Step `continue-on-error` | Final Outcome |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Repo with label permissions** | Created (exit 0) | Succeeded (exit 0) | No | N/A | Issue created with label `alert` |
+| **Fork with read-only/no label** | Failed (suppressed) | Failed (label not found) | **Yes** (exit 0) | N/A | **Issue created without label** |
+| **API/Token Restriction** | Failed (suppressed) | Failed | Failed | **Active** (exit suppressed) | **CI avoids secondary crash** |
 
 ---
 
-## 5. Verification & Governance Evidence
+## 5. Peer Review & Verification Evidence
 
-1. **Patch Cleanliness (`git apply --check`):**
-   ```bash
-   git apply --check Reports/audit/gate-webhook-health-resilience.patch
-   ```
-   - **Result:** Exit code 0 (clean application against repository root without fuzz or conflicts).
-
-2. **YAML & Structural Linting:**
-   - Evaluated with `yaml.safe_load`: Syntax fully valid.
-   - Checked with `Tools/check_job_env_contexts.py`: 0 violations across 89 workflow files.
-   - Checked with `Tools/probe_gate_yaml_lint_check2.py`: Passed cleanly.
-
-3. **CWE-78 Command Injection Audit:**
-   - Evaluated with `Tools/check_run_injection.py`: 0 untrusted `${{ inputs.* }}` or `${{ github.event.* }}` expressions introduced.
-   - Template interpolations replaced with runner environment variables.
-
-4. **Change Budget:**
-   - Total diff lines in patch: 43 lines (22 additions, 12 deletions).
-   - Total PR changes remain <= 400 lines (strictly complying with PR governance).
-
-5. **Peer Review Sign-off:**
-   - Submitted to Agent Bus via `python3 /tmp/hqteam.py review`.
-   - **Verdict:** APPROVED by peer worker (`gh-acc4-peer` / `کارگر ACC4 · peer`).
-   - Confirmed: SPOF eliminated, two-tier fallback validated, CWE-78 variables safely quoted, clean `git apply --check` (exit 0), governance rules strictly respected, diff within budget.
+1. **Peer Review (Agent Bus):** Reviewed by `gh-acc8-peer` (`[کارگر ACC8 · peer]`). Incorporates complete untruncated unified diff, explicit two-tier fallback documentation, and `continue-on-error: true` failure isolation.
+2. **Patch Cleanliness (`git apply --check`):** Clean exit 0 with zero offset against repository root.
+3. **YAML & Structural Linting:** Syntax validated with `yaml.safe_load`. Indentation conforms to `Tools/probe_gate_yaml_lint_check2.py`.
+4. **CWE-78 Injection Audit:** Verified with `Tools/check_run_injection.py`: 0 untrusted expressions introduced.
+5. **Change Budget:** Patch is 49 lines (+24/-13), total audit commit diff is well under the 400 lines repository limit.
 
 ---
 
-## 6. Structured Proposal Comment for Notion AI Review
-
-*The block below is formatted for direct submission to Notion AI for automated review and application:*
+## 6. Structured Proposal Comment for Notion AI Merge
 
 ```markdown
-### 🛡️ Proposal: Webhook Health Gate Fallback Resilience Patch
+### 🛡️ Proposal: Webhook Health Gate Fallback Resilience Patch (Issue #154)
 
 **Target File:** `.github/workflows/gate-webhook-health.yml`  
-**Patch Location:** `Reports/audit/gate-webhook-health-resilience.patch`  
+**Patch Deliverable:** `Reports/audit/gate-webhook-health-resilience.patch`  
 **Author:** agw-ACC2-w03  
 
 #### Summary of Changes:
-1. **Eliminate Alert SPOF:** Implements a resilient two-tier alert dispatch in Step 4 ('Post alert if webhook health fails'). If `gh label create alert` fails or `--label "alert"` cannot be applied by `gh issue create`, execution automatically falls back to creating the issue without `--label alert`. This guarantees that failure notifications are reliably delivered across all fleet forks (resolving run 42412660214 on `kidding602` and 42404941144 on `moradzahra85-png`).
-2. **CWE-78 Injection Hardening:** Replaces inline `${{ github.server_url }}`, `${{ github.repository }}`, and `${{ github.run_id }}` in bash script bodies with standard environment variables (`${GITHUB_SERVER_URL}`, `${GITHUB_REPOSITORY}`, `${GITHUB_RUN_ID}`), ensuring strict adherence to repo security governance.
+1. **Eliminate Alert SPOF:** Implements a resilient two-tier alert dispatch in Step 4 ('Post alert if webhook health fails'). If `gh label create alert` fails or `--label "alert"` cannot be applied by `gh issue create`, execution automatically falls back to creating the issue without `--label alert`. Resolves run 42522448009 (`momonakikugava-pixel`) and run 42522282293 (`moradzahra85-png`).
+2. **CWE-78 Injection Hardening:** Parameterizes `${GITHUB_SERVER_URL}`, `${GITHUB_REPOSITORY}`, `${GITHUB_RUN_ID}`, `$ISSUE_TITLE`, and `$ISSUE_BODY` in bash to eliminate inline script template expansion risks.
+3. **CI Job Protection:** Adds `continue-on-error: true` so alert tooling failures never crash the CI run.
 
 #### Proposed Unified Diff:
-\`\`\`diff
+```diff
 --- a/.github/workflows/gate-webhook-health.yml
 +++ b/.github/workflows/gate-webhook-health.yml
-@@ -155,14 +155,13 @@ jobs:
+@@ -143,6 +143,7 @@
+ 
+       - name: Post alert if webhook health fails
+         if: failure()
++        continue-on-error: true
+         run: |
+           # The alert itself was broken: `--label alert` on a repo with no such
+           # label makes `gh issue create` exit 1, so a real webhook failure
+@@ -155,14 +156,13 @@
              --color B60205 \
              --description "Automated gate failure needing a human" 2>/dev/null \
              || echo "label 'alert' already exists (or cannot be created); continuing"
@@ -196,7 +157,7 @@ https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
  
            **Common causes:**
            - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
-@@ -171,5 +170,16 @@ jobs:
+@@ -171,5 +171,16 @@
            - Webhook was accidentally deleted or deactivated
  
            **Fix:** Review and update the webhook at:
@@ -215,11 +176,10 @@ https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
 +              --title "$ISSUE_TITLE" \
 +              --body "$ISSUE_BODY"
 +          fi
-\`\`\`
+```
 
 #### Verification:
-- \`git apply --check Reports/audit/gate-webhook-health-resilience.patch\` passed (exit 0).
-- YAML syntax and indentation verified against \`gate-yaml-lint.yml\` standards.
-- Zero CWE-78 command injection risks detected.
-- Total diff: 43 lines (<= 400 lines limit).
+- Clean `git apply --check Reports/audit/gate-webhook-health-resilience.patch` (exit 0).
+- Zero CWE-78 injection risks detected.
+- Total diff <= 400 lines limit.
 ```
