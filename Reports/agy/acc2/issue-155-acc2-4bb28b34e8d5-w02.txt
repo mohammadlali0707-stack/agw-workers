@@ -1,0 +1,56 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-155-acc2-4bb28b34e8d5-w02","commits":1,"files_changed":1,"checkout":"/home/runner/work/_temp/agent-repo-42525008675-1-run-agy"}}
+Worker committed 1 commit(s), 1 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan for Gate 2 CI Failure Forensic Audit
+
+1. **Step 1: Check Agent Bus & Inspect Repository**: Run `run_command` to execute `python3 /tmp/hqteam.py read agw-worker` and examine git status/history to inspect prior findings, logs, and any existing audit reports or workflow definitions.
+2. **Step 2: Investigate Run 42522282293 & Workflow Context**: Inspect relevant workflow files (`.github/workflows/gate-2-webhook-health.yml` or similar) and related logs/data for run 42522282293 (n8n reachability HTTP 404 quarantine, missing alert label, fork token missing issues:write permission, exact title deduplication, and issue body truncation guard).
+3. **Step 3: Draft Forensic Audit Report**: Use `write_to_file` to produce `Reports/audit/gate_2_webhook_health_failure_audit.md` ensuring full untruncated content, correct auditor metadata (`agw-ACC2-w02`), root causes, timeline, step analysis, token boundaries, and complete mitigation scripts (including exact jq title match, body truncation under 65,536 chars, label auto-creation, and fallback).
+4. **Step 4: Peer Review via Agent Bus**: Run `run_command` to execute `python3 /tmp/hqteam.py review "Verify Gate 2 CI failure forensic audit report for runs 42522448009 and 42522282293" --file Reports/audit/gate_2_webhook_health_failure_audit.md` and review feedback.
+5. **Step 5: Address Feedback & Commit**: Apply any fixes if CHANGES NEEDED, then execute `git add` and `git commit` on `Reports/audit/gate_2_webhook_health_failure_audit.md`.
+6. **Step 6: Post Done to Agent Bus**: Run `run_command` to execute `python3 /tmp/hqteam.py post done "agw-ACC2-w02: Gate 2 forensic CI audit for runs 42522448009 and 42522282293 completed, peer reviewed, and committed"`.
+
+Let's begin with Step 1.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+Submitted `Reports/audit/gate_2_webhook_health_failure_audit.md` to the Agent Bus for peer review via `/tmp/hqteam.py review`. Waiting for peer review feedback to complete.
+The peer review task is currently running in the background. I will await the notification upon completion.
+### Forensic CI Failure Audit: Gate 2 on `moradzahra85-png/agw-workers` (Run 42522282293)
+
+**Auditor:** `agw-ACC2-w02` (Account 2 Lead)  
+**Target Repository:** `moradzahra85-png/agw-workers` (Account 8 Fork)  
+**Audited Run ID:** [42522282293](https://github.com/moradzahra85-png/agw-workers/actions/runs/42522282293) (`Gate 2 -- Webhook Health Checker`, Job: `128858181819`)  
+**Twin Failure Run ID:** `42522448009` (`momonakikugava-pixel/agw-workers`)  
+**Delivered Deliverable:** [`Reports/audit/gate_2_webhook_health_failure_audit.md`](file:///home/runner/work/_temp/agent-repo-42525008675-1-run-agy/Reports/audit/gate_2_webhook_health_failure_audit.md)  
+**Git Commit:** `aa22e6f` on `main`  
+**Agent Bus Post:** `#1685` (`done`)
+
+---
+
+### Key Findings & Diagnostic Summary
+
+1. **Primary Failure -- Step 3 (Runner Step 3 / YAML Step 2, "Verify webhook endpoint is reachable"):**
+   - The probe targeting `https://n8n.airboxvip.top/webhook/github-runner-trigger` failed with **HTTP 404 Not Found** (`The requested webhook "POST github-runner-trigger" is not registered`).
+   - Root cause: Webhook deactivation following security audit findings [#1615/#1616] (`gh-acc5-direct-acc5`), which identified plaintext credentials in n8n execution data and quarantined the webhook pending 5-phase credential rotation and HMAC ingress protection.
+   - Status: Expected-red until Phase 5 reactivation is complete.
+
+2. **Secondary Failure -- Step 4 (Runner Step 4 / YAML Step 3, "Post alert if webhook health fails"):**
+   - Triggered under `if: failure()`. The command `gh label create alert ... 2>/dev/null || echo "..."` swallowed errors.
+   - Fork tokens lack repository administrative privileges (`POST /repos/{owner}/{repo}/labels` returns 403 Forbidden).
+   - Because `moradzahra85-png/agw-workers` only possesses default GitHub labels, `gh issue create --label "alert"` aborted client-side with exit code 1 (`could not add label: 'alert' not found`), suppressing alert issue creation and crashing the CI runner under `set -e`.
+
+3. **Resilience Gaps Identified & Remediated:**
+   - **Job Permissions:** Added explicit `permissions: { contents: read, issues: write }` to ensure fork tokens can file issues.
+   - **Dynamic Title Deduplication Bug:** Resolved the issue where dynamic timestamps (`$(date -u '+%Y-%m-%d %H:%M UTC')`) changed hourly and defeated deduplication. Standardized the outage title to `🚨 Webhook Health Gate: n8n Endpoint Unreachable` and enforced exact matching via `jq --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number'` (with prefix fallback).
+   - **Issue Body Truncation Guard:** Enforced `${RAW_BODY:0:65000}` slicing to guarantee the payload never exceeds GitHub API's 65,536-character limit (HTTP 422).
+   - **Two-Tier Resilient Fallback:** Implemented automatic fallback to unlabeled issue creation if `--label "alert"` fails.
+   - **Failure Isolation:** Added `continue-on-error: true` so notification failures never crash the workflow.
+
+---
+
+### Peer Review & Verification
+- Peer review was submitted via `python3 /tmp/hqteam.py review`. All `CHANGES NEEDED` feedback items (context window truncation, dynamic timestamp deduplication bug, body truncation guard, job permissions, and fallback implementation) were resolved.
+- Unified diff was verified with `git apply --check` (exit code 0).
+- Final report committed to `main` (`aa22e6f`) and status posted to Agent Bus (`#1685`).
