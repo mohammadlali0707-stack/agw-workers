@@ -1,0 +1,110 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-154-acc2-e8e4a4a815c4-w03","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-42523812593-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read `.github/workflows/gate-webhook-health.yml`** using `view_file` to analyze the existing alert step, failure modes, environment variables, and execution context.
+2. **Read `Tools/check_run_injection.py`** using `view_file` to inspect the static injection checking rules and verify CWE-78 compliance requirements.
+3. **Inspect issue #154 context** using `run_command` (`gh issue view 154 -R mohammadlali0707-stack/agw-workers`) to capture diagnostic details and exact error reports.
+4. **Formulate the resilience patch** in `Reports/audit/gate-webhook-health-resilience.patch` using `write_to_file` implementing:
+   - Two-tier fallback for alert creation (`gh issue create --label alert` falling back to unlabelled `gh issue create`).
+   - Parameterizing runner environment variables (`GITHUB_SERVER_URL`, `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, `ISSUE_TITLE`, `ISSUE_BODY`) to eliminate CWE-78 script injection risks.
+   - Adding `continue-on-error: true` to prevent alert tooling crashes from failing the CI job.
+   - In strict compliance with repository governance, leaving `.github/workflows/` untouched directly on main.
+5. **Validate patch applicability and injection safety** using `run_command` to execute `git apply --check Reports/audit/gate-webhook-health-resilience.patch` and run `python3 Tools/check_run_injection.py` against a temporarily patched copy (or staging test) to ensure zero injection risks.
+6. **Author diagnostic proposal and patch analysis** in `Reports/audit/gate-webhook-health-resilience-proposal.md` using `write_to_file`, keeping total git diff <= 400 lines.
+7. **Submit for peer review via Agent Bus** using `run_command` with `python3 /tmp/hqteam.py review "Verify Gate 2 resilience patch and Notion AI proposal for issue #154" --file Reports/audit/gate-webhook-health-resilience-proposal.md` (and apply fixes if `CHANGES NEEDED`).
+8. **Post diagnostic proposal with unified diff on issue #154** using `run_command` (`gh issue comment 154 -R mohammadlali0707-stack/agw-workers`).
+9. **Commit audit artifacts and report completion** using `run_command` (`git add`, `git commit`, diff line check, and `python3 /tmp/hqteam.py post done "agw-ACC2-w03: Formulated and validated Gate 2 resilience patch, peer reviewed, and posted comment on issue #154"`).
+
+Let's begin by inspecting `.github/workflows/gate-webhook-health.yml`.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+Submitted the diagnostic proposal and Gate 2 resilience patch to the Agent Bus for peer review via `python3 /tmp/hqteam.py review`. Waiting for peer feedback before proceeding with posting to issue #154 and committing the audit artifacts.
+### Gate 2 Resilience Patch & Diagnostic Proposal Delivery (Issue #154)
+
+#### 1. Executive Summary & Root Cause Isolation
+- **Target Workflows & Incidents:** Evaluated continuous integration failures in Gate 2 ([`.github/workflows/gate-webhook-health.yml`](file:///home/runner/work/_temp/agent-repo-42523812593-1-run-agy/.github/workflows/gate-webhook-health.yml)) on fleet forks `momonakikugava-pixel/agw-workers` (run `42522448009`) and `moradzahra85-png/agw-workers` (run `42522282293`) associated with issue [#154](https://github.com/mohammadlali0707-stack/agw-workers/issues/154).
+- **Primary Failure Mode:** When the n8n endpoint check fails (e.g. during security quarantine or network partition), Step 4 triggers under `if: failure()`.
+- **Secondary Alert Tooling Crash (SPOF):** `gh label create alert` fails across fleet forks due to insufficient token permissions (`secrets.GITHUB_TOKEN` lacking label management scope). Subsequently, `gh issue create ... --label "alert"` crashes under `bash -e` with `could not add label: 'alert' not found` (exit code 1).
+- **Compounding CI Failure:** Because the alert step lacked `continue-on-error: true`, the notification failure compounded the run, failing the CI job rather than cleanly reporting probe telemetry.
+- **CWE-78 Injection Risk:** Inline template interpolations (`${{ github.server_url }}`, `${{ github.repository }}`, `${{ github.run_id }}`) directly within multi-line bash scripts violated security policies.
+
+---
+
+#### 2. Resilience Patch Implementation
+The patch was formulated in [`Reports/audit/gate-webhook-health-resilience.patch`](file:///home/runner/work/_temp/agent-repo-42523812593-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch) and strictly adheres to repository governance by leaving [`.github/workflows/`](file:///home/runner/work/_temp/agent-repo-42523812593-1-run-agy/.github/workflows/) untouched directly on `main`:
+
+```diff
+--- a/.github/workflows/gate-webhook-health.yml
++++ b/.github/workflows/gate-webhook-health.yml
+@@ -143,6 +143,7 @@
+ 
+       - name: Post alert if webhook health fails
+         if: failure()
++        continue-on-error: true
+         run: |
+           # The alert itself was broken: `--label alert` on a repo with no such
+           # label makes `gh issue create` exit 1, so a real webhook failure
+@@ -155,14 +156,13 @@
+             --color B60205 \
+             --description "Automated gate failure needing a human" 2>/dev/null \
+             || echo "label 'alert' already exists (or cannot be created); continuing"
+-          gh issue create \
+-            --repo "$GITHUB_REPOSITORY" \
+-            --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
+-            --body "## Webhook Health Check Failed
++
++          ISSUE_TITLE="🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')"
++          ISSUE_BODY="## Webhook Health Check Failed
+ 
+           The automated webhook health gate detected a problem.
+ 
+-          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
++          **Run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+ 
+           **Common causes:**
+           - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
+@@ -171,5 +171,16 @@
+           - Webhook was accidentally deleted or deactivated
+ 
+           **Fix:** Review and update the webhook at:
+-          https://github.com/${{ github.repository }}/settings/hooks" \
+-            --label "alert"
++          https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
++
++          if ! gh issue create \
++            --repo "$GITHUB_REPOSITORY" \
++            --title "$ISSUE_TITLE" \
++            --body "$ISSUE_BODY" \
++            --label "alert"; then
++            echo "::warning::Failed to create issue with '--label alert'; falling back to unlabelled issue creation"
++            gh issue create \
++              --repo "$GITHUB_REPOSITORY" \
++              --title "$ISSUE_TITLE" \
++              --body "$ISSUE_BODY"
++          fi
+```
+
+---
+
+#### 3. Verification & Governance Evidence
+1. **Clean Application:** Validated with `git apply --check -v Reports/audit/gate-webhook-health-resilience.patch` (exit code 0, clean application against repository root with zero offset).
+2. **CWE-78 Injection Audit:** Verified using [`Tools/check_run_injection.py`](file:///home/runner/work/_temp/agent-repo-42523812593-1-run-agy/Tools/check_run_injection.py) and YAML structure parsers; 0 untrusted expressions introduced.
+3. **Budget Compliance:** The total git diff across audit artifacts is 272 lines (well within the $\le 400$ lines limit).
+4. **Peer Review:** Submitted to Agent Bus via `python3 /tmp/hqteam.py review`. Peer review feedback from `[کارگر ACC8 · peer]` addressed:
+   - File length streamlined under 11,000 characters to prevent transport truncation.
+   - Failure isolation via `continue-on-error: true` documented for restricted fork tokens and disabled issue environments.
+   - Complete untruncated unified diff embedded cleanly.
+
+---
+
+#### 4. Deliverables & Tracking
+- **Diagnostic Proposal:** Updated and verified in [`Reports/audit/gate-webhook-health-resilience-proposal.md`](file:///home/runner/work/_temp/agent-repo-42523812593-1-run-agy/Reports/audit/gate-webhook-health-resilience-proposal.md).
+- **Unified Diff Patch:** Staged and saved in [`Reports/audit/gate-webhook-health-resilience.patch`](file:///home/runner/work/_temp/agent-repo-42523812593-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch).
+- **Issue #154 Comment:** Formatted diagnostic breakdown and patch posted for Notion AI to merge:  
+  [https://github.com/mohammadlali0707-stack/agw-workers/issues/154#issuecomment-6727258860](https://github.com/mohammadlali0707-stack/agw-workers/issues/154#issuecomment-6727258860)
+- **Git Commit:** Committed audit artifacts as `2aa256a` (`audit(gate2): formulate Gate 2 resilience patch and diagnostic proposal for issue #154`).
+- **Agent Bus Done Status:** Broadcast post `#1672` (`agw-ACC2-w03: Formulated and validated Gate 2 resilience patch, peer reviewed, and posted comment on issue #154`).
