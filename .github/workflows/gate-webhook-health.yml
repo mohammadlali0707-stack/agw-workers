@@ -121,55 +121,44 @@ jobs:
           EOF
 
       - name: Verify webhook endpoint is reachable
-        # always(): this half needs no GitHub permission, so a skipped
-        # configuration check above must not silently skip it too.
         if: always()
         run: |
           echo "=== Checking n8n endpoint reachability ==="
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "$EXPECTED_URL" \
-            -H "Content-Type: application/json" \
-            -d '{"action":"health_check","test":true}' \
-            --max-time 10 2>/dev/null || echo "000")
-          
-          # n8n returns 200 (processed) or 400 (bad payload but reachable) = OK
-          # 000 = unreachable, 404 = wrong path, 503 = down
-          if [ "$STATUS" = "000" ] || [ "$STATUS" = "404" ] || [ "$STATUS" = "503" ]; then
-            echo "❌ n8n endpoint unreachable or wrong (HTTP $STATUS)"
-            exit 1
+          if STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "$EXPECTED_URL" -H "Content-Type: application/json" \
+            -d '{"action":"health_check","test":true}' --max-time 10 2>/dev/null); then
+            :
           else
-            echo "✅ n8n endpoint reachable (HTTP $STATUS)"
+            STATUS=000
           fi
+          case "$STATUS" in
+            200|400) echo "Endpoint reachable (HTTP $STATUS)" ;;
+            404) echo "::error::Endpoint missing or inactive (HTTP 404); check configuration"; exit 1 ;;
+            5??) echo "::error::Endpoint server error (HTTP $STATUS)"; exit 1 ;;
+            000) echo "::error::Endpoint unreachable or timed out"; exit 1 ;;
+            *) echo "::error::Unexpected endpoint response (HTTP $STATUS)"; exit 1 ;;
+          esac
 
       - name: Post alert if webhook health fails
         if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # The alert itself was broken: `--label alert` on a repo with no such
-          # label makes `gh issue create` exit 1, so a real webhook failure
-          # produced a failed alert step and no issue. Measured 2026-09-18 in
-          # run 35326224643: "could not add label: 'alert' not found".
-          # Created here rather than by hand because this gate is synced to all
-          # eight forks, and none of them has the label either.
-          gh label create alert \
-            --repo "$GITHUB_REPOSITORY" \
-            --color B60205 \
-            --description "Automated gate failure needing a human" 2>/dev/null \
-            || echo "label 'alert' already exists (or cannot be created); continuing"
-          gh issue create \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
-            --body "## Webhook Health Check Failed
+          set -e
+          # Reuse both legacy timestamped and newer stable alert titles.
+          if ! ISSUES=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 1000 \
+            --json number,title --jq '[.[] | select(.title | startswith("🚨 Webhook Health Gate Failed"))] | sort_by(.number) | .[0].number // empty'); then
+            echo "::error::Cannot list alerts; refusing to create a duplicate"
+            exit 1
+          fi
+          BODY="Gate 2 failed. Review the run and distinguish configuration (404), server errors (5xx), and network/timeout failures.
 
-          The automated webhook health gate detected a problem.
-
-          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          **Common causes:**
-          - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
-          - Missing required events (issues, issue_comment, workflow_job)
-          - n8n server is down
-          - Webhook was accidentally deleted or deactivated
-
-          **Fix:** Review and update the webhook at:
-          https://github.com/${{ github.repository }}/settings/hooks" \
-            --label "alert"
+          Run: $RUN_URL"
+          if [ -n "$ISSUES" ]; then
+            gh issue comment "$ISSUES" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+          else
+            gh label create alert --repo "$GITHUB_REPOSITORY" --color B60205 \
+              --description "Automated gate failure needing a human" 2>/dev/null || true
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "🚨 Webhook Health Gate Failed" \
+              --body "$BODY" --label alert
+          fi
