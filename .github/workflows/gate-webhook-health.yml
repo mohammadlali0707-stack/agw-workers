@@ -9,6 +9,9 @@ on:
 jobs:
   webhook-health:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
     env:
       # Reading repos/{repo}/hooks needs ADMIN on the repo. GITHUB_TOKEN has no
       # webhook permission at all -- there is no `permissions:` key that grants
@@ -116,6 +119,10 @@ jobs:
                "status": "fail" if failed else "pass", "v": 1}, sort_keys=True))
           if failed:
               print("\n\u274c WEBHOOK HEALTH CHECK FAILED")
+              if 'GITHUB_ENV' in os.environ:
+                  with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as ge:
+                      ge.write("FAIL_TYPE=config_error\n")
+                      ge.write("FAIL_MESSAGE=GitHub repository webhook configuration error (missing events, inactive hook, or test URL)\n")
               sys.exit(1)
           print("\n\u2705 The AGY webhook is healthy")
           EOF
@@ -131,45 +138,136 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"action":"health_check","test":true}' \
             --max-time 10 2>/dev/null || echo "000")
-          
+
+          echo "HTTP_STATUS=$STATUS" >> "$GITHUB_ENV"
+
           # n8n returns 200 (processed) or 400 (bad payload but reachable) = OK
-          # 000 = unreachable, 404 = wrong path, 503 = down
-          if [ "$STATUS" = "000" ] || [ "$STATUS" = "404" ] || [ "$STATUS" = "503" ]; then
-            echo "❌ n8n endpoint unreachable or wrong (HTTP $STATUS)"
+          # 404 = webhook route not registered / wrong path (configuration error)
+          # 000 / 5xx = server down, timeout, or server error (server failure)
+          if [ "$STATUS" = "200" ] || [ "$STATUS" = "400" ]; then
+            echo "✅ n8n endpoint reachable (HTTP $STATUS)"
+          elif [ "$STATUS" = "404" ]; then
+            echo "FAIL_TYPE=config_error" >> "$GITHUB_ENV"
+            echo "FAIL_MESSAGE=HTTP 404: Webhook route not found. The endpoint path is incorrect or the n8n workflow is inactive/unregistered." >> "$GITHUB_ENV"
+           echo "❌ n8n endpoint config error (HTTP 404: route not found / workflow inactive)"
+            exit 1
+          elif [ "$STATUS" = "000" ] || [ "$STATUS" -ge 500 ] 2>/dev/null; then
+            echo "FAIL_TYPE=server_failure" >> "$GITHUB_ENV"
+            echo "FAIL_MESSAGE=HTTP $STATUS: Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors." >> "$GITHUB_ENV"
+            echo "❌ n8n endpoint server failure (HTTP $STATUS: server down / timeout)"
             exit 1
           else
-            echo "✅ n8n endpoint reachable (HTTP $STATUS)"
+            echo "FAIL_TYPE=config_error" >> "$GITHUB_ENV"
+            echo "FAIL_MESSAGE=HTTP $STATUS: Unexpected HTTP response received from webhook endpoint." >> "$GITHUB_ENV"
+            echo "❌ n8n endpoint unexpected response (HTTP $STATUS)"
+            exit 1
           fi
 
       - name: Post alert if webhook health fails
         if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
+          EXPECTED_URL: ${{ env.EXPECTED_URL }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
-          # The alert itself was broken: `--label alert` on a repo with no such
-          # label makes `gh issue create` exit 1, so a real webhook failure
-          # produced a failed alert step and no issue. Measured 2026-09-18 in
-          # run 35326224643: "could not add label: 'alert' not found".
-          # Created here rather than by hand because this gate is synced to all
-          # eight forks, and none of them has the label either.
-          gh label create alert \
-            --repo "$GITHUB_REPOSITORY" \
-            --color B60205 \
-            --description "Automated gate failure needing a human" 2>/dev/null \
-            || echo "label 'alert' already exists (or cannot be created); continuing"
-          gh issue create \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
-            --body "## Webhook Health Check Failed
+          set -e
+          REPO="${GITHUB_REPOSITORY}"
+          ISSUE_TITLE="🚨 Webhook Health Gate Failed"
 
-          The automated webhook health gate detected a problem.
+          # Construct bodies with python to prevent shell injection,
+          # unescaped backtick issues, and ensure strict body length compliance.
+          python3 -c "import sys, textwrap; exec(textwrap.dedent(sys.stdin.read()))" <<'EOF'
+          import os, datetime
 
-          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          fail_type = os.environ.get('FAIL_TYPE', 'unknown')
+          fail_msg = os.environ.get('FAIL_MESSAGE', 'Webhook health check failed.')
+          http_status = os.environ.get('HTTP_STATUS', 'unknown')
+          run_url = os.environ.get('RUN_URL', '')
+          run_id = os.environ.get('RUN_ID', '')
+          repo = os.environ.get('GITHUB_REPOSITORY', '')
+          expected_url = os.environ.get('EXPECTED_URL', '')
+          now = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
-          **Common causes:**
-          - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
-          - Missing required events (issues, issue_comment, workflow_job)
-          - n8n server is down
-          - Webhook was accidentally deleted or deactivated
+          if fail_type == 'config_error':
+              cat_label = "⚠️ Configuration Error (HTTP 404 / Webhook Config)"
+              diag = (
+                  "- **HTTP 404 Route Not Found**: The endpoint path does not match an active route on n8n.\n"
+                  "- **Deactivated Workflow**: The n8n workflow may have been unregistered. Run `.github/workflows/n8n-reactivate-webhooks.yml` or toggle Active in the n8n UI.\n"
+                  "- **Webhook Settings**: Check that the webhook URL points to `/webhook/` (not `/webhook-test/`) and includes `issues`, `issue_comment`, `workflow_job`.\n"
+                  f"- **Settings Link**: https://github.com/{repo}/settings/hooks"
+              )
+          elif fail_type == 'server_failure':
+              cat_label = f"🔥 Server Failure (HTTP {http_status} / Timeout / Unreachable)"
+              diag = (
+                  f"- **n8n Server Down or Unreachable**: Endpoint returned HTTP {http_status}.\n"
+                  "- **Network / Timeout**: The runner could not connect to n8n within the 10-second timeout.\n"
+                  "- **Container Crashed**: Check n8n service logs or host health; restart container if down."
+              )
+          else:
+              cat_label = f"❓ Gate Failure (HTTP {http_status})"
+              diag = f"- Gate health check failed: {fail_msg}"
 
-          **Fix:** Review and update the webhook at:
-          https://github.com/${{ github.repository }}/settings/hooks" \
-            --label "alert"
+          issue_body = (
+              "## Webhook Health Check Failed\n\n"
+              "The automated webhook health gate detected a problem.\n\n"
+              f"- **Timestamp:** {now}\n"
+              f"- **Run:** [{run_id}]({run_url})\n"
+              f"- **Failure Category:** {cat_label}\n"
+              f"- **HTTP Status:** `{http_status}`\n"
+              f"- **Target URL:** `{expected_url}`\n"
+              f"- **Detail:** {fail_msg}\n\n"
+              "### Diagnosis & Action:\n"
+              f"{diag}\n"
+          )[:60000]
+
+          comment_body = (
+              "### 🔄 Consecutive Webhook Gate Failure Update\n\n"
+              f"- **Timestamp:** {now}\n"
+              f"- **Run:** [{run_id}]({run_url})\n"
+              f"- **Failure Category:** {cat_label}\n"
+              f"- **HTTP Status:** `{http_status}`\n"
+              f"- **Detail:** {fail_msg}\n\n"
+              f"> This automated health check failure persisted on run [{run_id}]({run_url}).\n"
+          )[:60000]
+
+          with open('/tmp/issue_body.md', 'w', encoding='utf-8') as f:
+              f.write(issue_body)
+
+          with open('/tmp/comment_body.md', 'w', encoding='utf-8') as f:
+              f.write(comment_body)
+          EOF
+
+          # Check for existing open alert issue with exact title match
+          EXISTING_ISSUE=$(gh issue list \
+            --repo "$REPO" \
+            --state open \
+            --limit 100 \
+            --json number,title 2>/dev/null \
+            | jq -r --arg t "$ISSUE_TITLE" '.[] | select(.title == $t) | .number' 2>/dev/null \
+            | head -n 1 || true)
+
+          if [ -z "$EXISTING_ISSUE" ] || [ "$EXISTING_ISSUE" = "null" ]; then
+            echo "No existing open issue found. Creating new alert issue..."
+            gh label create alert \
+              --repo "$REPO" \
+              --color B60205 \
+              --description "Automated gate failure needing a human" 2>/dev/null \
+              || echo "label 'alert' already exists (or cannot be created); continuing"
+
+            gh issue create \
+              --repo "$REPO" \
+              --title "$ISSUE_TITLE" \
+              --body-file /tmp/issue_body.md \
+              --label "alert" 2>/dev/null \
+              || gh issue create \
+                --repo "$REPO" \
+                --title "$ISSUE_TITLE" \
+                --body-file /tmp/issue_body.md
+          else
+            echo "Existing open issue found (#$EXISTING_ISSUE). Updating with a comment instead of creating duplicate..."
+            gh issue comment "$EXISTING_ISSUE" \
+              --repo "$REPO" \
+              --body-file /tmp/comment_body.md \
+              || echo "::warning::failed to add comment to issue #$EXISTING_ISSUE"
+          fi
