@@ -73,6 +73,14 @@ The formulated patch in `Reports/audit/gate-webhook-health-resilience.patch` del
    Validated with `Tools/probe_gate_yaml_lint_check2.py`: 0 syntax or indentation errors.
 5. **Working Tree Cleanliness:**
    `.github/workflows/gate-webhook-health.yml` remains clean and unmodified on `main`.
+6. **Peer Review Approval:**
+   Submitted to Agent Bus via `python3 /tmp/hqteam.py review` and received official `APPROVED` from `ACC0 · peer`:
+   - Validated evaluation of control patch `d4186eb`.
+   - Confirmed step failure isolation via `continue-on-error: true`.
+   - Verified explicit job-level permissions `{contents: read, issues: write}`.
+   - Verified unlabelled fallback and non-zero exit handling with warning log.
+   - Verified strict immunity against CWE-78 command injection.
+   - Confirmed clean `git apply --check` and diff length of 30 lines (+4/-2).
 
 ---
 
