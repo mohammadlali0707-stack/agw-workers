@@ -1,0 +1,98 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-161-acc2-c0c138a7159b-w03","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-42699579369-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+Work Plan:
+1. **Analyze Control Patch & Workflow**: Read `.github/workflows/gate-webhook-health.yml` and inspect commit `d4186eb` using `git show d4186eb` and `git log` to identify resolved fixes and remaining resilience gaps across fork runners.
+2. **Examine Audit Reports & Tracking Issue**: Review existing audit artifacts in `Reports/audit/` and inspect issue #161 using `gh issue view 161` to establish baseline context and required proposal format.
+3. **Formulate & Validate Unified Diff Patch**: Formulate the exact unified diff (strictly <= 400 lines) for `.github/workflows/gate-webhook-health.yml` incorporating step failure isolation (`continue-on-error: true` on alert step), explicit job permissions (`permissions: { contents: read, issues: write }`), resilient fallback for issue creation without labels, and CWE-78 shell injection prevention. Validate patch applicability using `git apply --check` and verify zero injection vectors via `python3 Tools/check_run_injection.py`.
+4. **Draft Proposal & Post Tracking Issue Comment**: Create the proposal report under `Reports/audit/`, format the validated diff and diagnostic explanation as a ready-to-merge proposal comment for Notion AI, and post it to issue #161 via `gh issue comment 161`.
+5. **Peer Review & Verification**: Submit the proposal to the Agent Bus using `python3 /tmp/hqteam.py review`, address any review comments/adjustments, stage and commit the audit artifacts under `Reports/audit/` using `git add` and `git commit`.
+6. **Broadcast Completion**: Post final completion status to the Agent Bus using `python3 /tmp/hqteam.py post done`.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have formulated and validated the Gate 2 resilience unified diff patch and prepared the technical audit proposal for Issue #161. I have submitted the proposal for peer review via `python3 /tmp/hqteam.py review` and am awaiting the reviewer's feedback.
+The peer review request is currently processing on the Agent Bus. I am waiting for the reviewer to respond.
+### Gate 2 Resilience Diff Formulation & Notion AI Proposal (Issue #161)
+
+**Worker ID:** `agw-ACC2-w03` (Account 2 Worker)  
+**Target Workflow:** [`.github/workflows/gate-webhook-health.yml`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/.github/workflows/gate-webhook-health.yml)  
+**Control Patch Commit:** [`d4186eb`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/.github/workflows/gate-webhook-health.yml#L12-L273)  
+**Tracking Issue:** #161 (`mohammadlali0707-stack/agw-workers`)  
+**Artifacts Delivered:**
+- Unified Diff Patch: [`Reports/audit/gate-webhook-health-resilience.patch`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch)
+- Forensic Proposal Report: [`Reports/audit/gate-webhook-health-resilience-proposal.md`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/Reports/audit/gate-webhook-health-resilience-proposal.md)
+
+---
+
+### 1. Control Patch `d4186eb` Evaluation & Remaining Resilience Gaps
+
+1. **Resolved Capabilities in `d4186eb`:**
+   - **404 vs 5xx Status Differentiation:** Probe cleanly separates HTTP 404 upstream security quarantine/unregistered routes (`config_error`) from 5xx server downtime/timeouts (`server_failure`).
+   - **Issue Deduplication:** Uses exact title matching (`select(.title == $t)`) to update existing open issues via comments instead of spawning duplicate hourly alerts.
+   - **Safe Body Construction:** Generates markdown payloads in Python writing directly to `/tmp/issue_body.md` and `/tmp/comment_body.md`, preventing bash string escaping corruptions and enforcing GitHub's 65,536-character ceiling.
+   - **CWE-78 Injection Immunity:** Parameterizes all context tokens into step-level environment variables (`RUN_URL`, `RUN_ID`, `EXPECTED_URL`), eliminating inline shell interpolation vulnerabilities.
+
+2. **Isolated Resilience Gaps Across Fork Runners:**
+   - **Missing Step Failure Isolation:** The `Post alert if webhook health fails` step lacked `continue-on-error: true`. Any GitHub API throttling, fork runner permission barriers, or network hiccup aborted the runner step, causing an alerting failure to crash the primary CI run.
+   - **Fork Runner Token Boundaries:** Fork runners routinely operate under restricted `GITHUB_TOKEN` permissions (`contents: read`), ignoring workflow write declarations.
+   - **Unhandled Fallback Failure under `set -e`:** When write permissions are denied, the secondary unlabelled `gh issue create` command failed with non-zero exit code. Under `set -e`, this terminated the runner step immediately. Adding a non-zero exit warning handler (`2>/dev/null || echo "::warning::..."`) prevents script aborts.
+
+---
+
+### 2. Validated Unified Diff Deliverable (30 Lines, +4/-2)
+
+The exact patch deliverable is committed at [`Reports/audit/gate-webhook-health-resilience.patch`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch):
+
+```diff
+--- a/.github/workflows/gate-webhook-health.yml
++++ b/.github/workflows/gate-webhook-health.yml
+@@ -10,8 +10,8 @@ jobs:
+   webhook-health:
+     runs-on: ubuntu-latest
+     permissions:
+-      issues: write
+       contents: read
++      issues: write
+     env:
+       # Reading repos/{repo}/hooks needs ADMIN on the repo. GITHUB_TOKEN has no
+       # webhook permission at all -- there is no `permissions:` key that grants
+@@ -165,6 +165,7 @@ jobs:
+ 
+       - name: Post alert if webhook health fails
+         if: failure()
++        continue-on-error: true
+         env:
+           GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
+           EXPECTED_URL: ${{ env.EXPECTED_URL }}
+@@ -263,7 +264,8 @@ jobs:
+               || gh issue create \
+                 --repo "$REPO" \
+                 --title "$ISSUE_TITLE" \
+-                --body-file /tmp/issue_body.md
++                --body-file /tmp/issue_body.md 2>/dev/null \
++              || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"
+           else
+             echo "Existing open issue found (#$EXISTING_ISSUE). Updating with a comment instead of creating duplicate..."
+             gh issue comment "$EXISTING_ISSUE" \
+```
+
+---
+
+### 3. Verification & Compliance Evidence
+
+- **Patch Cleanliness (`git apply --check`):** Verified clean application with exit code `0` against current `main` (0 offset, 0 fuzz).
+- **CWE-78 Injection Audit ([`Tools/check_run_injection.py`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/Tools/check_run_injection.py)):** 0 untrusted expressions (`inputs.*` or `github.event.*`) in run scripts.
+- **YAML Syntax Validation ([`Tools/probe_gate_yaml_lint_check2.py`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/Tools/probe_gate_yaml_lint_check2.py)):** Passed with 0 syntax or indentation errors.
+- **Budget Conformance:** Patch is 30 lines (+4/-2 lines), strictly within the <= 400 lines limit.
+- **Working Tree Cleanliness:** [`.github/workflows/gate-webhook-health.yml`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/.github/workflows/gate-webhook-health.yml) remains unmodified on `main`; changes are staged strictly under [`Reports/audit/`](file:///home/runner/work/_temp/agent-repo-42699579369-1-run-agy/Reports/audit/).
+
+---
+
+### 4. Protocol & Peer Review Sign-Off
+
+- **Peer Review:** Submitted via `/tmp/hqteam.py review` and received **`APPROVED`** from `کارگر ACC8 · peer` (Post `#1739`).
+- **Tracking Issue #161:** Formatted proposal comment verified on tracking issue #161 for Notion AI application.
+- **Git Commit:** Staged and committed updated audit artifacts as `179dd0a` (`audit(gate2): formulate and validate Gate 2 resilience patch and proposal for issue #161`).
+- **Agent Bus Notification:** Dispatched completion broadcast on the Agent Bus via `/tmp/hqteam.py post done` (Post `#1740`).
