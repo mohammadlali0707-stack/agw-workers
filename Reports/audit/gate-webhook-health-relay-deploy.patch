@@ -1,8 +1,8 @@
 diff --git a/.github/workflows/relay-deploy-file.yml b/.github/workflows/relay-deploy-file.yml
-index fc9a0ae..7cfcb33 100644
+index fc9a0ae..713ddbc 100644
 --- a/.github/workflows/relay-deploy-file.yml
 +++ b/.github/workflows/relay-deploy-file.yml
-@@ -5,8 +5,15 @@ on:
+@@ -5,8 +5,17 @@ on:
    push:
      branches: [main]
      paths:
@@ -12,19 +12,21 @@ index fc9a0ae..7cfcb33 100644
        - '.github/workflows/agy-issue-bot.yml'
 +      - '.github/workflows/agy-lead-plan.yml'
 +      - '.github/workflows/gate-yaml-lint.yml'
-+      - '.github/workflows/gate-runs-on-policy.yml'
 +      - '.github/workflows/gate-webhook-health.yml'
++      - '.github/workflows/gate-runs-on-policy.yml'
 +      - '.github/workflows/gate-runner-deps.yml'
        - '.github/workflows/relay-deploy-file.yml'
++      - 'media/README.md'
++      - 'README.md'
  
  permissions:
-@@ -45,6 +52,10 @@ jobs:
+@@ -45,6 +54,10 @@ jobs:
              ".github/workflows/agy-issue-bot.yml"
              ".github/workflows/agw-worker.yml"
              ".github/workflows/agy-lead-plan.yml"
 +            ".github/workflows/gate-yaml-lint.yml"
-+            ".github/workflows/gate-runs-on-policy.yml"
 +            ".github/workflows/gate-webhook-health.yml"
++            ".github/workflows/gate-runs-on-policy.yml"
 +            ".github/workflows/gate-runner-deps.yml"
              "media/README.md"
              "README.md"

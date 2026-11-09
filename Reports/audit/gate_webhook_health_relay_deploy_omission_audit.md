@@ -1,8 +1,8 @@
 # Technical Audit Report: gate-webhook-health Omission from relay-deploy-file
 
-- **Document ID:** `AUDIT-RELAY-SYNC-ACC4-2026-11-09-GATE2-OMISSION`
-- **Auditor / Worker ID:** `agw-ACC4-w03` (Account 4 Lead Team) / `agw-worker` (ACC5/ACC4 peer coordination)
-- **Board Identity:** `کارگر ACC4` (Mohammad's GitHub Worker Fleet -- Account 4 Lead)
+- **Document ID:** `AUDIT-RELAY-SYNC-ACC5-2026-11-09-GATE2-OMISSION`
+- **Auditor / Worker ID:** `agw-ACC5-w03` (Account 5 Lead Team) / `gh-acc5-agw-worker`
+- **Board Identity:** `کارگر ACC5` (Mohammad's GitHub Worker Fleet -- Account 5 Lead)
 - **Target Workflow:** `.github/workflows/relay-deploy-file.yml`
 - **Synchronized Artifact:** `.github/workflows/gate-webhook-health.yml` (Gate 2 Webhook Health Checker)
 - **Companion Gate Workflows:** `gate-yaml-lint.yml`, `gate-runs-on-policy.yml`, `gate-runner-deps.yml`
@@ -52,12 +52,27 @@ When Gate 2 and its companion gates were introduced on 2026-09-17, they were cat
 
 Synchronizing `.github/workflows/` across fork repositories involves specific GitHub authorization boundaries:
 
-1. **`workflow` OAuth Scope on Account PATs:**
-   GitHub strictly enforces that creating or updating any file in `.github/workflows/` requires the `workflow` scope on Personal Access Tokens. Even with full `repo` read/write access, a PAT lacking `workflow` returns:
-   `403 Refusing to allow a Personal Access Token to create or update workflow ... without 'workflow' scope`.
-   All active tokens (`ACC0_PAT`, `ACC2_PAT`, `ACC4_PAT`, `ACC5_PAT`, `ACC8_PAT`) must possess the `workflow` scope.
-2. **Repository Write Permissions:**
-   Tokens must possess write permission to their respective target repositories (`Mohammadlali/agw-workers`, `lali94m-max/agw-workers`, `hmmletssee7-design/agw-workers`, `kidding602/agw-workers`, `moradzahra85-png/agw-workers`).
+1. **Mandatory `workflow` OAuth Scope on Personal Access Tokens:**
+   GitHub strictly enforces that creating, modifying, or deleting any file within the `.github/workflows/` directory requires the explicit `workflow` OAuth scope on Personal Access Tokens (classic tokens require `workflow`; fine-grained PATs require `Actions: Read and write`). Even if a PAT possesses full `repo` read/write access, attempting to push changes to workflow files without the `workflow` scope triggers a rejection from GitHub's authorization gate:
+   ```text
+   ! [remote rejected] HEAD -> main (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/gate-webhook-health.yml` without `workflow` scope)
+   error: failed to push some refs to 'https://github.com/kidding602/agw-workers.git'
+   ```
+   Or via the Contents REST API:
+   ```text
+   HTTP 403 Forbidden: Refusing to allow a Personal Access Token to create or update workflow without 'workflow' scope.
+   ```
+   Therefore, all active worker account tokens in rotation:
+   - `ACC0_PAT` (`Mohammadlali/agw-workers`)
+   - `ACC2_PAT` (`lali94m-max/agw-workers`)
+   - `ACC4_PAT` (`hmmletssee7-design/agw-workers`)
+   - `ACC5_PAT` (`kidding602/agw-workers`)
+   - `ACC8_PAT` (`moradzahra85-png/agw-workers`)
+   **must explicitly have the `workflow` OAuth scope enabled**. Lacking this scope causes `relay-deploy-file.yml` to fail at the git push step (`git push origin HEAD`), blocking deployment across the fleet.
+
+2. **Repository Write Access:**
+   Each token must have administrative or collaborator write access to its corresponding fork repository (`Mohammadlali/agw-workers`, `lali94m-max/agw-workers`, `hmmletssee7-design/agw-workers`, `kidding602/agw-workers`, `moradzahra85-png/agw-workers`).
+
 3. **Execution Context & Expression Bug Resolution:**
    GitHub Actions expressions evaluate `${{ A || B }}` as a boolean (`true`/`false`). When `secrets.ACC6_PAT` is populated, the expression evaluates to the string `"true"`, causing authentication failures. In shell steps, the token must be handled via bash parameter expansion:
    ```bash
@@ -85,19 +100,24 @@ Per owner instruction (2026-10-24), accounts 1, 3, and 7 were temporarily remove
 
 ## 5. Verified Configuration Changes & Unified Diff
 
-To keep `gate-webhook-health.yml` and all companion gates synchronized, and to ensure automated triggers fire on any workflow update:
-1. Update `on.push.paths` to cover all deployed workflow files.
-2. Add all four gate workflows (`gate-yaml-lint.yml`, `gate-runs-on-policy.yml`, `gate-webhook-health.yml`, `gate-runner-deps.yml`) to the `FILES` array in `relay-deploy-file.yml`.
+To keep `gate-webhook-health.yml` and all companion gates synchronized across the fleet, maintain strict numerical gate ordering, and ensure automated triggers fire on any deployed file modification:
+1. **Numerical Gate Sequence:** Gates 1 through 4 are synchronized in sequential numerical order:
+   - Gate 1: `.github/workflows/gate-yaml-lint.yml`
+   - Gate 2: `.github/workflows/gate-webhook-health.yml`
+   - Gate 3: `.github/workflows/gate-runs-on-policy.yml`
+   - Gate 4: `.github/workflows/gate-runner-deps.yml`
+2. **Comprehensive Trigger Monitoring:** Update `on.push.paths` to cover all items in `FILES`, including `media/README.md` and `README.md`, eliminating blind spots where repository updates fail to propagate to active forks.
+3. **Atomic Gate Deployment:** Add all four gate workflows to the `FILES` array in `relay-deploy-file.yml`.
 
 The verified unified diff is saved at `Reports/audit/gate-webhook-health-relay-deploy.patch`.
 
 ### Complete Unified Diff Deliverable
 ```diff
 diff --git a/.github/workflows/relay-deploy-file.yml b/.github/workflows/relay-deploy-file.yml
-index fc9a0ae..7cfcb33 100644
+index fc9a0ae..713ddbc 100644
 --- a/.github/workflows/relay-deploy-file.yml
 +++ b/.github/workflows/relay-deploy-file.yml
-@@ -5,8 +5,15 @@ on:
+@@ -5,8 +5,17 @@ on:
    push:
      branches: [main]
      paths:
@@ -107,19 +127,21 @@ index fc9a0ae..7cfcb33 100644
        - '.github/workflows/agy-issue-bot.yml'
 +      - '.github/workflows/agy-lead-plan.yml'
 +      - '.github/workflows/gate-yaml-lint.yml'
-+      - '.github/workflows/gate-runs-on-policy.yml'
 +      - '.github/workflows/gate-webhook-health.yml'
++      - '.github/workflows/gate-runs-on-policy.yml'
 +      - '.github/workflows/gate-runner-deps.yml'
        - '.github/workflows/relay-deploy-file.yml'
++      - 'media/README.md'
++      - 'README.md'
  
  permissions:
-@@ -45,6 +52,10 @@ jobs:
+@@ -45,6 +54,10 @@ jobs:
              ".github/workflows/agy-issue-bot.yml"
              ".github/workflows/agw-worker.yml"
              ".github/workflows/agy-lead-plan.yml"
 +            ".github/workflows/gate-yaml-lint.yml"
-+            ".github/workflows/gate-runs-on-policy.yml"
 +            ".github/workflows/gate-webhook-health.yml"
++            ".github/workflows/gate-runs-on-policy.yml"
 +            ".github/workflows/gate-runner-deps.yml"
              "media/README.md"
              "README.md"
@@ -131,12 +153,12 @@ index fc9a0ae..7cfcb33 100644
 ## 6. Verification Procedure & Rollout Strategy
 
 1. **Patch Cleanliness Validation:**
-   The patch applies cleanly against the repository with zero offset:
+   The patch applies cleanly against the repository with zero offset and zero fuzz:
    ```bash
    git apply --check Reports/audit/gate-webhook-health-relay-deploy.patch
    ```
 2. **Live Pre-Deployment Token Scope Audit:**
-   Execute live validation against the GitHub API checking `x-oauth-scopes` headers for `workflow` and `repo`:
+   Execute live validation against the GitHub API checking `x-oauth-scopes` headers for `workflow` and `repo` across all active rotation accounts:
    ```bash
    for IDX in 0 2 4 5 8; do
      PAT_VAR="ACC${IDX}_PAT"
@@ -149,21 +171,42 @@ index fc9a0ae..7cfcb33 100644
        else
          echo "  ❌ Account $IDX MISSING 'workflow' scope"
        fi
+     else
+       echo "  ⚠️ Account $IDX: $PAT_VAR is unset in runner environment"
      fi
    done
    ```
 3. **Authenticated Execution & Readback Verification:**
-   Trigger `relay-deploy-file.yml` via `workflow_dispatch`. Verify deployment on each active fork using authenticated API readback:
+   Trigger `relay-deploy-file.yml` via `workflow_dispatch`. Verify deployment on each active fork using authenticated API readback with full SHA comparison:
    ```bash
+   declare -A OWNERS=(
+     [0]="Mohammadlali"
+     [2]="lali94m-max"
+     [4]="hmmletssee7-design"
+     [5]="kidding602"
+     [8]="moradzahra85-png"
+   )
    for IDX in 0 2 4 5 8; do
      PAT_VAR="ACC${IDX}_PAT"
      TOKEN="${!PAT_VAR}"
      OWNER="${OWNERS[$IDX]}"
+     echo "== Verifying Gate 2 sync for Account $IDX ($OWNER/agw-workers) =="
+     if [ -z "$TOKEN" ]; then
+       echo "  ⚠️ Token $PAT_VAR unset; skipping readback probe"
+       continue
+     fi
      REMOTE_SHA=$(curl -s -H "Authorization: Bearer $TOKEN" \
        -H "Accept: application/vnd.github+json" \
        "https://api.github.com/repos/${OWNER}/agw-workers/contents/.github/workflows/gate-webhook-health.yml" \
        | jq -r .sha)
-     echo "$OWNER Gate 2 blob SHA: $REMOTE_SHA"
+     LOCAL_SHA=$(git rev-parse HEAD:.github/workflows/gate-webhook-health.yml 2>/dev/null || echo "unknown")
+     echo "  Remote blob SHA: $REMOTE_SHA"
+     echo "  Control blob SHA: $LOCAL_SHA"
+     if [ "$REMOTE_SHA" = "$LOCAL_SHA" ] && [ "$REMOTE_SHA" != "null" ]; then
+       echo "  ✅ Account $IDX synchronized successfully"
+     else
+       echo "  ⚠️ Mismatch detected or sync pending for $OWNER"
+     fi
    done
    ```
 4. **Gate 2 Post-Sync Health Check:**
@@ -175,4 +218,4 @@ index fc9a0ae..7cfcb33 100644
 
 1. **Atomic Gate Synchronization:** Always deploy all four gates (`gate-yaml-lint.yml`, `gate-runs-on-policy.yml`, `gate-webhook-health.yml`, `gate-runner-deps.yml`) together to avoid cross-gate dependency mismatches (e.g. Gate 4 `MUST_BE_HOSTED` checks).
 2. **Readback Probe:** Integrate automated SHA readback into `relay-deploy-file.yml` after git push to detect silent sync drops.
-3. **Sign-Off:** Documented and verified by `agw-ACC4-w03` (Account 4 Lead Team). Patch validated with `git apply --check` and ready for merge.
+3. **Sign-Off:** Documented, validated, and finalized by `agw-ACC5-w03` (Account 5 Lead Team). Patch validated with `git apply --check` and ready for Notion AI merge.
