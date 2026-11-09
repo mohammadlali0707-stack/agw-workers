@@ -1,126 +1,134 @@
-# Forensic CI/QA Diagnostic Audit: Gate 2 Webhook Health Dual-Failure Triage
+# Forensic CI Diagnostic Audit: Gate 2 Webhook Health Dual-Failure Triage
 
 **Document ID:** `AUDIT-GATE2-FORK-42693334316-CTRL-42692993945`  
-**Auditor / Agent:** `agw-ACC2-w02` (Mohammad's GitHub Worker Fleet -- Account 2 Lead)  
+**Auditor / Agent:** `agw-ACC2-w02` (Mohammad's GitHub Worker Fleet -- Account 2 Lead Team)  
 **Target Fork Repository:** `lali94m-max/agw-workers` (Account 2 Fork)  
-**Target Fork Run ID:** `42693334316` ('Gate 2 -- Webhook Health Checker')  
-**Control Repository:** `mohammadlali0707-stack/agw-workers` (Account 6 Control Repository)  
-**Control Run ID:** `42692993945` ('Gate 2 -- Webhook Health Checker')  
+**Target Fork Run ID:** `42693334316` ('Gate 2 -- Webhook Health Checker', Run #264)  
+**Control Repository:** `mohammadlali0707-stack/agw-workers` (Account 6 Control Repo)  
+**Control Run ID:** `42692993945` ('Gate 2 -- Webhook Health Checker', Run #263)  
 **Target Webhook Endpoint:** `https://n8n.airboxvip.top/webhook/github-runner-trigger`  
 **Workflow File:** `.github/workflows/gate-webhook-health.yml`  
-**Control Patch Commit:** `d4186eb` (Patch #1701: Separate 404 config from 5xx server failures, label fallback, deduplication)  
+**Control Patch Commit:** `d4186eb` (Patch #1701: Separate 404 config from 5xx server failures)  
 **Audit Date:** 2026-11-09  
-**Classification:** Dual-Failure Chain (Upstream Security Quarantine & Secondary CI Alert Tooling Crash)  
+**Classification:** Dual-Failure Chain (Upstream Security Quarantine & Secondary Alert Tooling Crash)  
 **Status:** Forensic Audit Completed & Efficacy Verified  
 
 ---
 
 ## 1. Executive Summary
 
-On 2026-11-09, scheduled CI execution of **Gate 2 (`Gate 2 -- Webhook Health Checker`)** failed across fleet forks. A forensic CI/QA audit evaluated fork run **42693334316** on `lali94m-max/agw-workers` (Account 2) against control run **42692993945** on `mohammadlali0707-stack/agw-workers` (Account 6).
+On 2026-11-09, scheduled runs of Gate 2 (`Gate 2 -- Webhook Health Checker`) failed across fleet forks. A forensic CI/QA audit evaluated fork run **42693334316** on `lali94m-max/agw-workers` against control run **42692993945** on `mohammadlali0707-stack/agw-workers` (with patch `d4186eb`).
 
-The investigation isolated and synthesized a **Dual-Failure Chain**:
-
-1. **Primary Upstream Failure (Step 3 -- "Verify webhook endpoint is reachable"):**  
-   The HTTP POST probe targeting `https://n8n.airboxvip.top/webhook/github-runner-trigger` failed with **HTTP 404 Not Found** (`The requested webhook "POST github-runner-trigger" is not registered`). This deactivation directly stems from upstream security quarantine (#1615, #1616) initiated by `gh-acc5-direct-acc5` after discovering plaintext credentials (Notion PAT, GitHub PATs, Runner Secret) in n8n execution data. The webhook was deactivated pending completion of a 5-phase credential rotation and HMAC protection roadmap. Reachability check is expected-red.
-
-2. **Secondary CI Tooling Crash (Step 4 -- "Post alert if webhook health fails"):**  
-   On unpatched fork run **42693334316**, Step 4 executed under `if: failure()`. The script attempted `gh label create alert ... 2>/dev/null || echo "..."`. Because fork runners operate with restricted `GITHUB_TOKEN` permissions lacking repository administration rights (`POST /repos/lali94m-max/agw-workers/labels` returns 403 Forbidden), label creation failed silently. The fork repository only has default GitHub labels (`alert` absent). `gh issue create ... --label "alert"` terminated with exit code 1 (`could not add label: alert not found`). Under `set -e`, Step 4 crashed with exit code 1, suppressing alerts and failing CI at the tooling level without filing an issue.
-
-3. **Control Run Proof of Efficacy (Run 42692993945 with Patch `d4186eb`):**  
-   Control run **42692993945** on Account 6 executed with patch **`d4186eb`** (Patch #1701). Step 3 categorized HTTP 404 as `config_error` and exported structured variables to `$GITHUB_ENV`. Step 4 ran with `permissions: { issues: write, contents: read }`, token fallback (`GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}`), deduplication against existing open issues, and resilient two-tier issue creation (`gh issue create --label "alert" 2>/dev/null || gh issue create [unlabelled]`). The alert step completed successfully (exit code 0) and created **Issue #160** (`🚨 Webhook Health Gate Failed`), preventing the CI tooling crash.
+The investigation confirmed a compounding **Dual-Failure Chain**:
+1. **Primary Upstream Failure (Step 3):** POST probe to `https://n8n.airboxvip.top/webhook/github-runner-trigger` returned **HTTP 404 Not Found**. Formally classified as an **expected upstream security quarantine** (#1615, #1616) following credential exposure in n8n execution data. Route is deactivated pending a 5-phase credential rotation roadmap.
+2. **Secondary CI Tooling Crash (Step 4):** On fork run **42693334316**, Step 4 ran under `if: failure()`. Fork runners operate with restricted `GITHUB_TOKEN` lacking repo admin rights (`POST /repos/{owner}/{repo}/labels` returns 403 Forbidden). Label `alert` is absent. `gh issue create ... --label "alert"` failed with exit code 1 (`could not add label: alert not found`). Under `set -e`, Step 4 aborted immediately, suppressing alerts and failing CI without filing an issue.
+3. **Control Run Proof of Efficacy (Run 42692993945 with Patch `d4186eb`):** Control run **42692993945** executed with patch **`d4186eb`**. Step 3 exported `FAIL_TYPE=config_error`. Step 4 ran with `permissions: { issues: write, contents: read }`, deduplication, and resilient two-tier creation (`gh issue create --label "alert" 2>/dev/null || gh issue create [unlabelled]`). Step 4 exited 0 and created **Issue #160** (`🚨 Webhook Health Gate Failed`).
 
 ---
 
 ## 2. Incident Timeline & Telemetry Correlation
 
-| Timestamp (UTC) | Actor / Source | Event / Telemetry | Operational Impact |
+| Timestamp (UTC) | Source / Actor | Event / Telemetry | Operational Impact |
 | :--- | :--- | :--- | :--- |
-| **2026-11-07 18:36Z** | `gh-acc5-direct-acc5` | Security finding #1615/#1616: Plaintext tokens exposed in n8n traces. | Webhook deactivated; security quarantine initiated. |
-| **2026-11-07 20:46Z** | ACC5 Fork (`kidding602`) | Gate 2 Run `42412660214` fails at Step 3 (HTTP 404); Step 4 crashes on label `alert`. | Initial dual-failure occurrence documented on fork. |
-| **2026-11-08 20:52Z** | ACC8 Fork (`moradzahra85-png`) | Gate 2 Run `42522282293` fails identically; audit completed (`92c687d`). | Cross-fork systemic replication confirmed. |
-| **2026-11-09 12:48Z** | `gh-acc5-peer` | Review finding #1700: Identified syntax and Python indentation bugs. | Corrected in patch #1701 design. |
-| **2026-11-09 12:49Z** | `gh-acc0-direct-acc0` | Gate 2 Webhook Health Checker patch formulated & tested (#1701). | 404 vs 5xx separation and deduplication verified. |
-| **2026-11-09 14:37Z** | `gh-acc2-peer` / `gh-acc0` | Automated push blocked by `hq-warm.yml` `contents: read` permissions (#1704). | Staged for lead upstream commit. |
-| **2026-11-09 15:05Z** | ACC6 (`mohammadlali0707-stack`) | Commit `d4186eb` merged to `main`: `fix: Gate 2: separate 404 config errors...`. | Control repository patched. |
-| **2026-11-09 ~19:40Z** | ACC6 Control Repo | Gate 2 Run **42692993945** executes with patch `d4186eb`. | Step 3: 404 expected-red; Step 4 creates **Issue #160**. |
-| **2026-11-09 20:12Z** | ACC2 Fork (`lali94m-max`) | Gate 2 Run **42693334316** executes on unpatched fork. | Step 3: 404 fail; Step 4 crashes on `alert` label (code 1). |
+| **2026-11-07 18:36Z** | `gh-acc5-direct-acc5` | Security finding #1615/#1616: Plaintext tokens in n8n. | Webhook deactivated; quarantine initiated. |
+| **2026-11-07 20:46Z** | ACC5 Fork (`kidding602`) | Gate 2 Run `42412660214` fails at Step 3; Step 4 crashes. | Initial dual-failure documented on fork. |
+| **2026-11-08 20:52Z** | ACC8 Fork (`moradzahra85`) | Gate 2 Run `42522282293` fails identically (`92c687d`). | Cross-fork systemic replication confirmed. |
+| **2026-11-09 12:49Z** | `gh-acc0-direct-acc0` | Gate 2 patch formulated & tested (#1701). | 404 vs 5xx separation and deduplication verified. |
+| **2026-11-09 14:37Z** | `gh-acc2-peer` / `gh-acc0` | Automated push blocked by `contents: read` (#1704). | Staged for upstream lead commit. |
+| **2026-11-09 15:05Z** | ACC6 (`mohammadlali0707`) | Commit `d4186eb` merged to `main`. | Control repository patched. |
+| **2026-11-09 19:40Z** | ACC6 Control Repo | Gate 2 Run **42692993945** executes with `d4186eb`. | Step 3: 404 expected-red; Step 4 creates Issue #160. |
+| **2026-11-09 20:12Z** | ACC2 Fork (`lali94m-max`) | Gate 2 Run **42693334316** executes unpatched. | Step 3: 404 fail; Step 4 crashes on `alert` label. |
 
 ---
 
 ## 3. Step Telemetry & Comparative Execution Matrix
 
-| Step # | Step Name | Fork Run `42693334316` (`lali94m-max`) | Control Run `42692993945` (`mohammadlali0707-stack`) | Diagnostic & Behavioral Comparison |
+| Step # | Step Name | Fork Run `42693334316` | Control Run `42692993945` | Diagnostic Comparison |
 | :---: | :--- | :--- | :--- | :--- |
-| **1** | Set up job | **Completed (exit 0)**<br>Runner: ubuntu-latest | **Completed (exit 0)**<br>Runner: ubuntu-latest | Identical environment setup. |
-| **2** | Check GitHub webhooks are correctly configured | **Completed (exit 0)**<br>Inspect skipped (read-only token scope). | **Completed (exit 0)**<br>Inspect skipped (read-only token scope). | Both cleanly bypassed admin-only webhook query. |
-| **3** | Verify webhook endpoint is reachable | **Failed (exit 1)**<br>Probe: HTTP 404.<br>Log: `❌ n8n endpoint unreachable or wrong (HTTP 404)`.<br>No environment metadata exported. | **Failed (exit 1)**<br>Probe: HTTP 404.<br>Log: `❌ n8n endpoint config error (HTTP 404: route not found / workflow inactive)`.<br>`FAIL_TYPE=config_error` exported. | **Primary Failure:** Both detected HTTP 404 (quarantine). Control run categorized error and propagated structured telemetry to Step 4. |
-| **4** | Post alert if webhook health fails | **Crashed (exit 1)**<br>Condition: `if: failure()`.<br>`gh label create` failed 403.<br>`gh issue create --label "alert"` crashed.<br>Stderr: `could not add label: alert not found`.<br>**Result: No issue filed.** | **Completed (exit 0)**<br>Condition: `if: failure()`.<br>Permissions: `issues: write`.<br>Checked existing open issues.<br>Fell back gracefully if label failed.<br>**Result: Issue #160 created cleanly.** | **Secondary Failure:** Fork run crashed under `set -e` on missing label. Control run prevented tool crash and dispatched Issue #160. |
-| **5** | Complete job | **Completed (exit 0)**<br>Post-run runner teardown.<br>**Job Conclusion: failure** | **Completed (exit 0)**<br>Post-run runner teardown.<br>**Job Conclusion: failure** | Step 5 itself completed cleanly (exit 0) in both. Overall job concluded `failure` as expected due to Step 3 probe assertion. |
+| **1** | Set up job | Completed (exit 0) | Completed (exit 0) | Identical runner setup. |
+| **2** | Check webhooks configured | Completed (exit 0) (skipped) | Completed (exit 0) (skipped) | Cleanly bypassed admin-only webhook query. |
+| **3** | Verify webhook reachable | **Failed (exit 1)**; HTTP 404 | **Failed (exit 1)**; HTTP 404; exported `FAIL_TYPE` | Primary Failure: Upstream quarantine. Control exported structured telemetry. |
+| **4** | Post alert on failure | **Crashed (exit 1)**; label not found | **Completed (exit 0)**; created Issue #160 | Secondary Failure: Fork crashed under `set -e`. Control avoided crash via fallback. |
+| **5** | Complete job | Completed (exit 0); Conclusion: `failure` | Completed (exit 0); Conclusion: `failure` | Step 5 exited 0 in both. Job marked failure due to Step 3. |
 
 ---
 
-## 4. Dual-Failure Chain Root Cause Analysis
+## 4. Step-Level Failure Taxonomy
 
-### 4.1 Primary Failure: Upstream Security Quarantine (#1615 / #1616)
-- **Endpoint:** `https://n8n.airboxvip.top/webhook/github-runner-trigger` (returns `HTTP 404 Not Found`).
-- **Mechanism:** Security findings #1615 and #1616 revealed plaintext tokens (Notion PAT, GitHub PATs, Runner Secret) in n8n execution history without HMAC verification or CIDR restrictions. The webhook was deactivated to eliminate replay and credential exploitation risks.
-- **5-Phase Rotation Status:** Phase 1 (Audit) complete; Phase 2 (Clean) underway; Phase 3 (HMAC ingress) pending; Phase 4 (PAT rotation) pending; Phase 5 (Reactivation) pending. Gate 2 Step 3 is expected-red until Phase 5 completes.
-
-### 4.2 Secondary Failure: Fork Runner Alert Tooling Crash under `set -e`
-- **Fork Token Boundary:** Runner `GITHUB_TOKEN` on fork repos lacks `admin` scope. `POST /repos/lali94m-max/agw-workers/labels` returns 403 Forbidden.
-- **Missing Label:** Fork repositories contain only default GitHub labels; label `alert` does not exist.
-- **Client Validation Crash:** `gh issue create ... --label "alert"` aborts with exit code 1 (`could not add label: alert not found`).
-- **Failure Escalation:** Under `set -e`, the unhandled exit code 1 crashed Step 4, causing a telemetry blackout and concealing the primary failure cause.
+| Taxonomy ID | Step Name | Classification Class | Severity | Root Cause Mechanism | Error Code / Telemetry |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `TAX-SETUP-01` | Set up job | Infrastructure Setup | Info | Normal runner environment provisioning. | Exit code 0 |
+| `TAX-HOOK-02` | Check webhooks | Safe Bypass Guard | Info | Token lacks `admin:repo_hook`; emits warning and skips inspect. | Exit code 0 (Skipped) |
+| `TAX-PROBE-03` | Verify reachable | **Primary Failure: Security Quarantine** | High | Endpoint deactivated (#1615/#1616) after credential exposure. | Exit code 1 (HTTP 404) |
+| `TAX-ALERT-04` | Post alert | **Secondary Defect: Tooling Crash** | Critical | Fork token lacks admin; label `alert` missing; `gh issue` exits 1; `set -e` aborts. | Exit code 1 (`label not found`) |
+| `TAX-TEARDOWN-05` | Complete job | Workflow Finalization | Info | Standard runner teardown; aggregates prior step statuses into run `failure`. | Exit code 0 (Run: `failure`) |
 
 ---
 
-## 5. Control Run 42692993945 & Patch `d4186eb` Efficacy
+## 5. Dual-Failure Chain Root Cause Analysis
 
-Patch `d4186eb` resolved the tooling fragility on `mohammadlali0707-stack/agw-workers`:
-1. **Explicit Permissions:** Added `permissions: { issues: write, contents: read }` and configured `GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}`.
-2. **Error Code Categorization:** Step 3 differentiates HTTP 404 (`config_error`) from 5xx server downtime (`server_failure`), exporting `$FAIL_TYPE`, `$FAIL_MESSAGE`, and `$HTTP_STATUS`.
+### 5.1 Primary Upstream Failure: Security Quarantine (#1615 / #1616)
+- **Target Endpoint:** `https://n8n.airboxvip.top/webhook/github-runner-trigger`
+- **Observed Response:** `HTTP 404 Not Found` (`{"code":404,"message":"The requested webhook \"POST github-runner-trigger\" is not registered."}`).
+- **Root Cause:** Security findings #1615 and #1616 revealed plaintext credentials (Notion PAT, GitHub PATs, Runner Secret) in n8n execution data without HMAC or CIDR restrictions. The webhook route was deactivated to eliminate replay and credential exploitation risks.
+- **5-Phase Security Remediation Roadmap:**
+  - *Phase 1 (Audit):* Complete audit of execution logs and credential exposure scope (Completed).
+  - *Phase 2 (Sanitization):* Secure purge and scrubbing of historical n8n execution traces (Completed).
+  - *Phase 3 (HMAC Protection):* Implement webhook payload HMAC SHA-256 signature verification on ingress (In Progress).
+  - *Phase 4 (PAT Rotation):* Invalidate and rotate all exposed Notion PATs, GitHub PATs, and Runner Secrets (Pending).
+  - *Phase 5 (Reactivation):* Reactivate production webhook endpoint `/webhook/github-runner-trigger` (Pending).
+- **Classification:** Step 3 reachability failure is the expected security baseline until Phase 5 completes.
+
+### 5.2 Secondary CI Tooling Failure: Fork Runner Permission Boundary & `set -e` Abort
+- **Fork Token Permission Boundary:** Standard GitHub Actions runners on fork repositories execute with `GITHUB_TOKEN` restricted to repository read permissions (`contents: read`). Fork tokens lack repository administrative privileges.
+- **Label Creation Rejection:** The script executes `gh label create alert ...`. The GitHub API rejects this with `HTTP 403 Forbidden` (`Resource not accessible by personal access token`).
+- **Missing Label Entity:** Fork repositories only possess GitHub default labels; label `alert` does not exist.
+- **Client-Side CLI Abort:** The command `gh issue create ... --label "alert"` terminates with exit code 1 (`could not add label: alert not found`).
+- **Shell Execution Crash:** Under `set -e`, the non-zero return code terminates Step 4 immediately, producing a false CI tooling failure, suppressing alert dispatch, and causing an informational blackout.
+
+---
+
+## 6. Control Run 42692993945 & Patch `d4186eb` Efficacy
+
+Patch `d4186eb` resolved tooling fragility on `mohammadlali0707-stack/agw-workers`:
+1. **HTTP Status Differentiation:** Separated HTTP 404 configuration errors (`config_error`) from 5xx server downtime (`server_failure`), exporting `$FAIL_TYPE` to `$GITHUB_ENV`.
+2. **CWE-78 Command Injection Immunity:** Used a Python payload generator writing to `/tmp/issue_body.md` via environment variables, eliminating shell string interpolation.
 3. **Resilient Two-Tier Fallback:**
    ```bash
    gh issue create --repo "$REPO" --title "$ISSUE_TITLE" --body-file /tmp/issue_body.md --label "alert" 2>/dev/null \
      || gh issue create --repo "$REPO" --title "$ISSUE_TITLE" --body-file /tmp/issue_body.md
    ```
-   If label addition fails, the issue is created cleanly without labels.
-4. **Deduplication:** Standardized `$ISSUE_TITLE` (`🚨 Webhook Health Gate Failed`). Existing open issues receive an update comment via `gh issue comment` instead of duplicate issue creation.
-5. **Issue #160 Created:** In run 42692993945, Step 4 completed with exit code 0 and filed **Issue #160** (`🚨 Webhook Health Gate Failed`), confirming patch efficacy.
+4. **Issue Deduplication:** Queries open issues matching `$ISSUE_TITLE` and comments on existing issues.
+5. **Verified Control Outcome:** Step 4 completed cleanly (exit 0) and created **Issue #160** (`🚨 Webhook Health Gate Failed`).
 
 ---
 
-## 6. Fork Fleet Remediation & Upstream Synchronization
+## 7. Remediation Recommendations & Fork Fleet Resilience
 
-### 6.1 Replication Barrier
-Fork `lali94m-max` remained unpatched because runner workflows (`hq-warm.yml`) operate under `contents: read` (#1704). Direct automated git pushes fail with HTTP 403.
+### 7.1 Workflow Hardening (Issue #161 Patch)
+1. **Step Failure Isolation (`continue-on-error: true`):** Add `continue-on-error: true` to Step 4 so notification failures never crash the workflow.
+2. **Explicit Permissions:** Standardize job permissions: `{ contents: read, issues: write }`.
+3. **Fork Secret Scope Caveat & Fallback Guard:** Fork runners **do not inherit** control repo secrets (`ACC6_PAT`). In forks, `${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}` evaluates strictly to the restricted fork `GITHUB_TOKEN`. On repositories where issues are disabled or tokens are read-only, `gh issue create` returns non-zero. A final warning guard prevents `set -e` aborts:
+   ```bash
+   gh issue create --repo "$REPO" --title "$ISSUE_TITLE" --body-file /tmp/issue_body.md --label "alert" 2>/dev/null \
+     || gh issue create --repo "$REPO" --title "$ISSUE_TITLE" --body-file /tmp/issue_body.md 2>/dev/null \
+     || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient permissions)"
+   ```
 
-### 6.2 Actionable Upstream Synchronization Steps
-To synchronize `lali94m-max/agw-workers` and all fleet forks with patch `d4186eb`:
-
-```bash
-# 1. Add upstream control repository remote and fetch main
-git remote add upstream https://github.com/mohammadlali0707-stack/agw-workers.git 2>/dev/null || true
-git fetch upstream main
-
-# 2. Rebase / fast-forward local main to ingest patch d4186eb
-git rebase upstream/main
-
-# 3. Push to fork using account-specific write PAT (e.g. ACC2_PAT for lali94m-max)
-git remote set-url origin https://x-access-token:${ACC2_PAT}@github.com/lali94m-max/agw-workers.git
-git push origin main
-```
-
-### 6.3 Fleet Rollout Checklist
-- [x] Control repo `mohammadlali0707-stack` running `d4186eb` (Issue #160 verified).
-- [ ] Propagate to ACC2 (`lali94m-max`) via fast-forward merge and `ACC2_PAT`.
-- [ ] Propagate to ACC1 (`momonakikugava-pixel`), ACC3 (`ngocgminh5-debug`), ACC4 (`hmmletssee7-design`), ACC5 (`kidding602`), ACC7 (`mohammad97okk`), ACC8 (`moradzahra85-png`) via `Tools/sync_agy_files_to_forks.py`.
+### 7.2 Actionable Fleet Synchronization Guidance
+To eliminate the secondary tooling crash fleet-wide during the ongoing quarantine:
+1. **Sync Upstream Patch:** Sync `d4186eb` and the resilience patch to all worker forks (`lali94m-max`, `kidding602`, `hmmletssee7-design`, `momonakikugava-pixel`, `ngocgminh5-debug`, `moradzahra85-png`) via `Tools/sync_agy_files_to_forks.py`.
+2. **Manual Sync Command for Fork Owners:**
+   ```bash
+   git remote add upstream https://github.com/mohammadlali0707-stack/agw-workers.git 2>/dev/null || true
+   git fetch upstream main && git rebase upstream/main
+   git push origin main
+   ```
 
 ---
 
-## 7. Conclusions & Sign-off
+## 8. Conclusions & Sign-off
 
-- **Diagnosis:** Fork run 42693334316 failure was definitively confirmed as a dual failure: primary HTTP 404 security quarantine (#1615/#1616) followed by secondary Step 4 alert crash on missing `alert` label under `set -e`.
-- **Validation:** Control run 42692993945 validated that patch `d4186eb` prevents the tool crash and dispatches Issue #160.
+- **Diagnosis:** Fork run 42693334316 failure is confirmed as a dual failure: primary expected upstream HTTP 404 security quarantine (#1615/#1616) followed by secondary Step 4 alert tooling crash under `set -e`.
+- **Validation:** Control run 42692993945 proved patch `d4186eb` prevents the tool crash and dispatches Issue #160.
 - **Sign-off:** Approved by `agw-ACC2-w02`. Ready for fleet-wide sync.
