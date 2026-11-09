@@ -1,10 +1,10 @@
-"""Two hard-capped website comparisons. No cookie writeback and no secret output."""
+"""Prove whether a same-chat resend recovers Gemini's transient error card. No secrets."""
 import json, os, signal, subprocess, sys, time
-from urllib.parse import urlparse
 
 OUT = "/tmp/out"
 os.makedirs(OUT, exist_ok=True)
 CASE = os.environ.get("CASE", "")
+ERROR_PHRASE = b"I encountered an error"
 
 def write(path, obj):
     with open(path, "w") as f:
@@ -15,9 +15,9 @@ def child():
     from gemini_webapi import GeminiClient
     from gemini_webapi.client import REQ_OVERRIDES
     from curl_cffi.requests import AsyncSession
-    marks = []
-    orig_request = AsyncSession.request
-    orig_stream = AsyncSession.stream
+    flags = {"bytes": 0, "card": False, "error_phrase": False, "statuses": []}
+    tail = b""
+    orig_request, orig_stream = AsyncSession.request, AsyncSession.stream
 
     async def request(self, method, url, *a, **kw):
         if os.environ.get("GWEB_PROXY"):
@@ -32,10 +32,25 @@ def child():
         class Wrapped:
             async def __aenter__(self_inner):
                 resp = await cm.__aenter__()
-                try:
-                    marks.append(urlparse(str(getattr(resp, "url", url))).netloc + ":" + str(getattr(resp, "status_code", "")))
-                except Exception:
-                    marks.append("status-unreadable")
+                flags["statuses"].append(str(getattr(resp, "status_code", "")))
+                orig = resp.aiter_content
+
+                def aiter_content(*aa, **kk):
+                    async def gen():
+                        nonlocal tail
+                        async for chunk in orig(*aa, **kk):
+                            if isinstance(chunk, str):
+                                chunk = chunk.encode("utf-8", "replace")
+                            flags["bytes"] += len(chunk)
+                            tail = (tail + chunk)[-160:]
+                            if b"card_content" in tail:
+                                flags["card"] = True
+                            if ERROR_PHRASE in tail:
+                                flags["error_phrase"] = True
+                            yield chunk
+                    return gen()
+
+                resp.aiter_content = aiter_content
                 return resp
 
             async def __aexit__(self_inner, *exc):
@@ -45,91 +60,93 @@ def child():
 
     AsyncSession.request = request
     AsyncSession.stream = stream
-    state = {"stage": "credentials", "ok": False}
-    start = time.monotonic()
+    state = {"ok": False, "attempts": []}
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(124))
+    signal.signal(signal.SIGALRM, lambda *_: os._exit(124))
+    signal.alarm(75)
 
-    def finish(ok, **kw):
-        state.update(ok=ok, stage=state["stage"], elapsed_s=round(time.monotonic() - start, 1), statuses=marks[-4:], **kw)
-        write(OUT + "/case-" + CASE + ".json", state)
-        return state
+    def snap(name, answer, started, chat):
+        state["attempts"].append({
+            "name": name,
+            "elapsed_s": round(time.monotonic() - started, 1),
+            "exact_ok": answer == "OK",
+            "answer_len": len(answer),
+            "error_phrase": flags["error_phrase"],
+            "card": flags["card"],
+            "bytes": flags["bytes"],
+            "statuses": flags["statuses"][-3:],
+            "has_cid": bool(getattr(chat, "cid", "")),
+        })
+        write(OUT + "/case-retry.json", state)
 
-    def on_term(*_):
-        finish(False, error="killed")
-        os._exit(124)
+    async def once(chat, name):
+        flags.update(bytes=0, card=False, error_phrase=False)
+        flags["statuses"] = []
+        started = time.monotonic()
+        chunks = []
 
-    signal.signal(signal.SIGTERM, on_term)
-    signal.signal(signal.SIGALRM, on_term)
-    signal.alarm(48)
+        async def generate():
+            async for chunk in chat.send_message_stream("Reply exactly OK.", extended_thinking=True):
+                if getattr(chunk, "text_delta", None):
+                    chunks.append(chunk.text_delta)
+            return "".join(chunks).strip()
+
+        try:
+            answer = await asyncio.wait_for(generate(), 16)
+        except Exception as e:
+            answer = ""
+            state["last_error"] = type(e).__name__
+        snap(name, answer, started, chat)
+        return answer
 
     async def run():
-        client = None
+        ck = json.loads(os.environ.get("GEMINI_WEB_COOKIES") or "{}")
+        if isinstance(ck, list):
+            ck = {x.get("name"): x.get("value") for x in ck if isinstance(x, dict)}
+        client = GeminiClient(ck["__Secure-1PSID"], ck.get("__Secure-1PSIDTS"), proxy=os.environ.get("GWEB_PROXY") or None, timeout=12, watchdog_timeout=8)
+        for k, v in ck.items():
+            if k not in ("__Secure-1PSID", "__Secure-1PSIDTS") and isinstance(v, str) and v:
+                client._cookies.set(k, v, domain=".google.com", secure=True)
+        await asyncio.wait_for(client.init(timeout=20, auto_refresh=False, watchdog_timeout=8), 25)
+        models = [m for m in (client.list_models() or []) if m.is_available and m.model_number == 1]
+        if not models:
+            state["error"] = "flash-unavailable"
+            write(OUT + "/case-retry.json", state)
+            return
+        REQ_OVERRIDES.set({"inner": {80: 2}, "think": 2})
+        chat = client.start_chat(model=models[0].model_name)
+        answer = await once(chat, "first")
+        if answer != "OK":
+            answer = await once(chat, "same-chat")
+        if answer != "OK":
+            answer = await once(client.start_chat(model=models[0].model_name), "fresh")
+        state["ok"] = answer == "OK"
+        state["exact_ok"] = answer == "OK"
+        write(OUT + "/case-retry.json", state)
+        if answer == "OK":
+            with open(OUT + "/answer.txt", "w") as f:
+                f.write(answer)
         try:
-            ck = json.loads(os.environ.get("GEMINI_WEB_COOKIES") or "{}")
-            if isinstance(ck, list):
-                ck = {x.get("name"): x.get("value") for x in ck if isinstance(x, dict)}
-            client = GeminiClient(ck["__Secure-1PSID"], ck.get("__Secure-1PSIDTS"), proxy=os.environ.get("GWEB_PROXY") or None, timeout=25, watchdog_timeout=15)
-            for k, v in ck.items():
-                if k not in ("__Secure-1PSID", "__Secure-1PSIDTS") and isinstance(v, str) and v:
-                    client._cookies.set(k, v, domain=".google.com", secure=True)
-            state["stage"] = "init"
-            await asyncio.wait_for(client.init(timeout=20, auto_refresh=False, watchdog_timeout=15), 25)
-            state["stage"] = "model"
-            models = [m for m in (client.list_models() or []) if m.is_available and m.model_number == 1]
-            if not models:
-                return finish(False, error="flash-unavailable", account_status=str(getattr(client, "account_status", "unknown")))
-            state["model"] = models[0].model_name
-            state["stage"] = "generate"
-            thinking = CASE == "high"
-            REQ_OVERRIDES.set({"inner": {80: 2}, "think": 2} if thinking else None)
-            chunks = []
-
-            async def generate():
-                async for chunk in client.generate_content_stream("Reply exactly OK.", model=models[0].model_name, extended_thinking=thinking):
-                    if chunk.text_delta:
-                        chunks.append(chunk.text_delta)
-                return "".join(chunks).strip()
-
-            answer = await asyncio.wait_for(generate(), 22)
-            state["stage"] = "complete"
-            exact = answer == "OK"
-            finish(exact, answer_len=len(answer), exact_ok=exact, error=None if exact else "unexpected-answer")
-            if exact:
-                with open(OUT + "/answer-" + CASE + ".txt", "w") as f:
-                    f.write(answer)
-        except Exception as e:
-            finish(False, error=type(e).__name__)
-        finally:
-            if client:
-                try:
-                    await asyncio.wait_for(client.close(), 3)
-                except Exception:
-                    pass
+            await asyncio.wait_for(client.close(), 3)
+        except Exception:
+            pass
 
     asyncio.run(run())
 
 def parent():
-    env_base = os.environ.copy()
-    env_base["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
-    cases = []
-    for name in ("plain", "high"):
-        env = env_base.copy()
-        env["CASE"] = name
-        t0 = time.monotonic()
-        try:
-            proc = subprocess.run([sys.executable, __file__], env=env, timeout=52)
-            code = proc.returncode
-        except subprocess.TimeoutExpired:
-            code = 124
-        path = OUT + "/case-" + name + ".json"
-        if os.path.exists(path):
-            with open(path) as f:
-                item = json.load(f)
-        else:
-            item = {"ok": False, "stage": "no-result", "error": "missing-case-file"}
-        item["returncode"] = code
-        item["wall_s"] = round(time.monotonic() - t0, 1)
-        cases.append({"case": name, **item})
-    write(OUT + "/result.json", {"ok": all(c.get("exact_ok") for c in cases), "cases": cases, "files": []})
+    env = os.environ.copy()
+    env["CASE"] = "retry"
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run([sys.executable, __file__], env=env, timeout=80)
+        code = proc.returncode
+    except subprocess.TimeoutExpired:
+        code = 124
+    path = OUT + "/case-retry.json"
+    item = json.load(open(path)) if os.path.exists(path) else {"ok": False, "error": "missing-case-file"}
+    item["returncode"] = code
+    item["wall_s"] = round(time.monotonic() - t0, 1)
+    write(OUT + "/result.json", {"ok": bool(item.get("exact_ok")), "files": [], **item})
 
 if CASE:
     child()
