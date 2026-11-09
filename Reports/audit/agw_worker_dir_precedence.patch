@@ -1,0 +1,18 @@
+--- a/.github/workflows/agw-worker.yml
++++ b/.github/workflows/agw-worker.yml
+@@ -508,6 +508,7 @@ jobs:
+               echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+             } > /tmp/agy_output.txt
+           fi
++          mkdir -p "$(dirname "$OUT_PATH")"
+           {
+             echo "##TBS##{\"v\":1,\"probe\":\"agw_worker_effect\",\"status\":\"$([ \"${AGENT_COMMITS:-0}\" -gt 0 ] && echo pass || echo empty)\",\"data\":{\"tag\":\"${RUN_TAG}\",\"commits\":${AGENT_COMMITS:-0},\"files_changed\":${AGENT_FILES:-0},\"checkout\":\"${AGENT_REPO}\"}}"
+             if [ "${AGENT_COMMITS:-0}" -eq 0 ]; then
+@@ -522,7 +523,6 @@ jobs:
+             echo "---"
+             echo ""
+           } > "$OUT_PATH.hdr"
+-          mkdir -p "$(dirname "$OUT_PATH")"
+           cat "$OUT_PATH.hdr" /tmp/agy_output.txt > "$OUT_PATH"
+           rm -f "$OUT_PATH.hdr"
+           git add "$OUT_PATH"
