@@ -1,85 +1,30 @@
 --- a/.github/workflows/gate-webhook-health.yml
 +++ b/.github/workflows/gate-webhook-health.yml
-@@ -9,6 +9,8 @@
- jobs:
+@@ -10,8 +10,8 @@ jobs:
    webhook-health:
      runs-on: ubuntu-latest
-+    permissions:
+     permissions:
+-      issues: write
+       contents: read
 +      issues: write
      env:
        # Reading repos/{repo}/hooks needs ADMIN on the repo. GITHUB_TOKEN has no
        # webhook permission at all -- there is no `permissions:` key that grants
-@@ -143,6 +145,7 @@
+@@ -165,6 +165,7 @@ jobs:
  
        - name: Post alert if webhook health fails
          if: failure()
 +        continue-on-error: true
-         run: |
-           # The alert itself was broken: `--label alert` on a repo with no such
-           # label makes `gh issue create` exit 1, so a real webhook failure
-@@ -155,21 +158,51 @@
-             --color B60205 \
-             --description "Automated gate failure needing a human" 2>/dev/null \
-             || echo "label 'alert' already exists (or cannot be created); continuing"
--          gh issue create \
-+
-+          export ISSUE_TITLE="🚨 Webhook Health Gate Failed"
-+          EXISTING_ISSUE=$(gh issue list \
-             --repo "$GITHUB_REPOSITORY" \
--            --title "🚨 Webhook Health Gate Failed: $(date -u '+%Y-%m-%d %H:%M UTC')" \
--            --body "## Webhook Health Check Failed
-+            --state open \
-+            --json number,title \
-+            --jq '.[] | select(.title == env.ISSUE_TITLE) | .number' 2>/dev/null | head -n 1 || true)
-+
-+          if [ -n "$EXISTING_ISSUE" ] && [ "$EXISTING_ISSUE" != "null" ]; then
-+            echo "::notice::Open alert issue #${EXISTING_ISSUE} already exists; skipping duplicate dispatch"
-+            exit 0
-+          fi
-+
-+          ISSUE_BODY="## Webhook Health Check Failed
-+
-+The automated webhook health gate detected a problem.
- 
--          The automated webhook health gate detected a problem.
-+**Run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-+**Timestamp:** $(date -u '+%Y-%m-%d %H:%M UTC')
- 
--          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-+**Common causes:**
-+- Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
-+- Missing required events (issues, issue_comment, workflow_job)
-+- n8n server is down
-+- Webhook was accidentally deleted or deactivated
- 
--          **Common causes:**
--          - Webhook URL points to \`/webhook-test/\` instead of \`/webhook/\`
--          - Missing required events (issues, issue_comment, workflow_job)
--          - n8n server is down
--          - Webhook was accidentally deleted or deactivated
--
--          **Fix:** Review and update the webhook at:
--          https://github.com/${{ github.repository }}/settings/hooks" \
--            --label "alert"
-+**Fix:** Review and update the webhook at:
-+https://github.com/${GITHUB_REPOSITORY}/settings/hooks"
-+
-+          # Truncation guard to respect GitHub 65,536-character issue body limit
-+          if [ "${#ISSUE_BODY}" -gt 65000 ]; then
-+            echo "::warning::Issue body exceeds size limit; truncating to stay within 65,536 characters"
-+            ISSUE_BODY="${ISSUE_BODY:0:64000}
-+
-+... [Output truncated to stay within GitHub 65,536-character limit]"
-+          fi
-+
-+          if ! gh issue create \
-+            --repo "$GITHUB_REPOSITORY" \
-+            --title "$ISSUE_TITLE" \
-+            --body "$ISSUE_BODY" \
-+            --label "alert"; then
-+            echo "::warning::Failed to create issue with '--label alert'; falling back to unlabelled issue creation"
-+            gh issue create \
-+              --repo "$GITHUB_REPOSITORY" \
-+              --title "$ISSUE_TITLE" \
-+              --body "$ISSUE_BODY"
-+          fi
+         env:
+           GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
+           EXPECTED_URL: ${{ env.EXPECTED_URL }}
+@@ -263,7 +264,8 @@ jobs:
+               || gh issue create \
+                 --repo "$REPO" \
+                 --title "$ISSUE_TITLE" \
+-                --body-file /tmp/issue_body.md
++                --body-file /tmp/issue_body.md 2>/dev/null \
++              || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"
+           else
+             echo "Existing open issue found (#$EXISTING_ISSUE). Updating with a comment instead of creating duplicate..."
+             gh issue comment "$EXISTING_ISSUE" \
