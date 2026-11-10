@@ -1,8 +1,8 @@
 diff --git a/.github/workflows/relay-deploy-file.yml b/.github/workflows/relay-deploy-file.yml
-index fc9a0ae..713ddbc 100644
+index fc9a0ae..b960484 100644
 --- a/.github/workflows/relay-deploy-file.yml
 +++ b/.github/workflows/relay-deploy-file.yml
-@@ -5,8 +5,17 @@ on:
+@@ -5,13 +5,26 @@ on:
    push:
      branches: [main]
      paths:
@@ -20,7 +20,16 @@ index fc9a0ae..713ddbc 100644
 +      - 'README.md'
  
  permissions:
-@@ -45,6 +54,10 @@ jobs:
+   contents: read
+ 
++concurrency:
++  group: relay-deploy-file
++  cancel-in-progress: false
++
+ jobs:
+   deploy:
+     runs-on: ubuntu-latest  # self-hosted disabled, owner instruction 2026-09-19: runner-api.py fleet has no free capacity/API for this repo -- back to GitHub-hosted until further notice
+@@ -45,6 +58,10 @@ jobs:
              ".github/workflows/agy-issue-bot.yml"
              ".github/workflows/agw-worker.yml"
              ".github/workflows/agy-lead-plan.yml"
@@ -31,3 +40,90 @@ index fc9a0ae..713ddbc 100644
              "media/README.md"
              "README.md"
            )
+@@ -58,6 +75,8 @@ jobs:
+             [7]="mohammad97okk"
+             [8]="moradzahra85-png"
+           )
++          CONTROL_DIR="$PWD"
++          FAILED_ACCOUNTS=()
+           for IDX in 0 2 4 5 8; do   # owner 2026-10-24: ACC1/3/7 out of every rotation
+             OWNER="${OWNERS[$IDX]}"
+             PAT_NAME="ACC${IDX}_PAT"
+@@ -65,7 +84,8 @@ jobs:
+             echo "== account $IDX: $OWNER/agw-workers =="
+             if [ -z "$TOKEN" ]; then
+               echo "::error::no PAT for account $IDX ($OWNER)"
+-              exit 1
++              FAILED_ACCOUNTS+=("$OWNER")
++              continue
+             fi
+             AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+             WORKDIR=$(mktemp -d)
+@@ -73,13 +93,14 @@ jobs:
+                 "https://github.com/${OWNER}/agw-workers.git" "$WORKDIR"; then
+               echo "::error::clone failed for $OWNER/agw-workers"
+               rm -rf "$WORKDIR"
+-              exit 1
++              FAILED_ACCOUNTS+=("$OWNER")
++              continue
+             fi
+             for F in "${FILES[@]}"; do
+               mkdir -p "$WORKDIR/$(dirname "$F")"
+               cp "$F" "$WORKDIR/$F"
+             done
+-            (
++            if ! (
+               cd "$WORKDIR"
+               git config user.name "media-request-bot-deploy"
+               git config user.email "actions@users.noreply.github.com"
+@@ -88,9 +109,48 @@ jobs:
+                 echo "no changes for $OWNER, skipping push"
+               else
+                 git commit -m "Deploy shared files from mohammadlali0707-stack/agw-workers (relay)"
+-                git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin HEAD
++                MAX_RETRIES=5
++                PUSHED=0
++                for ATTEMPT in $(seq 1 $MAX_RETRIES); do
++                  if git -c http.https://github.com/.extraHeader="$AUTH_HEADER" push origin HEAD; then
++                    echo "Successfully pushed to $OWNER/agw-workers (attempt $ATTEMPT)"
++                    PUSHED=1
++                    break
++                  fi
++                  echo "::warning::Push attempt $ATTEMPT failed for $OWNER/agw-workers (ref lock or conflict)"
++                  if [ "$ATTEMPT" -lt "$MAX_RETRIES" ]; then
++                    JITTER=$(awk 'BEGIN{srand(); printf "%.2f", 0.5 + rand() * 2.0}')
++                    SLEEP_SEC=$(awk -v att="$ATTEMPT" -v jit="$JITTER" 'BEGIN{printf "%.2f", (1.5 * att) + jit}')
++                    echo "Waiting ${SLEEP_SEC}s before retry..."
++                    sleep "$SLEEP_SEC"
++                    git -c http.https://github.com/.extraHeader="$AUTH_HEADER" fetch origin main || true
++                    git reset --mixed origin/main || true
++                    for RF in "${FILES[@]}"; do
++                      cp "$CONTROL_DIR/$RF" "$RF"
++                      git add "$RF"
++                    done
++                    if git diff --cached --quiet; then
++                      echo "No changes remaining for $OWNER after remote update"
++                      PUSHED=1
++                      break
++                    fi
++                    git commit -m "Deploy shared files from mohammadlali0707-stack/agw-workers (relay)" || true
++                  fi
++                done
++                if [ "$PUSHED" -ne 1 ]; then
++                  echo "::error::Exhausted all $MAX_RETRIES push attempts for $OWNER/agw-workers"
++                  exit 2
++                fi
+                 echo "pushed to $OWNER/agw-workers"
+               fi
+-            )
++            ); then
++              FAILED_ACCOUNTS+=("$OWNER")
++            fi
+             rm -rf "$WORKDIR"
+           done
++
++          if [ "${#FAILED_ACCOUNTS[@]}" -gt 0 ]; then
++            echo "::error::Relay deployment failed for the following accounts: ${FAILED_ACCOUNTS[*]}"
++            exit 1
++          fi
++          echo "Relay deployment completed successfully for all active accounts."
