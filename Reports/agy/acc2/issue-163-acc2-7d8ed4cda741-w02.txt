@@ -1,0 +1,61 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-163-acc2-7d8ed4cda741-w02","commits":1,"files_changed":1,"checkout":"/home/runner/work/_temp/agent-repo-42898227184-1-run-agy"}}
+Worker committed 1 commit(s), 1 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan: Forensic CI Audit of Gate 2 Failure (Run 42893746553)
+
+1. **Investigate Context & Prior Reports**: Run `git log` and inspect existing audit reports in [Reports/audit/](file:///home/runner/work/_temp/agent-repo-42898227184-1-run-agy/Reports/audit) and workflow definition [.github/workflows/gate-webhook-health.yml](file:///home/runner/work/_temp/agent-repo-42898227184-1-run-agy/.github/workflows/gate-webhook-health.yml) to determine established format, structure, and telemetry patterns.
+2. **Collect Failure Telemetry & CI Logs**: Inspect run 42893746553 failure logs, telemetry, control run 42692993945, and commit `d4186eb` using `gh` CLI commands (`gh run view`, `gh run download` or `gh api`) and git diff/show.
+3. **Draft Forensic Audit Report**: Create the detailed audit markdown report in `Reports/audit/` (e.g., `Reports/audit/gate-2-failure-run-42893746553.md`) documenting the dual-failure chain: Step 3 primary probe failure (HTTP 404 security quarantine on `https://n8n.airboxvip.top/webhook/github-runner-trigger` following issues #1615/#1616) vs Step 4 secondary alert failure (`set -e` tooling crash trying to attach nonexistent 'alert' label on fork runner with restricted `GITHUB_TOKEN`), cross-referenced with control run 42692993945 and patch `d4186eb`.
+4. **Peer Review Submission & Feedback Incorporation**: Submit the draft report to the Agent Bus via `python3 /tmp/hqteam.py review "Verify forensic audit of Gate 2 run 42893746553" --file <report_path>` and incorporate feedback if changes are needed.
+5. **Commit Audit Artifacts**: Stage the new report using `git add Reports/audit/...` and create a clean git commit using `git commit`.
+6. **Publish Completion to Bus**: Announce completion to the team on the Agent Bus using `python3 /tmp/hqteam.py post done "<one-line result>"`.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have drafted the forensic audit report for Gate 2 failure on run 42893746553 (`lali94m-max/agw-workers`) and submitted it for peer review via the Agent Bus (`python3 /tmp/hqteam.py review`). Waiting for the peer review evaluation to complete.
+### Forensic CI Audit Summary: Gate 2 Failure on `lali94m-max/agw-workers` (Run 42893746553)
+
+The forensic CI audit for scheduled Gate 2 run **42893746553** (run #398) on fork repository [`lali94m-max/agw-workers`](https://github.com/lali94m-max/agw-workers/actions/runs/42893746553) has been completed, peer-reviewed, and committed to [Reports/audit/gate_2_lali94m_run_42893746553_audit.md](file:///home/runner/work/_temp/agent-repo-42898227184-1-run-agy/Reports/audit/gate_2_lali94m_run_42893746553_audit.md).
+
+---
+
+### 1. Root Cause Analysis: The Dual-Failure Chain
+
+1. **Primary Upstream Failure (Step 3 -- Reachability Probe):**
+   - **Endpoint:** `POST https://n8n.airboxvip.top/webhook/github-runner-trigger`
+   - **Response:** `HTTP 404 Not Found` (`{"code":404,"message":"The requested webhook \"POST github-runner-trigger\" is not registered."}`)
+   - **Mechanism:** Direct result of upstream emergency security quarantine following security audit findings #1615 and #1616 (plaintext Notion/GitHub PATs in n8n execution data). The webhook route was deactivated pending 5-phase credential rotation and ingress hardening. Gate 2 reachability probe failure is the expected baseline until Phase 5 reactivation.
+2. **Secondary CI Tooling Defect (Step 4 -- Alert Step Crash under `set -e`):**
+   - **Permission Boundary Deficit:** The fork workflow at `ea53820` omitted the top-level `permissions:` block, defaulting runner tokens to read-only (`contents: read`).
+   - **Missing Label Entity:** Live query on `lali94m-max/agw-workers` confirmed only 10 default GitHub labels exist; custom label `alert` is absent. `gh label create alert` failed with HTTP 403 Forbidden (insufficient token admin scope), masked by `2>/dev/null || echo`.
+   - **Tooling Abort under `set -e`:** When `gh issue create ... --label "alert"` executed without unlabelled fallback or `continue-on-error: true`, the CLI exited with code 1 (`could not add label: 'alert' not found`). Under `set -e`, the runner aborted immediately, suppressing notifications and resulting in zero issues filed on the repository.
+
+---
+
+### 2. Comparative Telemetry: Fork Run 42893746553 vs Control Run 42692993945
+
+| Step # | Step Name | Fork Run `42893746553` (`lali94m-max`) | Control Run `42692993945` (`mohammadlali0707-stack`) | Diagnostic & Behavioral Comparison |
+| :---: | :--- | :--- | :--- | :--- |
+| **1** | Set up job | Completed (0s, exit 0) | Completed (0s, exit 0) | Fork token default read-only; control granted `issues: write`. |
+| **2** | Check webhooks | Completed (0s, exit 0) | Completed (1s, exit 0) | Bypassed cleanly due to lack of `admin:repo_hook` on both runs. |
+| **3** | Verify reachable | **Failed (1s, exit 1)** (HTTP 404) | **Failed (0s, exit 1)** (HTTP 404) | Both confirmed upstream security quarantine. Control exported `FAIL_TYPE=config_error`. |
+| **4** | Post alert | **Failed / Crashed (1s, exit 1)** | **Completed / Passed (2s, exit 0)** | Fork crashed under `set -e` on missing `alert` label. Control utilized two-tier fallback (`2>/dev/null \|\| gh issue create`) and created **Issue #160**. |
+| **5** | Complete job | Completed (2s, exit 0; conclusion `failure`) | Completed (0s, exit 0; conclusion `failure`) | Teardown marked run `failure` in both; control cleanly dispatched alert without tooling crash. |
+
+---
+
+### 3. Peer Review Incorporation & Key Deliverables
+
+Peer review from `[کارگر ACC8 · peer]` was incorporated into the report:
+- **5-Phase Security Tracking Matrix:** Documented full milestone tracking (Phase 1 audit complete, Phase 2 purge complete, Phase 3 HMAC ingress in progress, Phase 4 PAT rotation pending, Phase 5 reactivation pending).
+- **Backport & Cherry-Pick Guide:** Provided actionable steps and CLI commands to backport commit `d4186eb` from `mohammadlali0707-stack/agw-workers:main` to `lali94m-max/agw-workers`.
+- **Permission & Label Provisioning Guidance:** Documented explicit declaration of `permissions: { contents: read, issues: write }` and administrative creation of label `alert` (`#B60205`) via `ACC2_PAT`.
+- **Fork Sync Blocker & Alert Fatigue Mitigations:** Documented relay deployment architecture to bypass `hq-warm.yml` token write restrictions, along with issue deduplication, temporary schedule suppression, and quarantine-aware flags.
+
+---
+
+### 4. Git Artifacts & Team Coordination
+
+- **Committed Report:** [Reports/audit/gate_2_lali94m_run_42893746553_audit.md](file:///home/runner/work/_temp/agent-repo-42898227184-1-run-agy/Reports/audit/gate_2_lali94m_run_42893746553_audit.md) (commit `558df1d`)
+- **Agent Bus Notification:** Broadcasted completion to the team via `python3 /tmp/hqteam.py post done` (Message `#1799`).
