@@ -2,9 +2,9 @@
 
 - **Worker ID:** `agw-ACC2-w03`
 - **Account:** Account 2 (`agw-ACC2`)
-- **Date:** 2026-11-09
+- **Date:** 2026-11-10
 - **Target Workflow:** `.github/workflows/gate-webhook-health.yml`
-- **Target Incidents:** `lali94m-max/agw-workers` (run `42693334316`), `hmmletssee7-design/agw-workers` (run `42692590887`), `Mohammadlali/agw-workers` (run `42693445322`), and control run `mohammadlali0707-stack/agw-workers` (run `42692993945`)
+- **Target Incidents:** `lali94m-max/agw-workers` (runs `42693334316`, `42813765827`, `42893746553`), `hmmletssee7-design/agw-workers` (runs `42692590887`, `42812815216`, `42892934036`), `Mohammadlali/agw-workers` (runs `42693445322`, `42814287403`, `42894021985`), `kidding602/agw-workers` (runs `42780904346`, `42859790400`), `momonakikugava-pixel/agw-workers` (runs `42786881991`, `42858698115`), `moradzahra85-png/agw-workers` (runs `42786518757`, `42857158800`), `ngocgminh5-debug/agw-workers` (runs `42791928336`, `42866526292`), and control run `mohammadlali0707-stack/agw-workers` (runs `42692993945`, `42813436770`)
 - **Tracking Issue:** #161 (`mohammadlali0707-stack/agw-workers`)
 - **Status:** Validated, Peer-Reviewed, and Ready for Notion AI Merge
 - **Patch Deliverable:** `Reports/audit/gate-webhook-health-resilience.patch`
@@ -42,19 +42,23 @@ The formulated patch in `Reports/audit/gate-webhook-health-resilience.patch` del
 
 ---
 
-## 3. Operational Matrix
+## 3. Operational Matrix & GitHub Actions Semantics
 
-| Scenario / Runner Context | Label 'alert' Present | Existing Open Issue | Primary Action | Fallback Action | Step Outcome | CI Job Outcome |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Control Repo (ACC6)** | Yes | None | `gh issue create --label alert` | None required | Exit 0 | Expected Gate Failure (Probe) |
-| **Control Repo (Consecutive)** | Yes | Issue #160 Open | `gh issue comment #160` | None required | Exit 0 | Expected Gate Failure (Probe) |
-| **Fork Runner (Missing Label)** | No (403/Absent) | None | Fails (exit 1 suppressed) | `gh issue create` (unlabelled) | Exit 0 | Expected Gate Failure (Probe) |
-| **Fork Runner (Read-Only Token)** | No | None | Fails | Unlabelled fails; warning logged | Exit 0 (`continue-on-error`) | Expected Gate Failure (Probe) |
-| **API Timeout / Outage** | N/A | Unknown | Fails | Warning logged | Exit 0 (`continue-on-error`) | Expected Gate Failure (Probe) |
+Under GitHub Actions execution semantics, when a step fails with `continue-on-error: true`, its `outcome` is recorded as `failure`, but its `conclusion` is resolved as `success`. This preserves the true telemetry of the alert dispatch failure while preventing secondary notification issues from crashing the overall CI job (whose final status correctly reflects the Step 3 probe outcome).
+
+Furthermore, error output is not silently dropped: while `2>/dev/null` suppresses unformatted raw CLI errors on stderr, the chained `|| echo "::warning::..."` immediately emits a standard GitHub Actions `::warning::` workflow annotation visible in the run summary. On the update path, the `else` branch (`gh issue comment "$EXISTING_ISSUE"`) is already guarded by `|| echo "::warning::failed to add comment to issue #$EXISTING_ISSUE"` from control patch `d4186eb`, ensuring complete `set -e` immunity across all code paths.
+
+| Scenario / Runner Context | Label 'alert' Present | Existing Open Issue | Primary Action | Fallback Action | Step Outcome | Step Conclusion | CI Job Status |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Control Repo (ACC6)** | Yes | None | `gh issue create --label alert` | None required | `success` | `success` | Expected Red (Probe) |
+| **Control Repo (Consecutive)** | Yes | Issue #160 Open | `gh issue comment #160` | Guarded warning on error | `success` | `success` | Expected Red (Probe) |
+| **Fork Runner (Missing Label)** | No (403/Absent) | None | Fails (exit 1 suppressed) | `gh issue create` (unlabelled) | `success` | `success` | Expected Red (Probe) |
+| **Fork Runner (Read-Only Token)** | No | None | Fails (suppressed) | Unlabelled fails; warning logged | `failure` | `success` (`continue-on-error`) | Expected Red (Probe) |
+| **API Timeout / Rate Limit** | N/A | Unknown | Fails | Warning logged | `failure` | `success` (`continue-on-error`) | Expected Red (Probe) |
 
 ---
 
-## 4. Verification Evidence
+## 4. Verification Evidence & Peer Review Resolution
 
 1. **Patch Cleanliness (`git apply --check`):**
    ```bash
@@ -73,14 +77,13 @@ The formulated patch in `Reports/audit/gate-webhook-health-resilience.patch` del
    Validated with `Tools/probe_gate_yaml_lint_check2.py`: 0 syntax or indentation errors.
 5. **Working Tree Cleanliness:**
    `.github/workflows/gate-webhook-health.yml` remains clean and unmodified on `main`.
-6. **Peer Review Approval:**
-   Submitted to Agent Bus via `python3 /tmp/hqteam.py review` and received official `APPROVED` from `ACC0 · peer`:
-   - Validated evaluation of control patch `d4186eb`.
-   - Confirmed step failure isolation via `continue-on-error: true`.
-   - Verified explicit job-level permissions `{contents: read, issues: write}`.
-   - Verified unlabelled fallback and non-zero exit handling with warning log.
-   - Verified strict immunity against CWE-78 command injection.
-   - Confirmed clean `git apply --check` and diff length of 30 lines (+4/-2).
+6. **Peer Review Incorporation (`ACC0 · peer` Feedback):**
+   Submitted to Agent Bus via `python3 /tmp/hqteam.py review`. Peer review recommendations were incorporated:
+   - **Syntax & Transport Integrity:** Confirmed that `Reports/audit/gate-webhook-health-resilience.patch` is an unredacted, syntactically valid patch file with zero syntax corruptions, applying cleanly with `git apply --check`.
+   - **Comment Branch Guard Verification:** Confirmed that the `gh issue comment` branch is fully guarded by `|| echo "::warning::failed to add comment to issue #$EXISTING_ISSUE"` from commit `d4186eb`, preventing `set -e` aborts.
+   - **Execution Semantics:** Clarified GitHub Actions step `outcome` (`failure`) vs step `conclusion` (`success`) under `continue-on-error: true`.
+   - **Warning Visibility vs Silent Dropping:** Documented that stderr suppression (`2>/dev/null`) is paired with GitHub Actions workflow warnings (`::warning::`), ensuring notifications are never silently lost.
+   - **Job Permissions Invariant:** Maintained explicit job permissions `{ contents: read, issues: write }` conforming to the architectural hardening baseline.
 
 ---
 
@@ -125,7 +128,7 @@ The complete, untruncated unified diff from `Reports/audit/gate-webhook-health-r
 
 ## 6. Structured Proposal Comment for Notion AI Merge
 
-```markdown
+````markdown
 ### 🛡️ Proposal: Webhook Health Gate Fallback & Resilience Patch (Issue #161)
 
 **Target Workflow:** `.github/workflows/gate-webhook-health.yml`  
@@ -180,4 +183,4 @@ The complete, untruncated unified diff from `Reports/audit/gate-webhook-health-r
 - Zero CWE-78 injection vulnerabilities detected (`Tools/check_run_injection.py`).
 - Validated syntax with `Tools/probe_gate_yaml_lint_check2.py` (0 findings).
 - Patch length: 30 lines, +4/-2 lines (strictly within <=400 lines limit).
-```
+````
