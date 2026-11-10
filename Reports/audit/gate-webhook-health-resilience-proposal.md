@@ -75,9 +75,23 @@ Furthermore, error output is not silently dropped: while `2>/dev/null` suppresse
    Scanned `.github/workflows/gate-webhook-health.yml` with `Tools/check_run_injection.py` regex `\${{\s*(inputs\.[A-Za-z0-9_.-]+|github\.event\.[A-Za-z0-9_.-]+)`: 0 untrusted expressions detected.
 4. **YAML Linter Validation:**
    Validated with `Tools/probe_gate_yaml_lint_check2.py`: 0 syntax or indentation errors.
-5. **Working Tree Cleanliness:**
+5. **Unit Test Suite Verification (`tests/test_fork_health_resilience.py`):**
+   Executed `python3 -m unittest tests/test_fork_health_resilience.py -v`:
+   - `test_01_patch_resilience_clean_apply`: Clean git apply --check of resilience patch ... ok
+   - `test_02_patch_relay_deploy_clean_apply`: Clean git apply --check of relay deploy patch ... ok
+   - `test_03_zero_direct_workflow_modifications_on_main`: Zero workflow modifications on main ... ok
+   - `test_04_gate2_step3_telemetry_http_404_isolation`: Telemetry HTTP 404 quarantine isolation ... ok
+   - `test_05_gate2_step4_continue_on_error_resilience`: continue-on-error: true insertion on Step 4 ... ok
+   - `test_06_gate2_step4_two_tier_issue_creation_fallback`: Two-tier issue creation fallback with warning guard ... ok
+   - `test_07_audit_fork_workflow_health_all_healthy`: Fork health pass state ... ok
+   - `test_08_audit_fork_workflow_health_unparseable_detection`: Unparseable workflow detection ... ok
+   - `test_09_audit_fork_workflow_health_absent_workflow`: Absent workflow detection ... ok
+   - `test_10_audit_fork_workflow_health_missing_pat`: Missing PAT detection ... ok
+   - `test_11_audit_fork_workflow_health_api_error_handling`: API error handling ... ok
+   *Result:* 11/11 unit tests passed (0 failures, 0 errors in 0.018s).
+6. **Working Tree Cleanliness:**
    `.github/workflows/gate-webhook-health.yml` remains clean and unmodified on `main`.
-6. **Peer Review Incorporation (`ACC0 · peer` Feedback):**
+7. **Peer Review Incorporation (`ACC0 · peer` Feedback):**
    Submitted to Agent Bus via `python3 /tmp/hqteam.py review`. Peer review recommendations were incorporated:
    - **Syntax & Transport Integrity:** Confirmed that `Reports/audit/gate-webhook-health-resilience.patch` is an unredacted, syntactically valid patch file with zero syntax corruptions, applying cleanly with `git apply --check`.
    - **Comment Branch Guard Verification:** Confirmed that the `gh issue comment` branch is fully guarded by `|| echo "::warning::failed to add comment to issue #$EXISTING_ISSUE"` from commit `d4186eb`, preventing `set -e` aborts.
@@ -180,7 +194,9 @@ The complete, untruncated unified diff from `Reports/audit/gate-webhook-health-r
 
 #### Verification Evidence:
 - Clean `git apply --check Reports/audit/gate-webhook-health-resilience.patch` (exit code 0 against main).
+- 11/11 unit tests pass (`python3 -m unittest tests/test_fork_health_resilience.py -v` in 0.018s).
 - Zero CWE-78 injection vulnerabilities detected (`Tools/check_run_injection.py`).
 - Validated syntax with `Tools/probe_gate_yaml_lint_check2.py` (0 findings).
 - Patch length: 30 lines, +4/-2 lines (strictly within <=400 lines limit).
+- Zero workflow files modified directly on main (`git status --porcelain .github/workflows/`).
 ````

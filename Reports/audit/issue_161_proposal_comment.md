@@ -49,6 +49,8 @@
 
 #### Verification Evidence:
 - Clean `git apply --check Reports/audit/gate-webhook-health-resilience.patch` (exit code 0 against main).
+- 11/11 unit tests pass (`python3 -m unittest tests/test_fork_health_resilience.py -v` in 0.018s).
 - Zero CWE-78 injection vulnerabilities detected (`Tools/check_run_injection.py`).
 - Validated syntax with `Tools/probe_gate_yaml_lint_check2.py` (0 findings).
 - Patch length: 30 lines, +4/-2 lines (strictly within <=400 lines limit).
+- Zero workflow files modified directly on main (`git status --porcelain .github/workflows/`).
