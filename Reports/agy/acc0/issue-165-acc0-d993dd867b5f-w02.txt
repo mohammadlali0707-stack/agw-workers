@@ -1,0 +1,51 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-165-acc0-d993dd867b5f-w02","commits":1,"files_changed":1,"checkout":"/home/runner/work/_temp/agent-repo-43111449943-1-run-agy"}}
+Worker committed 1 commit(s), 1 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Inspect Repository State and Existing Artifacts**: Use `run_command` (`git log`, `git status`) and `view_file` to review `Reports/audit/quarantined_fork_ci_execution_audit.md`, `Tools/audit_fork_run_logs.py`, and `Tools/audit_fork_workflow_health.py` to examine the forensic data, recent commits (e.g. `d0024ae`), and test configurations.
+2. **Conduct Forensic Audit Analysis**: Use `run_command` with `python3` or `gh` CLI if needed to analyze execution run `43100663888` on quarantined fork ACC3 (`ngocgminh5-debug/agw-workers`), investigating rogue cron recurrence on retired accounts, companion gates (Gate 1, Gate 3, Gate 4 vs `gate-webhook-health.yml`), token scope limits (`GITHUB_TOKEN` read-only), Step 4 label failure points, and the untruncated 40-character commit hash `0a42f5ccbaa54db3c64a8e1219513a18d1e5415c`. Verify that no files under `.github/workflows/` are modified.
+3. **Verify and Refine Report & Run Tests**: Inspect and update `Reports/audit/quarantined_fork_ci_execution_audit.md` to ensure it is fully detailed, un-truncated, within character limits (<= 11.5k chars), and contains actionable REST API disablement steps. Run test suites (such as `pytest tests/test_fork_health_resilience.py`) using `run_command` to verify 11/11 tests pass.
+4. **Peer Review, Commit, and Final Post**: Submit the report for peer review via `python3 /tmp/hqteam.py review`, incorporate any feedback received, stage and commit the changes (`git add Reports/audit/quarantined_fork_ci_execution_audit.md` and `git commit`), and announce completion on the team bus using `python3 /tmp/hqteam.py post done`.
+
+Now let's start with Step 1: inspect the repository state and git log.
+I have launched the check for `hqteam.py review` and am waiting for the command output.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have submitted `Reports/audit/quarantined_fork_ci_execution_audit.md` for peer review via the Agent Bus (`hqteam.py review`) and am waiting for the reviewer's feedback.
+I am waiting for the peer reviewer on the Agent Bus to complete their review of `Reports/audit/quarantined_fork_ci_execution_audit.md`.
+### Forensic CI Execution Audit Summary: Quarantined Accounts (ACC3)
+
+A forensic investigation into scheduled CI workflow execution patterns on quarantined accounts has been completed, focusing on **ACC3** (`ngocgminh5-debug/agw-workers`) and scheduled incident run **`43100663888`**.
+
+#### 1. Executive Summary & Root Cause Analysis
+- **Incident Target:** `ngocgminh5-debug/agw-workers`, Run `43100663888` (`Gate 2 -- Webhook Health Checker`, Scheduled Run #400).
+- **Target Commit SHA:** [`0a42f5ccbaa54db3c64a8e1219513a18d1e5415c`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/Reports/audit/quarantined_fork_ci_execution_audit.md) (*untruncated 40-character SHA*).
+- **Dual-Failure Chain:**
+  1. **Primary Probe Failure (Step 3):** POST to `https://n8n.airboxvip.top/webhook/github-runner-trigger` returned **HTTP 404 Not Found** due to security quarantine (#1615/#1616) pending 5-phase credential rotation.
+  2. **Secondary Alert Script Crash (Step 4):** Workflow omitted explicit `permissions:`, defaulting `GITHUB_TOKEN` to read-only (`contents: read`) without inheriting upstream secrets (`ACC6_PAT`). Label `alert` did not exist (only 10 default labels present), `gh label create` failed (HTTP 403 Forbidden), and `gh issue create ... --label "alert"` aborted under `set -e` without filing an alert.
+
+#### 2. Rogue Cron Recurrence vs Companion Gates
+- **Trigger Divergence:**
+  - **Gate 2** ([`gate-webhook-health.yml`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/.github/workflows/gate-webhook-health.yml)): Contains `schedule: - cron: '0 * * * *'`, executing 24 times/day per fork (2,160 runs/month across quarantined accounts ACC1, ACC3, ACC7).
+  - **Companion Gates:** Gate 1 ([`gate-yaml-lint.yml`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/.github/workflows/gate-yaml-lint.yml)), Gate 3 ([`gate-runner-deps.yml`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/.github/workflows/gate-runner-deps.yml)), and Gate 4 ([`gate-runs-on-policy.yml`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/.github/workflows/gate-runs-on-policy.yml)) trigger only on `push`, `pull_request`, or `workflow_call`/`workflow_dispatch` and remain completely dormant on retired forks.
+- **The Inactivity Trap:** GitHub Actions auto-disables scheduled workflows after 60 days of inactivity, but sync scripts ([`Tools/sync_agy_files_to_forks.py`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/Tools/sync_agy_files_to_forks.py)) pushing commits continually reset GitHub's 60-day inactivity timer to zero, keeping rogue cron schedules active indefinitely.
+
+#### 3. Verification & Compliance
+- **Zero Direct Workflow Modifications:** 0 files modified under `.github/workflows/` on `main`.
+- **Unit Test Coverage:** [`tests/test_fork_health_resilience.py`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/tests/test_fork_health_resilience.py) verified with **11/11 passing tests**.
+- **Patch Verification:** Clean offline dry-runs (`git apply --check`) confirmed for [`gate-webhook-health-resilience.patch`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch).
+
+#### 4. Actionable Remediations Documented
+- **Tier 1 (REST API Disablement):** `gh api -X PUT /repos/ngocgminh5-debug/agw-workers/actions/workflows/gate-webhook-health.yml/disable` (halts crons without git commits).
+- **Tier 2 (Actions Freeze):** `gh api -X PUT /repos/ngocgminh5-debug/agw-workers/actions/permissions -f enabled=false`.
+- **Tier 3 (Sync Tool Exclusion):** Exclude quarantined accounts (`1, 3, 7`) in `Tools/sync_agy_files_to_forks.py` to allow GitHub's 60-day auto-disable to engage.
+- **Rejection of `vars.CI_DISABLED`:** Evaluated and rejected due to VM queue pre-allocation and violation of the zero-workflow-edits constraint.
+
+#### 5. Deliverables & Peer Review
+- **Audit Artifact:** [`Reports/audit/quarantined_fork_ci_execution_audit.md`](file:///home/runner/work/_temp/agent-repo-43111449943-1-run-agy/Reports/audit/quarantined_fork_ci_execution_audit.md) (11,495 chars, un-truncated).
+- **Peer Review:** Reviewed and **APPROVED** by `[کارگر ACC2 · peer]` on the Agent Bus.
+- **Git Commit:** `12b019c` (`docs(audit): forensic audit of scheduled CI execution on quarantined accounts (ACC3 run 43100663888)`).
+- **Team Bus:** Post `#2033` published via `hqteam.py post done`.
