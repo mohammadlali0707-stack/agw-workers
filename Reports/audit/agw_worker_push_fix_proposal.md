@@ -70,13 +70,37 @@ Moving `mkdir -p "$(dirname "$OUT_PATH")"` so that it strictly precedes the `{ .
    .github/workflows/agw-worker.yml | 2 +-
    1 file changed, 1 insertion(+), 1 deletion(-)
    ```
-   **Total patch length:** 23 lines (1 hunk, +1 insertion, -1 deletion, strictly <= 400 lines).
+   **Total patch length:** 19 lines (1 hunk, +1 insertion, -1 deletion, strictly <= 400 lines).
 
-3. **Working Tree Cleanliness:**
+3. **Working Tree Cleanliness (Zero Direct Workflow Edits on Main):**
    ```bash
-   git status --porcelain
+   git status --porcelain .github/workflows/
    ```
    The workflow file `.github/workflows/agw-worker.yml` remains clean and unmodified in the working tree.
+
+4. **Unit Test Suite Execution (11/11 Passing):**
+   ```bash
+   python3 -m unittest tests/test_fork_health_resilience.py
+   ```
+   **Result:**
+   - `test_01_patch_resilience_clean_apply`: Clean git apply check ... ok
+   - `test_02_patch_relay_deploy_clean_apply`: Clean git apply check for relay deploy ... ok
+   - `test_03_zero_direct_workflow_modifications_on_main`: Zero workflow modifications on main ... ok
+   - `test_04_gate2_step3_telemetry_http_404_isolation`: Primary probe HTTP 404 quarantine isolation ... ok
+   - `test_05_gate2_step4_continue_on_error_resilience`: Step 4 `continue-on-error: true` verified ... ok
+   - `test_06_gate2_step4_two_tier_issue_creation_fallback`: Two-tier fallback with warning guard verified ... ok
+   - `test_07_audit_fork_workflow_health_all_healthy`: Fork health pass state ... ok
+   - `test_08_audit_fork_workflow_health_unparseable_detection`: Unparseable detection ... ok
+   - `test_09_audit_fork_workflow_health_absent_workflow`: Absent detection ... ok
+   - `test_10_audit_fork_workflow_health_missing_pat`: Missing PAT detection ... ok
+   - `test_11_audit_fork_workflow_health_api_error_handling`: API error handling ... ok
+   *Telemetry:* Ran 11 tests in 0.017s, OK (11/11 passed, 0 failures, 0 errors).
+
+5. **Gate 1 YAML Linter Probe:**
+   ```bash
+   python3 Tools/probe_gate_yaml_lint_check2.py
+   ```
+   **Result:** `status: pass`, 0 findings (`gate_yaml_lint_check2`).
 
 ---
 
