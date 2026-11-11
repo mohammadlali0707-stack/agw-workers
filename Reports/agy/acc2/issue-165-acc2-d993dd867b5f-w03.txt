@@ -1,0 +1,91 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-165-acc2-d993dd867b5f-w03","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-43107082416-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read & Inspect Patch & Target Workflow**: Read [Reports/audit/gate-webhook-health-resilience.patch](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch) and [.github/workflows/gate-webhook-health.yml](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/.github/workflows/gate-webhook-health.yml) using `view_file` to verify structural requirements: size limits (≤400 lines, exactly +4/-2 lines diff), explicit permissions (`contents: read`, `issues: write`), `continue-on-error: true` on Step 4 ('Post alert if webhook health fails'), two-tier fallback with warning guard (`|| echo '::warning::...'`), and CWE-78 injection immunity.
+2. **Execute Test Suite & YAML Lint Checks**: Run [tests/test_fork_health_resilience.py](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/tests/test_fork_health_resilience.py) and [Tools/probe_gate_yaml_lint_check2.py](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Tools/probe_gate_yaml_lint_check2.py) using `run_command` to verify all 11/11 tests pass and YAML syntax/rules are valid.
+3. **Verify Git Apply & Zero Modifications to Main**: Execute `git apply --check Reports/audit/gate-webhook-health-resilience.patch` via `run_command` to ensure clean application against main without making any direct modifications to `.github/workflows/` on main.
+4. **Draft/Finalize Proposal Comment**: Create and format [Reports/audit/issue_161_proposal_comment.md](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/issue_161_proposal_comment.md) using `write_to_file`, including the complete root-cause diagnosis, untruncated unified diff (≤400 lines), and verification evidence for Notion AI execution.
+5. **Team Review & Quality Gate**: Submit the proposal comment for peer review using `python3 /tmp/hqteam.py review` via `run_command` and address any feedback.
+6. **Git Commit & Board Broadcast**: Stage verified files (`git add Reports/audit/...`), commit with `git commit`, and notify the team using `python3 /tmp/hqteam.py post done` via `run_command`.
+
+***
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have submitted the finalized proposal comment [Reports/audit/issue_161_proposal_comment.md](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/issue_161_proposal_comment.md) for peer review via the Agent Bus (`/tmp/hqteam.py review`) and am waiting for the reviewer's verdict.
+### Final Work Report: Validation of Gate 2 Webhook Health Resilience Patch & Notion AI Proposal Comment
+
+**Identity:** `agw-ACC2-w03` (Mohammad's GitHub Worker Fleet, Account 2)  
+**Task:** اعتبارسنجی پچ تاب‌آوری gate-webhook-health و تدوین کامنت پیشنهادی Notion AI  
+**Tracking Issue:** [#161](https://github.com/mohammadlali0707-stack/agw-workers/issues/161)  
+**Patch Deliverable:** [Reports/audit/gate-webhook-health-resilience.patch](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch)  
+**Proposal Comment:** [Reports/audit/issue_161_proposal_comment.md](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/issue_161_proposal_comment.md)  
+**Commit SHA:** `c33e287`  
+
+---
+
+### 1. Patch Structural & Security Compliance Verification
+
+The patch [Reports/audit/gate-webhook-health-resilience.patch](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch) targeting [.github/workflows/gate-webhook-health.yml](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/.github/workflows/gate-webhook-health.yml) was audited against all governance constraints:
+
+1. **Size Limits & Diff Metrics:**
+   - Patch length: Exactly **30 lines** (+4 insertions, -2 deletions), strictly within the $\le 400$ lines limit.
+2. **Pillars of Resilience:**
+   - **Step Failure Isolation:** Adds `continue-on-error: true` directly to Step 4 (`Post alert if webhook health fails`) under `if: failure()`. In GitHub Actions semantics, step `outcome` is tracked as `failure`, while step `conclusion` resolves as `success`, ensuring alerting/API anomalies never cause a secondary CI job abort.
+   - **Standardized Job Permissions:** Explicitly declares `permissions: { contents: read, issues: write }` in standardized alphabetical order.
+   - **Two-Tier Fallback with Warning Guard:** Adds `2>/dev/null || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"` to the unlabelled issue dispatch. This suppresses stderr and prevents unhandled non-zero exits under `set -e` when executed on read-only fork tokens, while preserving GitHub Actions warning annotations in CI run logs.
+3. **CWE-78 Command Injection Immunity:**
+   - All parameters (`RUN_URL`, `RUN_ID`, `EXPECTED_URL`, `GH_TOKEN`) are passed strictly via step-level `env:` blocks.
+   - Markdown alert bodies are rendered via Python using `os.environ.get(...)` and written to disk buffers (`/tmp/issue_body.md`, `/tmp/comment_body.md`), passed to the GitHub CLI via `--body-file`. Zero untrusted context expressions are interpolated into shell strings.
+
+---
+
+### 2. Test Execution & Automated Verification Evidence
+
+- **Unit Test Suite:**  
+  Executed `python3 -m unittest tests/test_fork_health_resilience.py -v`:
+  - `test_01_patch_resilience_clean_apply`: Clean git apply check ... **ok**
+  - `test_02_patch_relay_deploy_clean_apply`: Clean git apply check for relay deploy ... **ok**
+  - `test_03_zero_direct_workflow_modifications_on_main`: Zero workflow modifications on main ... **ok**
+  - `test_04_gate2_step3_telemetry_http_404_isolation`: Primary probe HTTP 404 quarantine isolation ... **ok**
+  - `test_05_gate2_step4_continue_on_error_resilience`: Step 4 `continue-on-error: true` verified ... **ok**
+  - `test_06_gate2_step4_two_tier_issue_creation_fallback`: Two-tier fallback with warning guard verified ... **ok**
+  - `test_07_audit_fork_workflow_health_all_healthy`: Fork health pass state ... **ok**
+  - `test_08_audit_fork_workflow_health_unparseable_detection`: Unparseable workflow detection ... **ok**
+  - `test_09_audit_fork_workflow_health_absent_workflow`: Absent workflow detection ... **ok**
+  - `test_10_audit_fork_workflow_health_missing_pat`: Missing PAT detection ... **ok**
+  - `test_11_audit_fork_workflow_health_api_error_handling`: API error handling ... **ok**  
+  **Result:** **11/11 unit tests passed** (0 failures, 0 errors in 0.019s).
+
+- **YAML Linter Validation:**  
+  Executed `python3 Tools/probe_gate_yaml_lint_check2.py` $\rightarrow$ `status: pass`, 0 findings.
+
+- **Clean Git Application:**  
+  Executed `git apply --check Reports/audit/gate-webhook-health-resilience.patch` $\rightarrow$ exit code `0` against `main` (0 offset, 0 fuzz).
+
+- **Zero Direct Workflow Edits:**  
+  `git status --porcelain .github/workflows/` confirmed completely clean (0 workflow edits on `main`).
+
+---
+
+### 3. Finalized Proposal Comment for Notion AI Execution
+
+The structured proposal comment in [Reports/audit/issue_161_proposal_comment.md](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/issue_161_proposal_comment.md) and synchronized in [Reports/audit/gate-webhook-health-resilience-proposal.md](file:///home/runner/work/_temp/agent-repo-43107082416-1-run-agy/Reports/audit/gate-webhook-health-resilience-proposal.md) contains:
+
+1. **Full Diagnostic Summary:** Details the dual-failure mechanics across fork runs (e.g. `lali94m-max` run `42693334316`, `hmmletssee7` run `42692590887`, `Mohammadlali` run `42693445322`) and establishes how each of the 4 pillars remediates the issue.
+2. **Untruncated Unified Diff:** Complete 30-line diff (+4/-2 lines) ready for patch application.
+3. **Verification Evidence:** Full documentation of test runs, lint checks, injection immunity, and base commit ancestry (`d4186eb`).
+4. **Actionable Notion AI Execution Workflow:** Clean step-by-step shell commands for automated application and verification without manual workflow file edits.
+
+---
+
+### 4. Peer Review & Git Delivery
+
+- **Agent Bus Review:** Submitted via `/tmp/hqteam.py review` to the fleet peer reviewer and received **`APPROVED`** from `ACC4 · peer`:
+  > *Strict patch size confirmed (30 lines, +4/-2 lines); step failure isolation verified (`continue-on-error: true`); job permissions properly standardized; two-tier fallback with warning guard prevents `set -e` aborts; CWE-78 immunity verified; 11/11 tests pass and YAML linter reports 0 findings; zero direct workflow edits; Notion AI execution workflow is actionable and safe.*
+- **Git Commit:** Staged and committed changes in `c33e287`:
+  `docs(audit): finalize Notion AI resilience proposal comment for issue #161`
+- **Agent Bus Notification:** Broadcasted completion to the team via `/tmp/hqteam.py post done` (Message ID `#1983`).
