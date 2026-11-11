@@ -1,194 +1,156 @@
 # QA Verification & Test Report: Gate 2 Resilience Deliverables
 
 - **ID / Auditor:** `QA-VERIF-GATE2-ACC8-W03-20261111` / `agw-ACC8-w03` (`gh-acc8-agw-worker`)
-- **Target Repo & Workflow:** `mohammadlali0707-stack/agw-workers` / `.github/workflows/gate-webhook-health.yml`
-- **Target Patches:** `Reports/audit/gate-webhook-health-resilience.patch` & `gate-webhook-health-relay-deploy.patch`
-- **Prerequisite Commit & Tests:** `d4186eb` / `tests/test_fork_health_resilience.py` (11/11 PASS)
+- **Target Repo & Workflows:** `mohammadlali0707-stack/agw-workers` / `gate-webhook-health.yml`, `relay-deploy-file.yml`
+- **Target Patches:**
+  1. `Reports/audit/gate-webhook-health-resilience.patch` (30 lines)
+  2. `Reports/audit/gate-webhook-health-relay-deploy.patch` (129 lines)
+  3. `Reports/audit/relay-deploy-file.patch` (77 lines)
+- **Baseline Prerequisite & Tests:** `d4186eb` / `tests/test_fork_health_resilience.py` (11/11 PASS)
 - **Tracking Issue & Verdict:** #161 / **APPROVED & QA CERTIFIED**
 
 ---
 
 ## 1. Executive Summary & Quality Gates
 
-This report delivers independent technical QA verification and test suite execution analysis for Gate 2 (`Gate 2 -- Webhook Health Checker`) resilience deliverables.
+This report delivers technical QA verification, patch dry-run validation, and automated test suite execution telemetry for CI remediation artifacts across Gate 2 (`gate-webhook-health.yml`) and relay deployment (`relay-deploy-file.yml`).
 
 Scheduled Gate 2 runs on fork runners (`lali94m-max`, `kidding602`, `hmmletssee7-design`, `Mohammadlali`) exhibited a **Dual-Failure Chain**:
-1. **Primary Upstream Failure (Step 3):** POST probe to `https://n8n.airboxvip.top/webhook/github-runner-trigger` returns HTTP 404 (expected upstream security quarantine pending credential rotation, issues #1615, #1616).
-2. **Secondary Tooling Crash (Step 4):** Triggered under `if: failure()`, fork runners with restricted `GITHUB_TOKEN` permissions (`contents: read`) lack label `alert`. `gh issue create ... --label "alert"` terminates with exit code 1. Under `set -e`, this aborts Step 4, crashing runners and suppressing diagnostics.
+1. **Primary Upstream Failure (Step 3):** POST probe to `https://n8n.airboxvip.top/webhook/github-runner-trigger` returns HTTP 404 (expected upstream quarantine during credential rotation, issues #1615, #1616).
+2. **Secondary Tooling Crash (Step 4):** Under `if: failure()`, fork runners with read-only tokens lack the `alert` label. Executing `gh issue create ... --label "alert"` terminates with exit code 1. Under `set -e`, this aborts Step 4, crashing runners and suppressing diagnostics.
 
-Patch `Reports/audit/gate-webhook-health-resilience.patch` provides robust error isolation, exit guards, and clean applicability.
+All proposed patches were verified offline against `main` for clean applicability, diff limits ($\le 400$ lines), zero direct modifications to workflow files on `main`, and 100% test pass rates across the automated test suite.
 
 ### Quality Gate Summary Table
 
-| Quality Gate | Requirement | Observed Result | Status |
+| Quality Gate | Target Artifact / Check | Telemetry & Evidence | Status |
 | :--- | :--- | :--- | :---: |
-| **Patch Applicability** | 0 errors, 0 warnings, 0 fuzz, 0 offsets | `git apply --check -v` passed cleanly | **PASS** |
-| **PR Diff Size Limit** | Strictly $\le 400$ lines | 30 lines (+4 / -2) via `wc -l` | **PASS** |
-| **Unit Test Execution** | 11/11 passing tests, 0 failures, 0 errors | 11/11 passed in 0.015s | **PASS** |
-| **Zero Direct Main Edits** | 0 workflow modifications on `main` | Clean working tree; 0 workflow diffs | **PASS** |
-| **Prerequisite Baseline** | Upstream commit `d4186eb` ancestry | Prerequisite verified; divergence analyzed | **PASS** |
-| **Failure Isolation** | `continue-on-error` + exit guards | Double-layer failure containment | **PASS** |
-| **CWE-78 Security** | Zero command injection vulnerabilities | Parameterized env vars & `--body-file` | **PASS** |
+| **Patch 1 Dry-Run** | `gate-webhook-health-resilience.patch` | `git apply --check -v`: exit 0; 0 errors, 0 fuzz | **PASS** |
+| **Patch 2 Dry-Run** | `gate-webhook-health-relay-deploy.patch` | `git apply --check -v`: exit 0; 0 errors, 0 fuzz | **PASS** |
+| **Patch 3 Dry-Run** | `relay-deploy-file.patch` | `git apply --check -v`: exit 0; 0 errors, 0 fuzz | **PASS** |
+| **PR Diff Limit** | Line counts $\le 400$ via `wc -l` | 30 lines, 129 lines, 77 lines (all $\le 400$) | **PASS** |
+| **Unit Test Suite** | `tests/test_fork_health_resilience.py` | 11/11 passed in 0.019s (0 failures, 0 errors) | **PASS** |
+| **Zero Main Edits** | Working tree check on `.github/workflows/` | `git status --porcelain`: clean (0 workflow diffs) | **PASS** |
+| **Baseline Ancestry**| Prerequisite commit `d4186eb` ancestry | Verified on `main`; fork divergence analyzed | **PASS** |
+| **Failure Isolation**| Fallback chain + `continue-on-error: true` | Step 4 cannot fail job on token/API denial | **PASS** |
+| **CWE-78 Security** | Command injection audit | Safe env vars, `--body-file`, quoted heredocs | **PASS** |
 
 ---
 
 ## 2. Patch Applicability & Diff Analysis
 
 ### 2.1 Clean Application Check (`git apply --check -v`)
-- `git apply --check -v Reports/audit/gate-webhook-health-resilience.patch`: Clean check against `.github/workflows/gate-webhook-health.yml` (exit code 0; 0 errors, 0 fuzz, 0 offsets).
-- `git apply --check -v Reports/audit/gate-webhook-health-relay-deploy.patch`: Clean check against `.github/workflows/relay-deploy-file.yml` (exit code 0).
+Offline dry-runs against repository `main` confirmed clean applicability (exit code 0; 0 errors, 0 warnings, 0 fuzz):
+- `git apply --check -v Reports/audit/gate-webhook-health-resilience.patch`: Clean against `.github/workflows/gate-webhook-health.yml`
+- `git apply --check -v Reports/audit/gate-webhook-health-relay-deploy.patch`: Clean against `.github/workflows/relay-deploy-file.yml`
+- `git apply --check -v Reports/audit/relay-deploy-file.patch`: Clean against `.github/workflows/relay-deploy-file.yml`
 
 ### 2.2 Strict PR Diff Limit Enforcement (`wc -l`)
-Target patch `Reports/audit/gate-webhook-health-resilience.patch` measures **30 lines** (+4 / -2), well within the $\le 400$ lines limit.
+Diff size verification confirms all patches remain strictly $\le 400$ lines:
+- `Reports/audit/gate-webhook-health-resilience.patch`: **30 lines** (+4 / -2)
+- `Reports/audit/gate-webhook-health-relay-deploy.patch`: **129 lines** (+72 / -7)
+- `Reports/audit/relay-deploy-file.patch`: **77 lines** (+44 / -5)
 
-### 2.3 Verbatim Unified Diff Deliverable
-Untruncated unified diff of `Reports/audit/gate-webhook-health-resilience.patch`:
-```diff
---- a/.github/workflows/gate-webhook-health.yml
-+++ b/.github/workflows/gate-webhook-health.yml
-@@ -10,8 +10,8 @@ jobs:
-   webhook-health:
-     runs-on: ubuntu-latest
-     permissions:
--      issues: write
-       contents: read
-+      issues: write
-     env:
-       # Reading repos/{repo}/hooks needs ADMIN on the repo. GITHUB_TOKEN has no
-       # webhook permission at all -- there is no `permissions:` key that grants
-@@ -165,6 +165,7 @@ jobs:
- 
-       - name: Post alert if webhook health fails
-         if: failure()
-+        continue-on-error: true
-         env:
-           GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
-           EXPECTED_URL: ${{ env.EXPECTED_URL }}
-@@ -263,7 +264,8 @@ jobs:
-               || gh issue create \
-                 --repo "$REPO" \
-                 --title "$ISSUE_TITLE" \
--                --body-file /tmp/issue_body.md
-+                --body-file /tmp/issue_body.md 2>/dev/null \
-+              || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"
-           else
-             echo "Existing open issue found (#$EXISTING_ISSUE). Updating with a comment instead of creating duplicate..."
-             gh issue comment "$EXISTING_ISSUE" \
-```
+### 2.3 Patch Hunk Breakdown & Structural Scope
+1. **`gate-webhook-health-resilience.patch` (30 lines):** Reorders job permissions (`contents: read`, `issues: write`), injects `continue-on-error: true` into Step 4, and adds two-tier fallback: `gh issue create ... --label "alert" 2>/dev/null || gh issue create ... 2>/dev/null || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"`.
+2. **`gate-webhook-health-relay-deploy.patch` (129 lines):** Adds `concurrency: group: relay-deploy-file, cancel-in-progress: false`, adds 4 companion gates (`gate-yaml-lint.yml`, `gate-webhook-health.yml`, `gate-runs-on-policy.yml`, `gate-runner-deps.yml`) to path triggers and sync list, implements push retry loop with jitter (up to 5 attempts) to eliminate ref-lock collisions, and aggregates failed forks into `FAILED_ACCOUNTS` array.
+3. **`relay-deploy-file.patch` (77 lines):** Focused alternative with concurrency locking, clone depth 20, and rebase-on-retry logic.
 
-### 2.4 Hunk Breakdown & Zero Main Edits
-- **Hunk 1:** Reorders permissions (`contents: read` followed by `issues: write`).
-- **Hunk 2:** Adds `continue-on-error: true` to Step 4, isolating alert failures from CI status.
-- **Hunk 3:** Adds `2>/dev/null` and exit guard `|| echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"` to unlabelled fallback.
-- **Zero Main Edits:** `git status --porcelain .github/workflows/` confirms 0 workflow diffs on `main`.
+### 2.4 Zero Direct Main Edits Verification
+Running `git status --porcelain .github/workflows/` yields 0 modified files. Workflows on `main` remain completely untouched.
 
 ---
 
 ## 3. Test Suite Execution & Detailed Results
 
-Test suite `tests/test_fork_health_resilience.py` executed via `python3 -m unittest -v` with exit code 0 (`Ran 11 tests in 0.015s - OK`).
+Automated test suite `tests/test_fork_health_resilience.py` executed via `python3 -m unittest -v`:
+`Ran 11 tests in 0.019s - OK (11 passed, 0 failures, 0 errors)`.
 
-### 3.1 All 11 Unit Tests Breakdown Matrix
+### 3.1 Unit Test Breakdown Matrix
 
-| # | Test Method Name | Scope & Assertion | Status |
+| # | Test Method Name | Assertion & Telemetry Scope | Status |
 | :-: | :--- | :--- | :-: |
-| 1 | `test_01_patch_resilience_clean_apply` | Verifies patch clean apply via `git apply --check`. | PASS |
-| 2 | `test_02_patch_relay_deploy_clean_apply` | Verifies relay deploy patch clean apply via `git apply --check`. | PASS |
-| 3 | `test_03_zero_direct_workflow_modifications_on_main` | Enforces zero direct edits in `.github/workflows/` on `main`. | PASS |
-| 4 | `test_04_gate2_step3_telemetry_http_404_isolation` | Simulates HTTP 404 quarantine; verifies `FAIL_TYPE=config_error`. | PASS |
-| 5 | `test_05_gate2_step4_continue_on_error_resilience` | Asserts `continue-on-error: true` in Step 4 patch hunk. | PASS |
-| 6 | `test_06_gate2_step4_two_tier_issue_creation_fallback` | Validates shell survival under `set -e` with unlabelled fallback/warning. | PASS |
-| 7 | `test_07_audit_fork_workflow_health_all_healthy` | Mocks healthy API responses for rotation accounts; asserts `pass`. | PASS |
-| 8 | `test_08_audit_fork_workflow_health_unparseable_detection` | Asserts tool flags `UNPARSEABLE` when name equals path fallback. | PASS |
-| 9 | `test_09_audit_fork_workflow_health_absent_workflow` | Asserts tool flags missing workflows as `absent` gracefully. | PASS |
-| 10 | `test_10_audit_fork_workflow_health_missing_pat` | Asserts tool reports `NO_PAT` & increments unreachable count. | PASS |
-| 11 | `test_11_audit_fork_workflow_health_api_error_handling` | Asserts tool captures non-200 responses (`API_403`) without crashing. | PASS |
+| 1 | `test_01_patch_resilience_clean_apply` | Clean apply check via `git apply --check` | **PASS** |
+| 2 | `test_02_patch_relay_deploy_clean_apply` | Clean apply check via `git apply --check` | **PASS** |
+| 3 | `test_03_zero_direct_workflow_modifications_on_main` | Zero direct edits in `.github/workflows/` on `main` | **PASS** |
+| 4 | `test_04_gate2_step3_telemetry_http_404_isolation` | HTTP 404 sets `FAIL_TYPE=config_error`; no crash | **PASS** |
+| 5 | `test_05_gate2_step4_continue_on_error_resilience` | `continue-on-error: true` present on Step 4 | **PASS** |
+| 6 | `test_06_gate2_step4_two_tier_issue_creation_fallback` | `set -e` survival when label alert fails | **PASS** |
+| 7 | `test_07_audit_fork_workflow_health_all_healthy` | Healthy rotation accounts return `status: pass` | **PASS** |
+| 8 | `test_08_audit_fork_workflow_health_unparseable_detection` | Unparseable workflows flagged with exit code 1 | **PASS** |
+| 9 | `test_09_audit_fork_workflow_health_absent_workflow` | Missing workflows flagged as absent gracefully | **PASS** |
+| 10 | `test_10_audit_fork_workflow_health_missing_pat` | Missing PAT detected as `NO_PAT`; increments count | **PASS** |
+| 11 | `test_11_audit_fork_workflow_health_api_error_handling` | Non-200 responses (`API_403`) handled gracefully | **PASS** |
 
 ---
 
-## 4. Baseline `d4186eb` Ancestry & Divergence Analysis
+## 4. Baseline Ancestry & Fork Divergence Analysis
 
 ### 4.1 Upstream Prerequisite Commit `d4186eb`
-Commit `d4186eb` (`d4186ebe48fc53c34402d6385e0c0769afb5c7c4`) merged on upstream control repo `mohammadlali0707-stack/agw-workers`:
+Commit `d4186eb` (`d4186ebe48fc53c34402d6385e0c0769afb5c7c4`) on upstream control repo `mohammadlali0707-stack/agw-workers`:
 - Added HTTP 404 (`config_error`) vs 5xx (`server_failure`) categorization in Step 3.
 - Introduced title-based deduplication and issue commenting (`gh issue comment`) in Step 4.
-- Introduced python payload generation writing to `/tmp/issue_body.md`.
+- Implemented Python payload generation writing formatted issue bodies to `/tmp/issue_body.md`.
 - Added the baseline `permissions: { contents: read, issues: write }` block.
 
 ### 4.2 Divergence from Fork Base `37fc856`
-Fleet fork repositories (e.g. `Mohammadlali/agw-workers` at `37fc856fcaa5e9975ade1f93539ddd31a0dae2ff`, `lali94m-max` at `ea53820`) diverged before `d4186eb`:
+Fleet forks (e.g., `Mohammadlali/agw-workers` at `37fc856fcaa5e9975ade1f93539ddd31a0dae2ff`, `lali94m-max` at `ea53820`) diverged prior to `d4186eb`:
 - Fork `HEAD` at `37fc856` lacks the `permissions:` block and `/tmp/issue_body.md` fallback structure.
-- Because `gate-webhook-health-resilience.patch` modifies lines introduced in `d4186eb`, applying the patch directly against `37fc856` fails on Hunks 1 and 3 due to context mismatch.
-- **Architectural Requirement:** Commit `d4186eb` is a mandatory prerequisite. Forks must sync `d4186eb` before or alongside applying the resilience patch.
+- Because `gate-webhook-health-resilience.patch` targets code introduced in `d4186eb`, applying the patch directly against older fork commits results in context mismatches.
+- **Architectural Requirement:** Upstream commit `d4186eb` is a mandatory prerequisite baseline. Forks must sync `d4186eb` before applying the resilience patch.
 
 ---
 
 ## 5. Failure-Isolation Primitives & CWE-78 Security Proof
 
-### 5.1 Dual-Layer Failure Isolation
-1. **Step-Level Isolation:** `continue-on-error: true` prevents notification errors from failing CI.
-2. **Shell-Level Exit Guard:**
-   ```bash
-   gh issue create --repo "$REPO" --title "$ISSUE_TITLE" --body-file /tmp/issue_body.md --label "alert" 2>/dev/null \
-     || gh issue create --repo "$REPO" --title "$ISSUE_TITLE" --body-file /tmp/issue_body.md 2>/dev/null \
-     || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"
-   ```
-   - Primary: attempts labelled issue creation; suppresses stderr (`2>/dev/null`).
-   - Secondary: attempts unlabelled issue creation; suppresses stderr (`2>/dev/null`).
-   - Guard: emits GitHub Actions `::warning::` with exit code 0, immune to `set -e` aborts.
-   - Comment update path (`gh issue comment`) is likewise guarded by `|| echo "::warning::failed to add comment..."`.
+### 5.1 Dual-Tier Failure Isolation Architecture
+1. **Workflow-Level Isolation:** `continue-on-error: true` on Step 4 guarantees that notification failures cannot cause the overall workflow run to fail.
+2. **Shell-Level Execution Guard:**
+   - Primary: Attempts labelled issue creation; suppresses stderr (`2>/dev/null`).
+   - Secondary: Falls back to unlabelled issue creation; suppresses stderr (`2>/dev/null`).
+   - Guard: Echoes GitHub Actions `::warning::failed to create alert issue...` with exit code 0, immune to `set -e` aborts.
+   - The comment update path (`gh issue comment`) is likewise guarded by `|| echo "::warning::failed to add comment..."`.
 
 ### 5.2 CWE-78 Command Injection Immunity Proof
-- **Environment Binding:** Parameters (`REPO`, `ISSUE_TITLE`, `EXPECTED_URL`) are passed via `env:` variables and double-quoted in bash (`"$REPO"`).
-- **Body-File Buffering:** Issue bodies are written to `/tmp/issue_body.md` and passed via `--body-file`, preventing argument injection.
-- **Quoted Heredocs:** Python generators use quoted heredocs (`python3 - <<'EOF'`), eliminating shell variable expansion.
-- **Zero Inline Expressions:** Static scanning confirms zero `${{ ... }}` expressions inside `run:` blocks.
+- **Environment Binding:** Parameters (`REPO`, `ISSUE_TITLE`, `EXPECTED_URL`) are bound via `env:` keys and safely double-quoted in bash (`"$REPO"`).
+- **Body-File Buffering:** Issue descriptions are passed via `--body-file /tmp/issue_body.md`, eliminating shell interpolation of untrusted strings.
+- **Quoted Heredocs:** Python payload scripts use quoted heredocs (`python3 - <<'EOF'`), completely disabling parameter expansion.
+- **Zero Inline Script Expressions:** Static analysis confirms zero `${{ ... }}` expressions within `run:` script bodies.
 
 ---
 
 ## 6. Actionable Upstream Sync PR Workflow
 
-To propagate prerequisite `d4186eb` and `gate-webhook-health-resilience.patch` to fleet forks, execute this workflow:
+To propagate prerequisite commit `d4186eb` and the resilience patch across fleet forks:
 
 ```bash
-# 1. Add upstream remote and fetch main
 git remote add upstream https://github.com/mohammadlali0707-stack/agw-workers.git 2>/dev/null \
   || git remote set-url upstream https://github.com/mohammadlali0707-stack/agw-workers.git
 git fetch upstream main
-
-# 2. Create sync branch from fork main
 git checkout -b sync/gate2-resilience-sync origin/main
-
-# 3. Fast-forward or cherry-pick baseline prerequisite commit d4186eb
 git merge --ff-only upstream/main \
   || git cherry-pick d4186ebe48fc53c34402d6385e0c0769afb5c7c4
-
-# 4. Apply and verify Gate 2 resilience patch
 git apply --check -v Reports/audit/gate-webhook-health-resilience.patch
 git apply -v Reports/audit/gate-webhook-health-resilience.patch
-
-# 5. Execute automated test suite (must pass 11/11 tests)
-python3 tests/test_fork_health_resilience.py
-
-# 6. Commit changes and push branch to fork remote
+python3 -m unittest -v tests/test_fork_health_resilience.py
 git add .github/workflows/gate-webhook-health.yml
 git commit -m "fix(gate2): sync d4186eb baseline and apply webhook health resilience guards (#161)"
 git push origin sync/gate2-resilience-sync
-
-# 7. Submit PR against fork main branch via GitHub CLI
-gh pr create \
-  --repo "Mohammadlali/agw-workers" \
-  --base main \
-  --head sync/gate2-resilience-sync \
+gh pr create --repo "Mohammadlali/agw-workers" --base main --head sync/gate2-resilience-sync \
   --title "fix(gate2): sync d4186eb and apply webhook health resilience guards (#161)" \
-  --body "Syncs d4186eb and applies Gate 2 resilience patch to prevent runner crashes during upstream quarantine."
+  --body "Syncs d4186eb baseline and applies Gate 2 resilience patch to prevent runner crashes."
 ```
-*(Alternative: dispatch via `Tools/sync_agy_files_to_forks.py` or `.github/workflows/relay-deploy-file.yml` authenticated with `ACC0_PAT`)*
+
+*(Note: Fleet distribution may also be performed via `Tools/sync_agy_files_to_forks.py` or `.github/workflows/relay-deploy-file.yml` authenticated with `ACC0_PAT`)*
 
 ---
 
 ## 7. QA Certification Verdict
 
-**VERDICT: APPROVED & READY FOR MERGE**
+**VERDICT: APPROVED & QA CERTIFIED**
 
-Deliverables (`gate-webhook-health-resilience.patch` and `tests/test_fork_health_resilience.py`) satisfy all QA standards, cleanly apply, conform to the $\le 400$ line diff limit, pass 100% of unit tests, and provide complete failure containment.
+All CI failure remediation artifacts satisfy technical QA quality standards:
+- All 3 patches (`gate-webhook-health-resilience.patch`, `gate-webhook-health-relay-deploy.patch`, `relay-deploy-file.patch`) dry-run cleanly via `git apply --check -v` with 0 errors/warnings and remain $\le 400$ lines.
+- Automated test suite `tests/test_fork_health_resilience.py` passes 11/11 tests with zero failures.
+- Main branch workflows remain completely untouched with zero direct modifications.
+- Secondary failure isolation (`continue-on-error: true`), HTTP 404 quarantine classification, and two-tier fallback guards are fully verified.
