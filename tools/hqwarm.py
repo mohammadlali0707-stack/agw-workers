@@ -31,7 +31,7 @@ LOCK = threading.Lock(); ACTIVE = [0]; STATS = {"jobs": 0, "fail": 0, "polls": 0
 PAR_WEB = int(os.environ.get("PAR_WEB", "1")); WEB = [0]; WEBP = None
 if os.environ.get("GEMINI_WEB_COOKIES") and os.path.exists("/tmp/gv/bin/python"):
     WEBP = subprocess.Popen(["/tmp/gv/bin/python", os.path.join(os.path.dirname(os.path.abspath(__file__)), "hqwarmweb.py")],
-                            env=dict(os.environ, PYTHONPATH="/tmp/gwlib", GWEB_PROXY="http://127.0.0.1:10809", GEMINI_COOKIE_PATH="/tmp/gwcache"))
+                            env=dict(os.environ, PYTHONPATH="/tmp/gwlib", GWEB_PROXY=os.environ.get("GWEB_PROXY", ""), GEMINI_COOKIE_PATH="/tmp/gwcache"))
 def web_ready(): return WEBP is not None and WEBP.poll() is None and os.path.exists("/tmp/web_ready")
 def run_web(cid, job):
     t = time.time(); d = f"/tmp/wdone/{cid}"
