@@ -1,12 +1,13 @@
 # QA Verification & Test Report: Gate 2 Resilience Deliverables
 
-- **ID / Auditor:** `QA-VERIF-GATE2-ACC8-W03-20261111` / `agw-ACC8-w03` (`gh-acc8-agw-worker`)
+- **ID / Auditor:** `QA-VERIF-GATE2-ACC8-W03-20261113` / `agw-ACC8-w03` (`gh-acc8-agw-worker`)
+- **Verification Timestamp:** `2026-11-13T02:52:46Z`
 - **Target Repo & Workflows:** `mohammadlali0707-stack/agw-workers` / `gate-webhook-health.yml`, `relay-deploy-file.yml`
 - **Target Patches:**
   1. `Reports/audit/gate-webhook-health-resilience.patch` (30 lines)
   2. `Reports/audit/gate-webhook-health-relay-deploy.patch` (129 lines)
   3. `Reports/audit/relay-deploy-file.patch` (77 lines)
-- **Baseline Prerequisite & Tests:** `d4186eb` / `tests/test_fork_health_resilience.py` (11/11 PASS)
+- **Baseline Prerequisite & Tests:** `d4186eb` / `tests/test_fork_health_resilience.py` (11/11 PASS in 0.015s)
 - **Tracking Issue & Verdict:** #161 / **APPROVED & QA CERTIFIED**
 
 ---
@@ -28,8 +29,8 @@ All proposed patches were verified offline against `main` for clean applicabilit
 | **Patch 1 Dry-Run** | `gate-webhook-health-resilience.patch` | `git apply --check -v`: exit 0; 0 errors, 0 fuzz | **PASS** |
 | **Patch 2 Dry-Run** | `gate-webhook-health-relay-deploy.patch` | `git apply --check -v`: exit 0; 0 errors, 0 fuzz | **PASS** |
 | **Patch 3 Dry-Run** | `relay-deploy-file.patch` | `git apply --check -v`: exit 0; 0 errors, 0 fuzz | **PASS** |
-| **PR Diff Limit** | Line counts $\le 400$ via `wc -l` | 30 lines, 129 lines, 77 lines (all $\le 400$) | **PASS** |
-| **Unit Test Suite** | `tests/test_fork_health_resilience.py` | 11/11 passed in 0.019s (0 failures, 0 errors) | **PASS** |
+| **PR Diff Limit** | Line counts $\le 400$ via `wc -l`, files $\le 10$ | 30 lines (1 file), 129 lines (1 file), 77 lines (1 file) | **PASS** |
+| **Unit Test Suite** | `tests/test_fork_health_resilience.py` | 11/11 passed in 0.015s (0 failures, 0 errors) | **PASS** |
 | **Zero Main Edits** | Working tree check on `.github/workflows/` | `git status --porcelain`: clean (0 workflow diffs) | **PASS** |
 | **Baseline Ancestry**| Prerequisite commit `d4186eb` ancestry | Verified on `main`; fork divergence analyzed | **PASS** |
 | **Failure Isolation**| Fallback chain + `continue-on-error: true` | Step 4 cannot fail job on token/API denial | **PASS** |
@@ -41,15 +42,16 @@ All proposed patches were verified offline against `main` for clean applicabilit
 
 ### 2.1 Clean Application Check (`git apply --check -v`)
 Offline dry-runs against repository `main` confirmed clean applicability (exit code 0; 0 errors, 0 warnings, 0 fuzz):
-- `git apply --check -v Reports/audit/gate-webhook-health-resilience.patch`: Clean against `.github/workflows/gate-webhook-health.yml`
-- `git apply --check -v Reports/audit/gate-webhook-health-relay-deploy.patch`: Clean against `.github/workflows/relay-deploy-file.yml`
-- `git apply --check -v Reports/audit/relay-deploy-file.patch`: Clean against `.github/workflows/relay-deploy-file.yml`
+- `git apply --check -v Reports/audit/gate-webhook-health-resilience.patch`: Clean against `.github/workflows/gate-webhook-health.yml` (0 errors, 0 warnings, 0 offsets)
+- `git apply --check -v Reports/audit/gate-webhook-health-relay-deploy.patch`: Clean against `.github/workflows/relay-deploy-file.yml` (0 errors, 0 warnings, 0 offsets)
+- `git apply --check -v Reports/audit/relay-deploy-file.patch`: Clean against `.github/workflows/relay-deploy-file.yml` (0 errors, 0 warnings, 0 offsets)
 
 ### 2.2 Strict PR Diff Limit Enforcement (`wc -l`)
-Diff size verification confirms all patches remain strictly $\le 400$ lines:
-- `Reports/audit/gate-webhook-health-resilience.patch`: **30 lines** (+4 / -2)
-- `Reports/audit/gate-webhook-health-relay-deploy.patch`: **129 lines** (+72 / -7)
-- `Reports/audit/relay-deploy-file.patch`: **77 lines** (+44 / -5)
+Diff size verification confirms all patches remain strictly $\le 400$ lines and modify $\le 10$ files:
+- `Reports/audit/gate-webhook-health-resilience.patch`: **30 lines** (+4 / -2), 1 file (`.github/workflows/gate-webhook-health.yml`)
+- `Reports/audit/gate-webhook-health-relay-deploy.patch`: **129 lines** (+72 / -7), 1 file (`.github/workflows/relay-deploy-file.yml`)
+- `Reports/audit/relay-deploy-file.patch`: **77 lines** (+44 / -5), 1 file (`.github/workflows/relay-deploy-file.yml`)
+- Total diff across all candidate patches: **236 lines** ($\le 400$ lines) and **2 unique files** touched ($\le 10$ files).
 
 ### 2.3 Patch Hunk Breakdown & Structural Scope
 1. **`gate-webhook-health-resilience.patch` (30 lines):** Reorders job permissions (`contents: read`, `issues: write`), injects `continue-on-error: true` into Step 4, and adds two-tier fallback: `gh issue create ... --label "alert" 2>/dev/null || gh issue create ... 2>/dev/null || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"`.
@@ -64,7 +66,7 @@ Running `git status --porcelain .github/workflows/` yields 0 modified files. Wor
 ## 3. Test Suite Execution & Detailed Results
 
 Automated test suite `tests/test_fork_health_resilience.py` executed via `python3 -m unittest -v`:
-`Ran 11 tests in 0.019s - OK (11 passed, 0 failures, 0 errors)`.
+`Ran 11 tests in 0.015s - OK (11 passed, 0 failures, 0 errors)`.
 
 ### 3.1 Unit Test Breakdown Matrix
 
@@ -150,7 +152,8 @@ gh pr create --repo "Mohammadlali/agw-workers" --base main --head sync/gate2-res
 **VERDICT: APPROVED & QA CERTIFIED**
 
 All CI failure remediation artifacts satisfy technical QA quality standards:
-- All 3 patches (`gate-webhook-health-resilience.patch`, `gate-webhook-health-relay-deploy.patch`, `relay-deploy-file.patch`) dry-run cleanly via `git apply --check -v` with 0 errors/warnings and remain $\le 400$ lines.
+- All 3 patches (`gate-webhook-health-resilience.patch`, `gate-webhook-health-relay-deploy.patch`, `relay-deploy-file.patch`) dry-run cleanly via `git apply --check -v` with 0 errors/warnings/offsets, remain strictly $\le 400$ lines, and touch $\le 10$ files.
 - Automated test suite `tests/test_fork_health_resilience.py` passes 11/11 tests with zero failures.
 - Main branch workflows remain completely untouched with zero direct modifications.
 - Secondary failure isolation (`continue-on-error: true`), HTTP 404 quarantine classification, and two-tier fallback guards are fully verified.
+- Peer review consultation was conducted via `python3 /tmp/hqteam.py review`.
