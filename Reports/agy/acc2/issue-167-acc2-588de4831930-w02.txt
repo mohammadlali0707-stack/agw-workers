@@ -1,0 +1,125 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-167-acc2-588de4831930-w02","commits":1,"files_changed":1,"checkout":"/home/runner/work/_temp/agent-repo-43355256834-1-run-agy"}}
+Worker committed 1 commit(s), 1 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. Read `.github/workflows/gate-webhook-health.yml` (specifically lines 120-180 covering the endpoint reachability verification step) using `view_file` to analyze the curl invocation, exit code handling, and HTTP status parsing defects.
+2. Read `tests/test_fork_health_resilience.py` using `view_file` to review current test coverage and identify required test assertions for curl timeout, abort, and exit code handling.
+3. Check the team communication board using `run_command` with `python3 /tmp/hqteam.py read` to inspect any relevant context from teammates.
+4. Formulate the forensic audit and write a comprehensive audit report file under `Reports/audit/gate-webhook-health-curl-audit.md` detailing the duplicate `000` issue (`000000`, `000\n000`), bash arithmetic failure, fallback misclassification into `FAIL_TYPE=config_error` vs `server_failure`, remediation recommendations, and test specifications.
+5. Submit the audit report for team review via `run_command` with `python3 /tmp/hqteam.py review` and incorporate any needed revisions.
+6. Commit the final report under `Reports/audit/` via `run_command` using `git add` and `git commit` without modifying any workflow files.
+7. Post completion message to the team board using `run_command` with `python3 /tmp/hqteam.py post done`.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have submitted the audit report for team review via `/tmp/hqteam.py review` and am waiting for the review response.
+I have posted the completion status to the team board via `/tmp/hqteam.py post done` and am waiting for the command to finish.
+### Forensic Audit Summary: `gate-webhook-health` Curl Exit Code Handling & HTTP Status Parsing
+
+**Auditor:** `agw-ACC2-w02` (Mohammad's GitHub Worker Fleet — Account 2 Team)  
+**Target Workflow:** [.github/workflows/gate-webhook-health.yml](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/.github/workflows/gate-webhook-health.yml#L130-L165) (Lines 130–165)  
+**Deliverable Report:** [Reports/audit/gate_webhook_health_curl_status_parsing_audit.md](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/Reports/audit/gate_webhook_health_curl_status_parsing_audit.md)  
+**Target Test Suite:** [tests/test_fork_health_resilience.py](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/tests/test_fork_health_resilience.py) and [tests/fixtures/fork_health_fixtures.py](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/tests/fixtures/fork_health_fixtures.py)
+
+---
+
+### 1. Root Cause & Defect Mechanism Analysis
+
+In [.github/workflows/gate-webhook-health.yml](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/.github/workflows/gate-webhook-health.yml#L136-L141), endpoint reachability is probed via:
+```bash
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X POST "$EXPECTED_URL" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"health_check","test":true}' \
+  --max-time 10 2>/dev/null || echo "000")
+```
+
+#### Defect Chain Breakdown:
+1. **Double '000' Stdout Concatenation (`000000` / `000\n000`):**
+   - When `curl` encounters a timeout (`--max-time 10`, exit code 28 `CURLE_OPERATION_TIMEDOUT`), connection refusal (exit code 7 `CURLE_COULDNT_CONNECT`), or DNS failure (exit code 6), libcurl formats `%{http_code}` as `000` to standard output before terminating with a non-zero exit code.
+   - Because `curl` exited non-zero, the shell's short-circuit `||` executes `echo "000"`, outputting a second `000\n`.
+   - Command substitution `$()` captures all stdout emitted within the subshell, combining both outputs into `"000000\n"`. Stripping trailing newlines yields:
+     $$\text{STATUS} = \text{"000000"}$$
+   - If curl outputs newlines or runs unbuffered, this produces multiline `000\n000`.
+2. **Curl Exit Code Masking:**
+   - Because `echo "000"` exits with 0, `$?` is reset to 0 upon completion of `$()`. Curl's true exit code (28, 7, 6, 35) is discarded, leaving no indicator of network failure type.
+3. **Arithmetic and Equality Parsing Breakdown:**
+   - Line 154 evaluates:
+     ```bash
+     elif [ "$STATUS" = "000" ] || [ "$STATUS" -ge 500 ] 2>/dev/null; then
+     ```
+     - `[ "000000" = "000" ]`: Evaluates to **FALSE** (6 characters vs. 3 characters).
+     - `[ "000000" -ge 500 ]`: Bash parses `"000000"` as integer `0`; `0 -ge 500` evaluates to **FALSE**.
+     - For multiline `"000\n000"`, the test throws `integer expression expected` (exit code 2), silenced by `2>/dev/null`, evaluating to **FALSE**.
+4. **Telemetry Inversion Fallthrough (`FAIL_TYPE=config_error`):**
+   - Because neither `200/400`, `404`, nor line 154 matches, execution drops into the catch-all `else` block (line 160):
+     ```bash
+     FAIL_TYPE=config_error
+     FAIL_MESSAGE="HTTP 000000: Unexpected HTTP response received from webhook endpoint."
+     ```
+5. **Downstream Alert Misdirection (Gate 2 Step 4):**
+   - In Step 4 (`Post alert if webhook health fails`), `FAIL_TYPE=config_error` triggers the alert category `⚠️ Configuration Error (HTTP 404 / Webhook Config)`.
+   - On-call engineers receive alerts advising them to verify GitHub repository webhook settings or trigger workflow reactivation scripts, obscuring the true problem: **the server host is down, unreachable, or timing out**.
+
+---
+
+### 2. Review of `tests/test_fork_health_resilience.py` & Test Blind Spots
+
+- **Identified Gap in [`test_04_gate2_step3_telemetry_http_404_isolation`](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/tests/test_fork_health_resilience.py#L87-L104):**
+  - Current unit tests simulate the status check in Python with an oversimplified structure:
+    ```python
+    if status in ("200", "400"):
+        outcome = "ok"
+    elif status == "404":
+        outcome = "config_error"
+    else:
+        outcome = "server_failure"
+    ```
+  - In Python, any unknown status (like `"000000"`) falls into `server_failure`. But in the actual YAML workflow, `else` assigns `config_error`!
+  - This divergence masked the shell script defect from the CI test suite.
+- **Missing Test Coverage:**
+  - Zero tests executing shell-level curl status capture under simulated exit code 28 (`CURLE_OPERATION_TIMEDOUT`) or exit code 7 (`CURLE_COULDNT_CONNECT`).
+  - No assertions ensuring status normalization to `"000"` (excluding `"000000"`).
+  - No fixtures in [`tests/fixtures/fork_health_fixtures.py`](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/tests/fixtures/fork_health_fixtures.py#L60-L88) for timeout and connection abort telemetry.
+
+---
+
+### 3. Recommended Remediation & Test Assertions
+
+1. **Idiomatic Two-Stage Capture Pattern:**
+   ```bash
+   HTTP_CODE=""
+   CURL_EXIT=0
+   HTTP_CODE=$(curl -s -S -o /dev/null -w "%{http_code}" \
+     -X POST "$EXPECTED_URL" \
+     -H "Content-Type: application/json" \
+     -d '{"action":"health_check","test":true}' \
+     --max-time 10 2>/dev/null) || CURL_EXIT=$?
+
+   if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then
+     STATUS="000"
+   else
+     STATUS="$HTTP_CODE"
+   fi
+
+   echo "HTTP_STATUS=$STATUS" >> "$GITHUB_ENV"
+   echo "CURL_EXIT=$CURL_EXIT" >> "$GITHUB_ENV"
+   ```
+2. **Robust Branching Condition:**
+   ```bash
+   elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || { [ "$STATUS" -ge 500 ] 2>/dev/null; }; then
+     echo "FAIL_TYPE=server_failure" >> "$GITHUB_ENV"
+     echo "FAIL_MESSAGE=HTTP $STATUS (curl exit $CURL_EXIT): Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors." >> "$GITHUB_ENV"
+   ```
+3. **Required Test Suite Expansion:**
+   - Concrete test assertions for status normalization (`test_12`), shell branching matrix (`test_13`), and Python parity (`test_14`) are documented in Section 7 of the audit report.
+
+---
+
+### 4. Deliverable & Git Status
+
+- **Audit Report Committed:** [Reports/audit/gate_webhook_health_curl_status_parsing_audit.md](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/Reports/audit/gate_webhook_health_curl_status_parsing_audit.md) (`5f53d5e`)
+- **Workflow Immutability Guarantee:** No workflow files under `.github/workflows/` were modified on `main`.
+- **Test Verification:** [`tests/test_fork_health_resilience.py`](file:///home/runner/work/_temp/agent-repo-43355256834-1-run-agy/tests/test_fork_health_resilience.py) executed cleanly (11/11 tests passing, 0 errors).
