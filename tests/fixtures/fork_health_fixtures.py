@@ -86,3 +86,23 @@ GATE2_TELEMETRY = {
         "body_file": "/tmp/issue_body.md",
     },
 }
+
+# Gate 2 Timeout and Network Failure Telemetry Constants
+GATE2_TELEMETRY_TIMEOUT = {
+    "step": "Verify webhook endpoint is reachable",
+    "http_code": "000",
+    "curl_exit_code": 28,
+    "fail_type": "server_failure",
+    "fail_message_pattern": "HTTP 000.*Server failure or timeout",
+    "cat_label_pattern": "Server Failure.*Timeout",
+}
+
+GATE2_TELEMETRY_CONNREFUSED = {
+    "step": "Verify webhook endpoint is reachable",
+    "http_code": "000",
+    "curl_exit_code": 7,
+    "fail_type": "server_failure",
+    "fail_message_pattern": "HTTP 000.*Server failure or timeout",
+    "cat_label_pattern": "Server Failure.*Timeout",
+}
+

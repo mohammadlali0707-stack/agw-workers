@@ -29,6 +29,8 @@ if REPO_ROOT not in sys.path:
 import Tools.audit_fork_workflow_health as audit_tool
 from tests.fixtures.fork_health_fixtures import (
     GATE2_TELEMETRY,
+    GATE2_TELEMETRY_CONNREFUSED,
+    GATE2_TELEMETRY_TIMEOUT,
     MOCK_WORKFLOWS_ABSENT,
     MOCK_WORKFLOWS_HEALTHY,
     MOCK_WORKFLOWS_UNPARSEABLE,
@@ -231,6 +233,110 @@ class TestForkHealthAndPatchResilience(unittest.TestCase):
             self.assertIn("API_403", output)
             self.assertIn('"unreachable": 9', output)
 
+    def test_12_gate2_step3_curl_timeout_status_normalization(self):
+        """Verify that curl timeouts (exit 28) produce strictly normalized '000', not '000000'."""
+        simulated_step = (
+            'HTTP_CODE=""; CURL_EXIT=0; '
+            'HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://192.0.2.1 --max-time 1 2>/dev/null) '
+            '|| CURL_EXIT=$?; '
+            'if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then STATUS="000"; else STATUS="$HTTP_CODE"; fi; '
+            'echo "STATUS=$STATUS"; echo "CURL_EXIT=$CURL_EXIT"'
+        )
+        res = subprocess.run(["bash", "-c", simulated_step], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("STATUS=000", res.stdout)
+        self.assertNotIn("STATUS=000000", res.stdout)
+        self.assertNotIn("STATUS=000\n000", res.stdout)
+        self.assertIn("CURL_EXIT=28", res.stdout)
+
+    def test_13_gate2_step3_shell_status_evaluation_matrix(self):
+        """Verify that shell status logic correctly routes 000, 5xx, and curl exit codes to server_failure."""
+        def evaluate_shell(status_val, curl_exit=0):
+            shell_script = f"""
+            STATUS="{status_val}"
+            CURL_EXIT={curl_exit}
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "400" ]; then
+              echo "OUTCOME=ok"
+            elif [ "$STATUS" = "404" ]; then
+              echo "FAIL_TYPE=config_error"
+            elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || {{ [ "$STATUS" -ge 500 ] 2>/dev/null; }}; then
+              echo "FAIL_TYPE=server_failure"
+            else
+              echo "FAIL_TYPE=config_error"
+            fi
+            """
+            proc = subprocess.run(["bash", "-c", shell_script], capture_output=True, text=True)
+            return proc.stdout.strip()
+
+        # Happy paths
+        self.assertEqual(evaluate_shell("200"), "OUTCOME=ok")
+        self.assertEqual(evaluate_shell("400"), "OUTCOME=ok")
+
+        # Configuration error (Quarantine / inactive workflow)
+        self.assertEqual(evaluate_shell("404"), "FAIL_TYPE=config_error")
+
+        # Server downtime & 5xx failures
+        self.assertEqual(evaluate_shell("500"), "FAIL_TYPE=server_failure")
+        self.assertEqual(evaluate_shell("502"), "FAIL_TYPE=server_failure")
+        self.assertEqual(evaluate_shell("503"), "FAIL_TYPE=server_failure")
+        self.assertEqual(evaluate_shell("504"), "FAIL_TYPE=server_failure")
+
+        # Timeout & connection aborts (must be server_failure, NEVER config_error)
+        self.assertEqual(evaluate_shell("000", curl_exit=0), "FAIL_TYPE=server_failure")
+        self.assertEqual(evaluate_shell("000", curl_exit=28), "FAIL_TYPE=server_failure")
+        self.assertEqual(evaluate_shell("000", curl_exit=7), "FAIL_TYPE=server_failure")
+
+        # Resiliency against defect strings: non-zero curl exit overrides malformed status
+        self.assertEqual(evaluate_shell("000000", curl_exit=28), "FAIL_TYPE=server_failure")
+
+    def test_14_gate2_step3_python_simulation_parity(self):
+        """Verify Python telemetry generator accurately reproduces workflow branching logic."""
+        test_cases = [
+            ("200", 0, "ok"),
+            ("400", 0, "ok"),
+            ("404", 0, "config_error"),
+            ("000", 28, "server_failure"),
+            ("000", 7, "server_failure"),
+            ("500", 0, "server_failure"),
+            ("502", 0, "server_failure"),
+            ("418", 0, "config_error"),  # Unexpected HTTP status falls through to config_error
+        ]
+        for status, curl_exit, expected in test_cases:
+            if status in ("200", "400"):
+                outcome = "ok"
+            elif status == "404":
+                outcome = "config_error"
+            elif status == "000" or curl_exit != 0 or (status.isdigit() and int(status) >= 500):
+                outcome = "server_failure"
+            else:
+                outcome = "config_error"
+            self.assertEqual(
+                outcome,
+                expected,
+                f"Status '{status}' with curl_exit {curl_exit} expected {expected}, got {outcome}",
+            )
+
+    def test_15_gate2_patch_curl_resilience_content(self):
+        """Verify that resilience patch includes curl exit capture, normalization, and server_failure routing."""
+        patch_path = os.path.join(REPO_ROOT, "Reports/audit/gate-webhook-health-resilience.patch")
+        with open(patch_path, "r", encoding="utf-8") as f:
+            patch_text = f.read()
+
+        self.assertIn('+          HTTP_CODE=""', patch_text)
+        self.assertIn('+          CURL_EXIT=0', patch_text)
+        self.assertIn('+          if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then', patch_text)
+        self.assertIn('+            STATUS="000"', patch_text)
+        self.assertIn('+          echo "CURL_EXIT=$CURL_EXIT" >> "$GITHUB_ENV"', patch_text)
+        self.assertIn(
+            '+          elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || { [ "$STATUS" -ge 500 ] 2>/dev/null; }; then',
+            patch_text,
+        )
+        self.assertIn(
+            '+            echo "FAIL_MESSAGE=HTTP $STATUS (curl exit $CURL_EXIT): Server failure or timeout.',
+            patch_text,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

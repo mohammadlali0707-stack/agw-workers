@@ -10,7 +10,49 @@
      env:
        # Reading repos/{repo}/hooks needs ADMIN on the repo. GITHUB_TOKEN has no
        # webhook permission at all -- there is no `permissions:` key that grants
-@@ -165,6 +165,7 @@ jobs:
+@@ -133,13 +133,22 @@ jobs:
+         if: always()
+         run: |
+           echo "=== Checking n8n endpoint reachability ==="
+-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
++          HTTP_CODE=""
++          CURL_EXIT=0
++          HTTP_CODE=$(curl -s -S -o /dev/null -w "%{http_code}" \
+             -X POST "$EXPECTED_URL" \
+             -H "Content-Type: application/json" \
+             -d '{"action":"health_check","test":true}' \
+-            --max-time 10 2>/dev/null || echo "000")
++            --max-time 10 2>/dev/null) || CURL_EXIT=$?
++
++          if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then
++            STATUS="000"
++          else
++            STATUS="$HTTP_CODE"
++          fi
+ 
+           echo "HTTP_STATUS=$STATUS" >> "$GITHUB_ENV"
++          echo "CURL_EXIT=$CURL_EXIT" >> "$GITHUB_ENV"
+ 
+           # n8n returns 200 (processed) or 400 (bad payload but reachable) = OK
+           # 404 = webhook route not registered / wrong path (configuration error)
+@@ -149,12 +158,12 @@ jobs:
+           elif [ "$STATUS" = "404" ]; then
+             echo "FAIL_TYPE=config_error" >> "$GITHUB_ENV"
+             echo "FAIL_MESSAGE=HTTP 404: Webhook route not found. The endpoint path is incorrect or the n8n workflow is inactive/unregistered." >> "$GITHUB_ENV"
+-           echo "❌ n8n endpoint config error (HTTP 404: route not found / workflow inactive)"
++            echo "❌ n8n endpoint config error (HTTP 404: route not found / workflow inactive)"
+             exit 1
+-          elif [ "$STATUS" = "000" ] || [ "$STATUS" -ge 500 ] 2>/dev/null; then
++          elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || { [ "$STATUS" -ge 500 ] 2>/dev/null; }; then
+             echo "FAIL_TYPE=server_failure" >> "$GITHUB_ENV"
+-            echo "FAIL_MESSAGE=HTTP $STATUS: Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors." >> "$GITHUB_ENV"
+-            echo "❌ n8n endpoint server failure (HTTP $STATUS: server down / timeout)"
++            echo "FAIL_MESSAGE=HTTP $STATUS (curl exit $CURL_EXIT): Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors." >> "$GITHUB_ENV"
++            echo "❌ n8n endpoint server failure (HTTP $STATUS: server down / timeout / curl exit $CURL_EXIT)"
+             exit 1
+           else
+             echo "FAIL_TYPE=config_error" >> "$GITHUB_ENV"
+@@ -165,6 +174,7 @@ jobs:
  
        - name: Post alert if webhook health fails
          if: failure()
@@ -18,7 +60,7 @@
          env:
            GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
            EXPECTED_URL: ${{ env.EXPECTED_URL }}
-@@ -263,7 +264,8 @@ jobs:
+@@ -263,7 +273,8 @@ jobs:
                || gh issue create \
                  --repo "$REPO" \
                  --title "$ISSUE_TITLE" \
