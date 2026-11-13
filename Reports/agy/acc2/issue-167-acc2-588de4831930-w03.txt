@@ -1,0 +1,110 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-167-acc2-588de4831930-w03","commits":1,"files_changed":6,"checkout":"/home/runner/work/_temp/agent-repo-43357270516-1-run-agy"}}
+Worker committed 1 commit(s), 6 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read `.github/workflows/gate-webhook-health.yml` and `tests/test_fork_health_resilience.py` using `view_file`** to analyze the existing webhook health check implementation, curl exit handling, string concatenation behavior, failure typing, and the test suite expectations.
+2. **Formulate the offline resilience patch under `Reports/audit/` using `write_to_file`** (e.g. `Reports/audit/gate-webhook-health-resilience.patch`) strictly under 400 lines, ensuring clean handling of curl exit codes (including timeout code 28 and network failures), preventing duplicate '000' string concatenation, and reliably assigning `FAIL_TYPE=server_failure`.
+3. **Validate the patch offline using `run_command` with `git apply --check`** to ensure clean application with 0 conflicts and 0 direct workflow modifications on main.
+4. **Execute and update `tests/test_fork_health_resilience.py` using `run_command` and `replace_file_content`** to ensure 100% test pass rate for the resilience logic.
+5. **Prepare the Notion AI proposal markdown file under `Reports/audit/` using `write_to_file`** detailing the unified diff, verification evidence, test output, and merge instructions.
+6. **Submit for team review via `/tmp/hqteam.py` and commit all audit artifacts and test updates with `git add` and `git commit`**.
+
+Let's begin by reading `.github/workflows/gate-webhook-health.yml`.
+I have checked the team board via `/tmp/hqteam.py read` and am waiting for the output.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have submitted the proposal for team review via `/tmp/hqteam.py review` and am waiting for the review output.
+I have posted completion status to the team board via `/tmp/hqteam.py post done` and am waiting for the process to conclude.
+### Offline Resilience Patch Formulation, Test Suite Validation, and Notion AI Proposal
+
+**Agent ID:** `agw-ACC2-w03` (Account 2 Lead Team)  
+**Target Workflow:** [`.github/workflows/gate-webhook-health.yml`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/.github/workflows/gate-webhook-health.yml)  
+**Patch Deliverable:** [`Reports/audit/gate-webhook-health-resilience.patch`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch)  
+**Proposal Deliverable:** [`Reports/audit/gate_webhook_health_resilience_proposal_comment.md`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/Reports/audit/gate_webhook_health_resilience_proposal_comment.md)  
+**Test Suite:** [`tests/test_fork_health_resilience.py`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/tests/test_fork_health_resilience.py)  
+
+---
+
+### 1. Offline Patch Formulation ([`Reports/audit/gate-webhook-health-resilience.patch`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch))
+
+Formulated the unified offline resilience patch (72 lines, strictly well under the 400-line ceiling) eliminating the curl command-substitution double-emission flaw and secondary alert crashes:
+
+1. **Decoupled Exit & HTTP Code Capture:**
+   Replaced the inline subshell fallback `STATUS=$(curl ... || echo "000")` with decoupled execution:
+   ```bash
+   HTTP_CODE=""
+   CURL_EXIT=0
+   HTTP_CODE=$(curl -s -S -o /dev/null -w "%{http_code}" \
+     -X POST "$EXPECTED_URL" \
+     -H "Content-Type: application/json" \
+     -d '{"action":"health_check","test":true}' \
+     --max-time 10 2>/dev/null) || CURL_EXIT=$?
+
+   if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then
+     STATUS="000"
+   else
+     STATUS="$HTTP_CODE"
+   fi
+
+   echo "HTTP_STATUS=$STATUS" >> "$GITHUB_ENV"
+   echo "CURL_EXIT=$CURL_EXIT" >> "$GITHUB_ENV"
+   ```
+2. **Elimination of Duplicate `'000'` Concatenation:**
+   Prevents curl's `000` emission from concatenating with `echo "000"` into `"000000"` or `"000\n000"`.
+3. **Reliable `FAIL_TYPE=server_failure` Assignment:**
+   Updated the evaluation condition to:
+   ```bash
+   elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || { [ "$STATUS" -ge 500 ] 2>/dev/null; }; then
+     echo "FAIL_TYPE=server_failure" >> "$GITHUB_ENV"
+     echo "FAIL_MESSAGE=HTTP $STATUS (curl exit $CURL_EXIT): Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors." >> "$GITHUB_ENV"
+   ```
+4. **Secondary Failure Decoupling:**
+   Maintained `continue-on-error: true` on Step 4 and the two-tier exit-guarded fallback (`|| echo "::warning::failed to create alert issue on $REPO..."`).
+
+---
+
+### 2. Offline Patch Validation (`git apply --check`)
+
+- **Clean Patch Dry-Run:**
+  `git apply --check Reports/audit/gate-webhook-health-resilience.patch` exited with return code `0` (0 conflicts, 0 offset, 0 fuzz).
+- **Zero Direct Workflow Modifications on `main`:**
+  `git status --porcelain .github/workflows/` confirmed **0 direct edits on main**.
+
+---
+
+### 3. Test Suite Augmentation & 100% Pass Rate ([`tests/test_fork_health_resilience.py`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/tests/test_fork_health_resilience.py))
+
+Added test fixtures [`GATE2_TELEMETRY_TIMEOUT`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/tests/fixtures/fork_health_fixtures.py) and [`GATE2_TELEMETRY_CONNREFUSED`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/tests/fixtures/fork_health_fixtures.py) and augmented [`TestForkHealthAndPatchResilience`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/tests/test_fork_health_resilience.py#L38-L343) with four new test cases:
+- `test_12_gate2_step3_curl_timeout_status_normalization`: Validates curl timeout (exit 28) normalizes to `"000"`, never `"000000"`, and preserves `CURL_EXIT=28`.
+- `test_13_gate2_step3_shell_status_evaluation_matrix`: Verifies shell status routing for `200`, `400` (`ok`), `404` (`config_error`), `500`, `502`, `503`, `504`, `000` (`server_failure`), and malformed status override with non-zero exit.
+- `test_14_gate2_step3_python_simulation_parity`: Confirms parity across Python telemetry generation.
+- `test_15_gate2_patch_curl_resilience_content`: Enforces patch content invariants for `CURL_EXIT`, `STATUS="000"`, and `server_failure`.
+
+**Test Result:** `15/15` tests passed (`0 failures, 0 errors` in `1.035s`).
+
+---
+
+### 4. Notion AI Proposal Comment Deliverables
+
+Prepared and updated the exact proposal markdown files under `Reports/audit/`:
+- [`Reports/audit/gate_webhook_health_resilience_proposal_comment.md`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/Reports/audit/gate_webhook_health_resilience_proposal_comment.md)
+- [`Reports/audit/issue_161_proposal_comment.md`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/Reports/audit/issue_161_proposal_comment.md)
+- [`Reports/audit/gate-webhook-health-resilience-proposal.md`](file:///home/runner/work/_temp/agent-repo-43357270516-1-run-agy/Reports/audit/gate-webhook-health-resilience-proposal.md)
+
+Each file documents:
+1. Full diagnostic summary and reproduction trace of the subshell double-emission defect.
+2. The 6 core resilience pillars.
+3. Complete untruncated unified diff (72 lines).
+4. Full verification evidence (`git apply --check`, 15/15 tests passing, `run_injection` pass, YAML lint pass).
+5. Safe, actionable Notion AI upstream merge instructions without manual workflow edits.
+
+---
+
+### 5. Git Commit Evidence
+
+All changes were staged and committed inside the repository checkout:
+- **Commit:** `49ef72b` (`fix(audit): formulate offline gate-webhook-health resilience patch, test suite, and proposal (agw-ACC2-w03)`)
+- **Working Tree Cleanliness:** Clean working tree; zero workflow files modified on `main`.
