@@ -38,7 +38,7 @@ def run_web(cid, job):
     try:
         os.makedirs("/tmp/wjobs", exist_ok=True)
         open(f"/tmp/wjobs/{cid}.tmp", "w").write(json.dumps(job)); os.replace(f"/tmp/wjobs/{cid}.tmp", f"/tmp/wjobs/{cid}.json")
-        while not os.path.isdir(d) and time.time() - t < 2150 and (WEBP.poll() is None): time.sleep(0.5)
+        while not os.path.isdir(d) and time.time() - t < 300   # owner 2026-11-14: a hung Gemini-website generation must not hold the account's only web slot for 36 min and (WEBP.poll() is None): time.sleep(0.5)
         if os.path.isdir(d): files = {n: open(f"{d}/{n}").read() for n in ("answer.txt", "result.json")}
         else: files = {"answer.txt": "", "result.json": json.dumps({"ok": False, "files": [], "warm": True, "error": "warm web session stopped"})}
         save(cid, files); ok = json.loads(files["result.json"]).get("ok")
