@@ -285,6 +285,8 @@ class TestForkHealthAndPatchResilience(unittest.TestCase):
         self.assertEqual(evaluate_shell("000", curl_exit=0), "FAIL_TYPE=server_failure")
         self.assertEqual(evaluate_shell("000", curl_exit=28), "FAIL_TYPE=server_failure")
         self.assertEqual(evaluate_shell("000", curl_exit=7), "FAIL_TYPE=server_failure")
+        self.assertEqual(evaluate_shell("000", curl_exit=6), "FAIL_TYPE=server_failure")
+        self.assertEqual(evaluate_shell("000", curl_exit=35), "FAIL_TYPE=server_failure")
 
         # Resiliency against defect strings: non-zero curl exit overrides malformed status
         self.assertEqual(evaluate_shell("000000", curl_exit=28), "FAIL_TYPE=server_failure")
@@ -297,8 +299,14 @@ class TestForkHealthAndPatchResilience(unittest.TestCase):
             ("404", 0, "config_error"),
             ("000", 28, "server_failure"),
             ("000", 7, "server_failure"),
+            ("000", 6, "server_failure"),
+            ("000", 35, "server_failure"),
             ("500", 0, "server_failure"),
             ("502", 0, "server_failure"),
+            ("503", 0, "server_failure"),
+            ("504", 0, "server_failure"),
+            ("301", 0, "config_error"),
+            ("403", 0, "config_error"),
             ("418", 0, "config_error"),  # Unexpected HTTP status falls through to config_error
         ]
         for status, curl_exit, expected in test_cases:
@@ -336,7 +344,74 @@ class TestForkHealthAndPatchResilience(unittest.TestCase):
             patch_text,
         )
 
+    def test_16_gate2_step3_telemetry_timeout_isolation(self):
+        """Validate Gate 2 telemetry isolation and alert labeling under curl timeout (exit 28)."""
+        import re
+        fixture = GATE2_TELEMETRY_TIMEOUT
+        status = fixture["http_code"]
+        curl_exit = fixture["curl_exit_code"]
+
+        if status in ("200", "400"):
+            fail_type = "ok"
+            fail_msg = ""
+        elif status == "404":
+            fail_type = "config_error"
+            fail_msg = "HTTP 404: Webhook route not found. The endpoint path is incorrect or the n8n workflow is inactive/unregistered."
+        elif status == "000" or curl_exit != 0 or (status.isdigit() and int(status) >= 500):
+            fail_type = "server_failure"
+            fail_msg = f"HTTP {status} (curl exit {curl_exit}): Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors."
+        else:
+            fail_type = "config_error"
+            fail_msg = f"HTTP {status}: Unexpected HTTP response received from webhook endpoint."
+
+        self.assertEqual(fail_type, fixture["fail_type"])
+        self.assertTrue(bool(re.search(fixture["fail_message_pattern"], fail_msg)))
+
+        # Verify alert category label logic parity with Step 4
+        if fail_type == "config_error":
+            cat_label = "⚠️ Configuration Error (HTTP 404 / Webhook Config)"
+        elif fail_type == "server_failure":
+            cat_label = f"🔥 Server Failure (HTTP {status} / Timeout / Unreachable)"
+        else:
+            cat_label = f"❓ Gate Failure (HTTP {status})"
+
+        self.assertTrue(bool(re.search(fixture["cat_label_pattern"], cat_label)))
+
+    def test_17_gate2_step3_telemetry_connrefused_isolation(self):
+        """Validate Gate 2 telemetry isolation and alert labeling under network connection failure (exit 7)."""
+        import re
+        fixture = GATE2_TELEMETRY_CONNREFUSED
+        status = fixture["http_code"]
+        curl_exit = fixture["curl_exit_code"]
+
+        if status in ("200", "400"):
+            fail_type = "ok"
+            fail_msg = ""
+        elif status == "404":
+            fail_type = "config_error"
+            fail_msg = "HTTP 404: Webhook route not found. The endpoint path is incorrect or the n8n workflow is inactive/unregistered."
+        elif status == "000" or curl_exit != 0 or (status.isdigit() and int(status) >= 500):
+            fail_type = "server_failure"
+            fail_msg = f"HTTP {status} (curl exit {curl_exit}): Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors."
+        else:
+            fail_type = "config_error"
+            fail_msg = f"HTTP {status}: Unexpected HTTP response received from webhook endpoint."
+
+        self.assertEqual(fail_type, fixture["fail_type"])
+        self.assertTrue(bool(re.search(fixture["fail_message_pattern"], fail_msg)))
+
+        # Verify alert category label logic parity with Step 4
+        if fail_type == "config_error":
+            cat_label = "⚠️ Configuration Error (HTTP 404 / Webhook Config)"
+        elif fail_type == "server_failure":
+            cat_label = f"🔥 Server Failure (HTTP {status} / Timeout / Unreachable)"
+        else:
+            cat_label = f"❓ Gate Failure (HTTP {status})"
+
+        self.assertTrue(bool(re.search(fixture["cat_label_pattern"], cat_label)))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
