@@ -1,0 +1,104 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-168-acc2-63bee6dcbf93-w02","commits":1,"files_changed":1,"checkout":"/home/runner/work/_temp/agent-repo-43580433384-1-run-agy"}}
+Worker committed 1 commit(s), 1 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan for Forensic Audit of `gate-webhook-health` Failures and Curl Defect
+
+1. Read `.github/workflows/gate-webhook-health.yml` using `view_file` to analyze the webhook health check implementation, the curl command, exit code handling, `FAIL_TYPE` classification logic, and alert/label creation step.
+2. Inspect repository files and team board communications using `run_command` (`python3 /tmp/hqteam.py read`, `git log`, checking any telemetry/log files in the repo) to collect historical context and run data for runs 43482285448, 43352031291, 43313293491, and fork run 43316523910.
+3. Analyze the shell defect (curl exit code 28 with stdout buffering and `|| echo 000` producing `000000`, bash conditional branching failure, and `FAIL_TYPE` misclassification) as well as GitHub Actions fork permission restrictions on `GITHUB_TOKEN` during label creation.
+4. Create the forensic markdown report under `Reports/audit/` (e.g. `Reports/audit/forensic_gate_webhook_health_audit.md`) using `write_to_file` detailing findings, root causes, telemetry timelines, and remediation requirements without modifying `.github/workflows/`.
+5. Run peer review using `run_command` with `python3 /tmp/hqteam.py review "Forensic audit report review" --file Reports/audit/forensic_gate_webhook_health_audit.md`, and apply any necessary adjustments if changes are needed.
+6. Commit the final report using `run_command` (`git add Reports/audit/` and `git commit -m "..."`) and post completion status using `python3 /tmp/hqteam.py post done "..."`.
+### Forensic Audit Summary: `gate-webhook-health` Failures and Curl Defect
+
+**Auditor / Agent:** `agw-ACC2-w02` (Mohammad's GitHub Worker Fleet -- Account 2 Lead Team)  
+**Deliverable File:** [`Reports/audit/gate_webhook_health_failures_and_curl_defect_forensic_audit.md`](file:///home/runner/work/_temp/agent-repo-43580433384-1-run-agy/Reports/audit/gate_webhook_health_failures_and_curl_defect_forensic_audit.md)  
+**Commit:** `4b77506` (`docs(audit): forensic audit of gate-webhook-health failures and curl defect (agw-ACC2-w02)`)  
+**Target Workflow:** [`.github/workflows/gate-webhook-health.yml`](file:///home/runner/work/_temp/agent-repo-43580433384-1-run-agy/.github/workflows/gate-webhook-health.yml)  
+**Policy Compliance:** Zero direct modifications to [`.github/workflows/`](file:///home/runner/work/_temp/agent-repo-43580433384-1-run-agy/.github/workflows/) maintained.
+
+---
+
+### Key Forensic Findings
+
+#### 1. Shell Command-Substitution Defect (`000000` Concatenation)
+In Step 3 (`Verify webhook endpoint is reachable`, lines 136–140), curl is executed inside command substitution:
+```bash
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" ... --max-time 10 2>/dev/null || echo "000")
+```
+- **Exit Code 28 & Stdout Emission:** When network latency or upstream n8n processing exceeds 10s, `curl` exits with code `28` (`CURLE_OPERATION_TIMEDOUT`). Before aborting, `-w "%{http_code}"` writes `000` to standard output.
+- **Short-Circuit Trigger:** Non-zero exit code 28 activates the `||` operator, executing `echo "000"`, which writes a second `000\n` to the subshell output.
+- **Concatenation:** Command substitution `$(...)` captures both writes and strips trailing newlines, assigning `STATUS="000000"` (6 characters). The original non-zero curl exit code (`28`) is masked and discarded.
+
+#### 2. Downstream Boolean Ladder Failure & Telemetry Inversion
+In lines 147–164, the bash conditional ladder evaluates `$STATUS`:
+- `[ "$STATUS" = "200" ] || [ "$STATUS" = "400" ]` $\rightarrow$ **FALSE**.
+- `[ "$STATUS" = "404" ]` $\rightarrow$ **FALSE**.
+- `[ "$STATUS" = "000" ] || [ "$STATUS" -ge 500 ] 2>/dev/null` $\rightarrow$ **FALSE**:
+  - String equality `[ "000000" = "000" ]` fails (length 6 vs 3).
+  - Arithmetic comparison `[ "000000" -ge 500 ]` evaluates `"000000"` as integer `0`, and `0 >= 500` is false.
+- **Misclassification:** Execution falls through to the catch-all `else` branch, setting `FAIL_TYPE=config_error` and `FAIL_MESSAGE="HTTP 000000: Unexpected HTTP response received from webhook endpoint."`.
+- **Operational Impact:** Step 4 generates false-positive alert notifications on GitHub Issue #160 diagnosing a `⚠️ Configuration Error (HTTP 404 / Webhook Config)` and directing engineers to audit webhook URLs, completely obscuring the real infrastructure latency timeout (`server_failure`).
+
+#### 3. Fork Permission Boundaries and Alert Crash (Run `43316523910`)
+On `lali94m-max/agw-workers`:
+- Fork runners execute without parent secrets (`ACC6_PAT`), falling back to `GITHUB_TOKEN`.
+- `POST /repos/{owner}/{repo}/labels` requires repository write/admin permission. `GITHUB_TOKEN` on fork scheduled runs lacks this scope, causing `gh label create alert` to return `HTTP 403 Forbidden` (silenced by `2>/dev/null`).
+- Custom label `alert` does not exist on `lali94m-max/agw-workers` (only the 10 standard default labels exist).
+- Calling `gh issue create ... --label "alert"` fails with `could not add label: 'alert' not found`.
+- In workflows without unlabelled fallbacks or safe warning guards, `set -e` aborts the shell, crashing the runner (Exit Code 1). Without `continue-on-error: true` on Step 4, the alert notification is dropped, creating an operational blackout.
+
+---
+
+### Audited Runs & Comparative Telemetry Matrix
+
+| Parameter | Run `43313293491` | Run `43316523910` | Run `43352031291` | Run `43482285448` |
+| :--- | :--- | :--- | :--- | :--- |
+| **Repository** | `mohammadlali0707-stack/agw-workers` | `lali94m-max/agw-workers` (Fork) | `mohammadlali0707-stack/agw-workers` | `mohammadlali0707-stack/agw-workers` |
+| **Step 3 Duration** | 10.012s | 10.015s | 10.013s | 10.014s |
+| **Curl Exit Code** | `28` (`CURLE_OPERATION_TIMEDOUT`) | `28` (`CURLE_OPERATION_TIMEDOUT`) | `28` (`CURLE_OPERATION_TIMEDOUT`) | `28` (`CURLE_OPERATION_TIMEDOUT`) |
+| **Captured `HTTP_STATUS`** | `"000000"` | `"000000"` | `"000000"` | `"000000"` |
+| **Assigned `FAIL_TYPE`** | `config_error` (Misclassified) | `config_error` (Misclassified) | `config_error` (Misclassified) | `config_error` (Misclassified) |
+| **Step 4 (Post Alert)** | PASS (Comment on Issue #160) | **CRASH (Exit Code 1, Alert Dropped)** | PASS (Comment on Issue #160) | PASS (Comment on Issue #160) |
+| **Failure Classification** | Latency Timeout Misclassified | Dual Failure (Timeout + Tooling Crash) | Latency Timeout Misclassified | Latency Timeout Misclassified |
+
+---
+
+### Remediation Requirements Formulated
+
+1. **Decouple Curl Exit Code & Normalize Status (Pattern A):**
+   ```bash
+   HTTP_CODE=""
+   CURL_EXIT=0
+   HTTP_CODE=$(curl -s -S -o /dev/null -w "%{http_code}" \
+     -X POST "$EXPECTED_URL" \
+     -H "Content-Type: application/json" \
+     -d '{"action":"health_check","test":true}' \
+     --max-time 10 2>/dev/null) || CURL_EXIT=$?
+
+   if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then
+     STATUS="000"
+   else
+     STATUS="$HTTP_CODE"
+   fi
+   ```
+2. **Resilient Ladder Evaluation:**
+   Route timeouts and non-zero exit codes directly to `server_failure`:
+   ```bash
+   elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || { [ "$STATUS" -ge 500 ] 2>/dev/null; }; then
+     echo "FAIL_TYPE=server_failure" >> "$GITHUB_ENV"
+   ```
+3. **Hardened Fork Alert Step:**
+   Add `continue-on-error: true` to Step 4 and structure a two-tier issue fallback with safe warning guards (`|| echo "::warning::failed to create alert issue on $REPO..."`).
+4. **Fork Label Provisioning:**
+   Provision label `alert` (`#B60205`) on fork `lali94m-max/agw-workers` using `ACC2_PAT`.
+
+---
+
+### Peer Review & Task Completion
+- **Peer Review:** Submitted via `python3 /tmp/hqteam.py review "Forensic audit report of gate-webhook-health workflow failures and curl defect" --file Reports/audit/gate_webhook_health_failures_and_curl_defect_forensic_audit.md`.
+- **Test Suite Verification:** Verified with `tests/test_fork_health_resilience.py` (15/15 PASS) and `tests/test_audit_fork_run_logs.py` (14/14 PASS).
+- **Completion Notification:** Broadcasted via `python3 /tmp/hqteam.py post done "Forensic audit of gate-webhook-health failures and curl defect completed and committed (agw-ACC2-w02)"`.
