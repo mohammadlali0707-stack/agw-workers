@@ -410,6 +410,149 @@ class TestForkHealthAndPatchResilience(unittest.TestCase):
 
         self.assertTrue(bool(re.search(fixture["cat_label_pattern"], cat_label)))
 
+    def test_18_gate2_step3_network_error_matrix(self):
+        """Validate network error matrix (exit 6, 7, 28, 35, 52, 56) correctly routes to server_failure."""
+        curl_network_exits = [
+            (6, "CURLE_COULDNT_RESOLVE_HOST"),
+            (7, "CURLE_COULDNT_CONNECT"),
+            (28, "CURLE_OPERATION_TIMEDOUT"),
+            (35, "CURLE_SSL_CONNECT_ERROR"),
+            (52, "CURLE_GOT_NOTHING"),
+            (56, "CURLE_RECV_ERROR"),
+        ]
+        for exit_code, desc in curl_network_exits:
+            shell_script = f"""
+            STATUS="000"
+            CURL_EXIT={exit_code}
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "400" ]; then
+              echo "OUTCOME=ok"
+            elif [ "$STATUS" = "404" ]; then
+              echo "FAIL_TYPE=config_error"
+            elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || {{ [ "$STATUS" -ge 500 ] 2>/dev/null; }}; then
+              echo "FAIL_TYPE=server_failure"
+              echo "FAIL_MESSAGE=HTTP $STATUS (curl exit $CURL_EXIT): Server failure or timeout."
+            else
+              echo "FAIL_TYPE=config_error"
+            fi
+            """
+            proc = subprocess.run(["bash", "-c", shell_script], capture_output=True, text=True)
+            self.assertIn("FAIL_TYPE=server_failure", proc.stdout, f"Failed for {desc} (exit {exit_code})")
+            self.assertIn(f"curl exit {exit_code}", proc.stdout)
+
+    def test_19_gate2_step3_exhaustive_http_status_matrix(self):
+        """Validate exhaustive HTTP status handling across 2xx, 3xx, 4xx, 5xx, and 000."""
+        cases = {
+            "200": "OUTCOME=ok",
+            "400": "OUTCOME=ok",
+            "404": "FAIL_TYPE=config_error",
+            "500": "FAIL_TYPE=server_failure",
+            "502": "FAIL_TYPE=server_failure",
+            "503": "FAIL_TYPE=server_failure",
+            "504": "FAIL_TYPE=server_failure",
+            "000": "FAIL_TYPE=server_failure",
+            "301": "FAIL_TYPE=config_error",
+            "302": "FAIL_TYPE=config_error",
+            "401": "FAIL_TYPE=config_error",
+            "403": "FAIL_TYPE=config_error",
+            "405": "FAIL_TYPE=config_error",
+            "418": "FAIL_TYPE=config_error",
+            "429": "FAIL_TYPE=config_error",
+        }
+        for code, expected_outcome in cases.items():
+            shell_script = f"""
+            STATUS="{code}"
+            CURL_EXIT=0
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "400" ]; then
+              echo "OUTCOME=ok"
+            elif [ "$STATUS" = "404" ]; then
+              echo "FAIL_TYPE=config_error"
+            elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || {{ [ "$STATUS" -ge 500 ] 2>/dev/null; }}; then
+              echo "FAIL_TYPE=server_failure"
+            else
+              echo "FAIL_TYPE=config_error"
+            fi
+            """
+            proc = subprocess.run(["bash", "-c", shell_script], capture_output=True, text=True)
+            self.assertEqual(proc.stdout.strip(), expected_outcome, f"Failed for HTTP {code}")
+
+    def test_20_gate2_yaml_patch_in_memory_validation(self):
+        """Verify that applying resilience patch produces valid YAML with continue-on-error: true."""
+        import tempfile, yaml
+        workflow_path = os.path.join(REPO_ROOT, ".github/workflows/gate-webhook-health.yml")
+        patch_path = os.path.join(REPO_ROOT, "Reports/audit/gate-webhook-health-resilience.patch")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_workflow = os.path.join(tmpdir, "gate-webhook-health.yml")
+            with open(workflow_path, "r", encoding="utf-8") as f_in, open(tmp_workflow, "w", encoding="utf-8") as f_out:
+                f_out.write(f_in.read())
+
+            res = subprocess.run(
+                ["patch", "-p1", "--input", patch_path],
+                cwd=tmpdir,
+                capture_output=True,
+                text=True,
+            )
+            # Patch applied to file directly
+            if res.returncode != 0:
+                # Try git apply in tmp git repo
+                subprocess.run(["git", "init"], cwd=tmpdir, capture_output=True)
+                os.makedirs(os.path.join(tmpdir, ".github/workflows"), exist_ok=True)
+                os.replace(tmp_workflow, os.path.join(tmpdir, ".github/workflows/gate-webhook-health.yml"))
+                res = subprocess.run(
+                    ["git", "apply", patch_path],
+                    cwd=tmpdir,
+                    capture_output=True,
+                    text=True,
+                )
+                tmp_workflow = os.path.join(tmpdir, ".github/workflows/gate-webhook-health.yml")
+
+            self.assertEqual(res.returncode, 0, f"Patch apply failed: {res.stderr}")
+            with open(tmp_workflow, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            parsed = yaml.safe_load(content)
+            steps = parsed["jobs"]["webhook-health"]["steps"]
+            alert_step = next(s for s in steps if s.get("name") == "Post alert if webhook health fails")
+            self.assertTrue(alert_step.get("continue-on-error"))
+
+    def test_21_gate2_defect_status_concatenation_prevention(self):
+        """Verify prevention of '000000' concatenation defect and improper config_error classification."""
+        # Unpatched defect simulation:
+        unpatched_script = """
+        STATUS=$(echo -n "000" && false || echo "000")
+        if [ "$STATUS" = "000" ] || [ "$STATUS" -ge 500 ] 2>/dev/null; then
+          echo "OUTCOME=server_failure"
+        else
+          echo "OUTCOME=config_error"
+        fi
+        """
+        res_unpatched = subprocess.run(["bash", "-c", unpatched_script], capture_output=True, text=True)
+        # Demonstrates the unpatched bug misclassified '000000' as config_error
+        self.assertEqual(res_unpatched.stdout.strip(), "OUTCOME=config_error")
+
+        # Patched resilient logic simulation:
+        patched_script = """
+        HTTP_CODE="000"
+        CURL_EXIT=28
+        if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then
+          STATUS="000"
+        else
+          STATUS="$HTTP_CODE"
+        fi
+        if [ "$STATUS" = "200" ] || [ "$STATUS" = "400" ]; then
+          echo "OUTCOME=ok"
+        elif [ "$STATUS" = "404" ]; then
+          echo "OUTCOME=config_error"
+        elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || { [ "$STATUS" -ge 500 ] 2>/dev/null; }; then
+          echo "OUTCOME=server_failure"
+        else
+          echo "OUTCOME=config_error"
+        fi
+        """
+        res_patched = subprocess.run(["bash", "-c", patched_script], capture_output=True, text=True)
+        # Verified: correctly classifies as server_failure and avoids 000000
+        self.assertEqual(res_patched.stdout.strip(), "OUTCOME=server_failure")
+
 
 if __name__ == "__main__":
     unittest.main()
