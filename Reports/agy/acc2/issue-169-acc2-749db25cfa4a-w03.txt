@@ -1,0 +1,142 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-169-acc2-749db25cfa4a-w03","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-43585214568-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Inspect Workflow and Existing Tests**: Read `.github/workflows/gate-webhook-health.yml` and `tests/test_fork_health_resilience.py` (via `view_file`) to analyze current curl exit code handling, status concatenation defect, fork alert issue creation logic, and test harness setup.
+2. **Formulate and Validate Resilience Patch**: Formulate the patch decoupling curl execution from exit code capture (e.g. `CURL_EXIT=$?`), preventing '000000' duplication, routing timeouts (exit 28)/network errors/'000'/5xx to `FAIL_TYPE=server_failure`, and adding `continue-on-error: true` with fallback warning redirection (`2>/dev/null || echo '::warning::...'`) to Step 4. Save to `Reports/audit/gate-webhook-health-resilience.patch` and verify clean application via `git apply --check Reports/audit/gate-webhook-health-resilience.patch` without modifying `.github/workflows/` on main.
+3. **Augment and Execute Resilience Test Suite**: Update `tests/test_fork_health_resilience.py` to test all timeout (28), network error, and HTTP status scenarios (ensuring 100% pass rate) while ensuring total repo modifications remain strictly <= 400 lines.
+4. **Peer Review, Issue Comment, and Commit**: Submit for peer review via `python3 /tmp/hqteam.py review`, post the diagnosis and YAML patch to GitHub Issue #169 using `gh issue comment`, commit all audit and test artifacts via `git add` and `git commit`, and report completion via `python3 /tmp/hqteam.py post done`.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have started running the full test suite discovery in the background and will review the results as soon as it completes.
+I am waiting for the background test suite run to finish.
+### Work Plan & Execution Summary
+
+1. **Inspect Workflow and Existing Tests**: Analyzed [.github/workflows/gate-webhook-health.yml](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy/.github/workflows/gate-webhook-health.yml) and [tests/test_fork_health_resilience.py](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy/tests/test_fork_health_resilience.py) to assess the exit code masking, duplicate `000000` status concatenation defect, and unhandled fork alert creation failures.
+2. **Formulate and Validate Resilience Patch**: Verified the offline resilience patch at [Reports/audit/gate-webhook-health-resilience.patch](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch). Verified clean application with `git apply --check Reports/audit/gate-webhook-health-resilience.patch` (exit code 0) while maintaining zero direct edits under `.github/workflows/` on `main`.
+3. **Augment and Execute Resilience Test Suite**: Augmented [tests/test_fork_health_resilience.py](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy/tests/test_fork_health_resilience.py) with four new test cases (`test_18` through `test_21`) validating network error exit codes (6, 7, 28, 35, 52, 56), exhaustive HTTP status scenarios (2xx, 3xx, 4xx, 5xx, 000), YAML patch structure, and defect concatenation prevention. Verified 100% pass rate (21/21 passed). Total repo modifications are 237 lines (strictly `<= 400 lines`).
+4. **Peer Review, Issue Comment, and Commit**: Submitted for peer review via `python3 /tmp/hqteam.py review`, posted the complete diagnosis and unredacted YAML patch to [Issue #169](https://github.com/mohammadlali0707-stack/agw-workers/issues/169#issuecomment-6876011889), committed test and audit artifacts (`git add` + `git commit`), and posted completion status via `python3 /tmp/hqteam.py post done`.
+
+---
+
+### Diagnosis & Root Cause Analysis (Issue #169)
+
+Analysis of the Gate 2 (`gate-webhook-health.yml`) failures across `mohammadlali0707-stack/agw-workers` (runs `43482285448`, `43352031291`, `43313293491`) and `lali94m-max/agw-workers` (run `43316523910`) revealed two cascading defects:
+
+1. **Curl Exit Code Masking & Duplicate `000000` Status Concatenation (Step 3)**:
+   - When `curl` encountered a timeout (`--max-time 10`, exit code 28 `CURLE_OPERATION_TIMEDOUT`) or network failure (exit 7 `CURLE_COULDNT_CONNECT`, exit 6 DNS failure), `-w "%{http_code}"` emitted `000` to stdout before terminating with a non-zero exit code.
+   - The subshell fallback `|| echo "000"` was executed, writing a second `000` to stdout. Command substitution `$(...)` concatenated these into `STATUS="000000"`.
+   - The shell ladder evaluated `[ "$STATUS" = "000" ]` (false) and `[ "$STATUS" -ge 500 ]` (false, as `000000` evaluates to 0 in bash integer comparison; `0 >= 500` is false).
+   - Execution fell through to `else`, wrongly setting `FAIL_TYPE=config_error` and `FAIL_MESSAGE="HTTP 000000: Unexpected HTTP response received from webhook endpoint."`, misclassifying network timeouts/server outages as repository webhook configuration errors.
+2. **Step 4 Secondary Alert Crash on Fork Checkouts**:
+   - Step 4 lacked `continue-on-error: true`.
+   - On forks where the GITHUB_TOKEN has read-only permissions or repository issues are disabled, `gh label create alert` and `gh issue create ... --label "alert"` failed. The unlabelled fallback was not fully guarded with warning redirection.
+   - Under `set -e`, any non-zero exit terminated the runner, converting an alert notification hiccup into a hard CI crash.
+
+---
+
+### Exact Unified Diff Patch for Notion AI Execution
+
+Deliverable: [Reports/audit/gate-webhook-health-resilience.patch](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy/Reports/audit/gate-webhook-health-resilience.patch)
+
+```diff
+--- a/.github/workflows/gate-webhook-health.yml
++++ b/.github/workflows/gate-webhook-health.yml
+@@ -10,8 +10,8 @@ jobs:
+   webhook-health:
+     runs-on: ubuntu-latest
+     permissions:
+-      issues: write
+       contents: read
++      issues: write
+     env:
+       # Reading repos/{repo}/hooks needs ADMIN on the repo. GITHUB_TOKEN has no
+       # webhook permission at all -- there is no `permissions:` key that grants
+@@ -133,13 +133,22 @@ jobs:
+         if: always()
+         run: |
+           echo "=== Checking n8n endpoint reachability ==="
+-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
++          HTTP_CODE=""
++          CURL_EXIT=0
++          HTTP_CODE=$(curl -s -S -o /dev/null -w "%{http_code}" \
+             -X POST "$EXPECTED_URL" \
+             -H "Content-Type: application/json" \
+             -d '{"action":"health_check","test":true}' \
+-            --max-time 10 2>/dev/null || echo "000")
++            --max-time 10 2>/dev/null) || CURL_EXIT=$?
++
++          if [ $CURL_EXIT -ne 0 ] || [ -z "$HTTP_CODE" ]; then
++            STATUS="000"
++          else
++            STATUS="$HTTP_CODE"
++          fi
+ 
+           echo "HTTP_STATUS=$STATUS" >> "$GITHUB_ENV"
++          echo "CURL_EXIT=$CURL_EXIT" >> "$GITHUB_ENV"
+ 
+           # n8n returns 200 (processed) or 400 (bad payload but reachable) = OK
+           # 404 = webhook route not registered / wrong path (configuration error)
+@@ -149,12 +158,12 @@ jobs:
+           elif [ "$STATUS" = "404" ]; then
+             echo "FAIL_TYPE=config_error" >> "$GITHUB_ENV"
+             echo "FAIL_MESSAGE=HTTP 404: Webhook route not found. The endpoint path is incorrect or the n8n workflow is inactive/unregistered." >> "$GITHUB_ENV"
+-           echo "❌ n8n endpoint config error (HTTP 404: route not found / workflow inactive)"
++            echo "❌ n8n endpoint config error (HTTP 404: route not found / workflow inactive)"
+             exit 1
+-          elif [ "$STATUS" = "000" ] || [ "$STATUS" -ge 500 ] 2>/dev/null; then
++          elif [ "$STATUS" = "000" ] || [ "$CURL_EXIT" -ne 0 ] || { [ "$STATUS" -ge 500 ] 2>/dev/null; }; then
+             echo "FAIL_TYPE=server_failure" >> "$GITHUB_ENV"
+-            echo "FAIL_MESSAGE=HTTP $STATUS: Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors." >> "$GITHUB_ENV"
+-            echo "❌ n8n endpoint server failure (HTTP $STATUS: server down / timeout)"
++            echo "FAIL_MESSAGE=HTTP $STATUS (curl exit $CURL_EXIT): Server failure or timeout. The n8n server is down, unreachable, or returning internal 5xx errors." >> "$GITHUB_ENV"
++            echo "❌ n8n endpoint server failure (HTTP $STATUS: server down / timeout / curl exit $CURL_EXIT)"
+             exit 1
+           else
+             echo "FAIL_TYPE=config_error" >> "$GITHUB_ENV"
+@@ -165,6 +174,7 @@ jobs:
+ 
+       - name: Post alert if webhook health fails
+         if: failure()
++        continue-on-error: true
+         env:
+           GH_TOKEN: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
+           EXPECTED_URL: ${{ env.EXPECTED_URL }}
+@@ -263,7 +273,8 @@ jobs:
+               || gh issue create \
+                 --repo "$REPO" \
+                 --title "$ISSUE_TITLE" \
+-                --body-file /tmp/issue_body.md
++                --body-file /tmp/issue_body.md 2>/dev/null \
++              || echo "::warning::failed to create alert issue on $REPO (issues disabled or insufficient token permissions)"
+           else
+             echo "Existing open issue found (#$EXISTING_ISSUE). Updating with a comment instead of creating duplicate..."
+             gh issue comment "$EXISTING_ISSUE" \
+```
+
+---
+
+### Verification and Delivery Record
+
+1. **Patch Clean Application**:
+   - `git apply --check Reports/audit/gate-webhook-health-resilience.patch` -> Exited 0 (zero errors, zero fuzz).
+2. **Main Branch Isolation**:
+   - `git status --porcelain .github/workflows/` -> Empty (0 workflow files directly modified on `main`).
+3. **Unit Test Suite Parity & Coverage**:
+   - `python3 -m unittest -v tests/test_fork_health_resilience.py` -> Ran 21 tests in 1.099s, **OK (100% pass rate)**.
+   - Tested: timeout status normalization, bash status routing matrix, Python parity generator, fixture isolation (timeout & connrefused), network error matrix (exits 6, 7, 28, 35, 52, 56), exhaustive HTTP status matrix (2xx, 3xx, 4xx, 5xx, 000), YAML patch structure validation, and `000000` defect concatenation prevention.
+4. **Security & Lint Verification**:
+   - `python3 Tools/check_run_injection.py .github/workflows/gate-webhook-health.yml` -> Pass (0 untrusted expressions).
+   - `python3 Tools/probe_gate_yaml_lint_check2.py` -> Pass (0 findings).
+5. **Issue #169 Comment**:
+   - Successfully posted to upstream issue: [Issue #169 Comment #6876011889](https://github.com/mohammadlali0707-stack/agw-workers/issues/169#issuecomment-6876011889).
+6. **Peer Review & Done Post**:
+   - Executed `python3 /tmp/hqteam.py review "Verify Gate 2 offline resilience patch and Issue 169 diagnosis" --file Reports/audit/issue_169_gate_webhook_health_resilience_audit.md`.
+   - Executed `python3 /tmp/hqteam.py post done "Formulated offline resilience patch, verified 21/21 tests, and posted complete diagnosis & YAML patch to Issue #169"`.
+7. **Git Commit & Repository Modification Ceiling**:
+   - Added [Reports/audit/issue_169_gate_webhook_health_resilience_audit.md](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy/Reports/audit/issue_169_gate_webhook_health_resilience_audit.md) (94 lines) and updated [tests/test_fork_health_resilience.py](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy/tests/test_fork_health_resilience.py) (143 lines).
+   - Total modification: **237 lines** (strictly `<= 400 lines`).
+   - Committed as commit [`eeaba45`](file:///home/runner/work/_temp/agent-repo-43585214568-1-run-agy): `"fix(gate-webhook-health): augment resilience test validation and audit for issue #169 (agw-ACC2-w03)"`.
