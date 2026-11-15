@@ -68,9 +68,9 @@ def main():
                 page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
                 page.wait_for_timeout(4000)
 
-                if _first_visible(page, CAPTCHA_SEL):
-                    print("RESULT captcha_detected")
-                    return 3
+                # NOTE: the login page always embeds a reCAPTCHA iframe; that alone
+                # is not a challenge. Only an actual challenge page after clicking
+                # Google (URL containing /challenge) counts as captcha_detected.
 
                 btn = _first_visible(page, GOOGLE_BTN)
                 popup = None
@@ -91,6 +91,9 @@ def main():
 
                 popup.wait_for_load_state("domcontentloaded")
                 popup.wait_for_timeout(3000)
+                if "challenge" in (popup.url or "").lower():
+                    print("RESULT captcha_detected")
+                    return 3
                 for _ in range(5):  # account chooser -> Continue / Allow
                     if popup.is_closed():
                         break
