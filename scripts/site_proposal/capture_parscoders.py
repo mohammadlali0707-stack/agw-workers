@@ -72,58 +72,61 @@ def main():
                 # is not a challenge. Only an actual challenge page after clicking
                 # Google (URL containing /challenge) counts as captcha_detected.
 
-                # The Google button is <a href="/connect-google">; go there directly
-                # instead of hunting the button (its text is inside a nested span).
+                # Try the Google button first (proper flow, incl. reCAPTCHA),
+                # fall back to direct /connect-google navigation. Retry twice.
                 popup = None
-                try:
-                    with context.expect_page(timeout=20000) as pinfo:
-                        page.goto("https://parscoders.com/connect-google",
-                                  wait_until="domcontentloaded", timeout=60000)
-                    popup = pinfo.value
-                except Exception:
-                    # same-tab redirect to accounts.google.com, or back to parscoders
-                    if "accounts.google.com" not in (page.url or ""):
+                logged_in_via = None
+                for attempt in range(2):
+                    try:
+                        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
+                        page.wait_for_timeout(5000)
+                    except Exception:
+                        pass
+                    btn = _first_visible(page, [
+                        "a.google-sign-in",
+                        "button:has-text('ورود با گوگل')",
+                        "a:has-text('ورود با گوگل')",
+                        "button:has-text('Google')",
+                        "a:has-text('Google')",
+                    ])
+                    if btn is not None:
+                        try:
+                            with context.expect_page(timeout=20000) as pinfo:
+                                btn.click()
+                            popup = pinfo.value
+                            logged_in_via = "button"
+                            break
+                        except Exception:
+                            if "accounts.google.com" in (page.url or ""):
+                                popup = page
+                                logged_in_via = "button-same-tab"
+                                break
+                            # same-tab redirect; fall through to direct nav
+                    try:
+                        with context.expect_page(timeout=20000) as pinfo:
+                            page.goto("https://parscoders.com/connect-google",
+                                      wait_until="domcontentloaded", timeout=60000)
+                        popup = pinfo.value
+                        logged_in_via = "direct"
+                        break
+                    except Exception:
+                        if "accounts.google.com" in (page.url or ""):
+                            popup = page
+                            logged_in_via = "direct-same-tab"
+                            break
                         if "/login" not in (page.url or ""):
-                            popup = None  # already back on parscoders; verify below
-                        else:
-                            print("RESULT google_redirect_failed url=%s" % page.url)
-                            return 4
-                    else:
-                        popup = page
-                if popup is None:
-                    # direct navigation already landed back logged in; verify below
-                    pass
-                else:
+                            popup = None
+                            logged_in_via = "direct-back"
+                            break
+                        print("RESULT attempt %d redirect failed url=%s" % (
+                            attempt, page.url))
+                        popup = None
+                if popup is None and logged_in_via is None:
+                    print("RESULT google_redirect_failed url=%s" % page.url)
+                    return 4
+                if popup is not None:
                     popup.wait_for_load_state("domcontentloaded")
                     popup.wait_for_timeout(3000)
-
-                if popup is not None and "challenge" in (popup.url or "").lower():
-                    print("RESULT captcha_detected")
-                    return 3
-                for _ in range(5):  # account chooser -> Continue / Allow
-                    if popup is None or popup.is_closed():
-                        break
-                    try:
-                        if popup.locator("input[type='password']").count():
-                            print("RESULT google_password_required")
-                            return 2
-                    except Exception:
-                        pass
-                    hit = _first_visible(popup, [
-                        f"[data-email='{gl.account}']",
-                        f"div:has-text('{gl.account}') >> nth=-1",
-                        "button:has-text('Continue')",
-                        "button:has-text('Allow')",
-                        "button:has-text('ادامه')",
-                    ])
-                    if not hit:
-                        break
-                    try:
-                        hit.click(timeout=8000)
-                    except Exception:
-                        pass
-                    popup.wait_for_timeout(3000)
-
                 # back on parscoders: verify the dashboard loads logged in
                 page.goto(DASH_URL, wait_until="domcontentloaded", timeout=60000)
                 page.wait_for_timeout(4000)
