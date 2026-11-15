@@ -1,0 +1,37 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-170-acc2-90421c9fac6e-w03","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-43719197800-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read and analyze `scripts/site_proposal/runner.py` and `tests/test_site_proposal_runner.py`** using `view_file` to understand how `proposal.json` is loaded, how preview mode vs submit mode is differentiated, what `result.json` structure is expected, and current exit codes.
+2. **Check team protocol and status** via `/tmp/hqteam.py` if available using `run_command`.
+3. **Enhance error handling and validation in `scripts/site_proposal/runner.py`** for missing `proposal.json` during preview mode, ensuring diagnostic logging, structured error metadata written to `result.json`, and appropriate exit code semantics without unhandled crashes.
+4. **Augment automated tests in `tests/test_site_proposal_runner.py`** to comprehensively test missing `proposal.json` in preview mode versus submit mode.
+5. **Verify changes and test suite** using `run_command` with `pytest`, ensuring 100% test pass rate and total diff within the <= 400 lines limit (`git diff --stat`).
+6. **Perform team review (via `/tmp/hqteam.py`) and commit** changes using `git add` and `git commit` inside the repository.
+root agent idle; waiting up to 28m0s for 2 background task(s)
+I am waiting for the test suite run to finish.
+I will wait for the background test command to complete.
+The background test execution has been launched. I am waiting for it to complete.
+### Summary of Changes
+
+1. **Enhanced Missing & Empty Proposal Handling in `scripts/site_proposal/runner.py`**:
+   - In **preview mode**: When `proposal.json` is missing under `results_dir/jobs/<job_id>` (or contains empty/invalid data), [`run_proposal`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/scripts/site_proposal/runner.py#L220) emits a diagnostic log (`logger.warning`), records status as `"missing_proposal"` rather than an ambiguous `"form_error"`, and writes structured error metadata (`error_code: "MISSING_PROPOSAL"`, `error_details`, `error_metadata`) to `result.json`.
+   - In **submit mode**: Preserves fatal error semantics (`logger.error`, `status: "form_error"`, exit code 1) and includes structured error metadata while ensuring the daily submission counter is not incremented.
+   - In [`main()`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/scripts/site_proposal/runner.py#L566): Returns exit code `0` when `status == "missing_proposal"` in preview mode (avoiding false alarms in CI), and returns `1` for failures in submit mode.
+
+2. **Automated Unit Tests in `tests/test_site_proposal_runner.py`**:
+   - [`test_result_json_missing_proposal_file`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/tests/test_site_proposal_runner.py#L430): Validates graceful `missing_proposal` handling and structured metadata in `result.json` during preview mode.
+   - [`test_missing_proposal_submit_mode`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/tests/test_site_proposal_runner.py#L462): Validates submit mode error recording, structured error metadata, and zero increment in daily submit count.
+   - [`test_missing_proposal_preview_vs_submit_exit_codes`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/tests/test_site_proposal_runner.py#L484): Verifies that CLI entrypoint [`main()`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/scripts/site_proposal/runner.py#L566) exits `0` in preview mode and `1` in submit mode when `proposal.json` is absent.
+   - [`test_missing_proposal_diagnostic_logging`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/tests/test_site_proposal_runner.py#L508): Verifies warning-level diagnostic logging in preview mode vs error logging in submit mode.
+   - [`test_empty_proposal_file_preview_mode`](file:///home/runner/work/_temp/agent-repo-43719197800-1-run-agy/tests/test_site_proposal_runner.py#L540): Verifies graceful handling when `proposal.json` exists but contains empty dict data.
+
+3. **Verification**:
+   - `python3 -m pytest tests/test_site_proposal_runner.py`: **27 passed** (100% pass rate).
+   - Bytecode compilation via `python3 -m py_compile`: Clean (exit code 0).
+   - Total diff: **199 additions, 3 deletions across 2 files** (well within the <= 400 lines limit).
+   - Committed locally to git with commit hash `63db29a`.
