@@ -1,0 +1,53 @@
+name: Capture ParsCoders session
+
+# Renews the ParsCoders login session for the site-proposal runner.
+# Signs in with the shared Google site-login account (momona), dumps the
+# parscoders.com cookies + localStorage, and updates the GitHub secret
+# SITE_SESSION_PARSCODERS. The session JSON is never printed, logged or
+# committed: it lives only in /tmp during the run and is shredded after.
+# Manual dispatch only; never submits any proposal or bid.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOOGLE_SITE_COOKIES_MOMONA: ${{ secrets.GOOGLE_SITE_COOKIES_MOMONA }}
+      GOOGLE_LOCK_TOKEN: ${{ secrets.ACC6_PAT }}
+      GH_TOKEN: ${{ secrets.ACC6_PAT }}
+    steps:
+      - name: Checkout agw-workers
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Capture ParsCoders session
+        run: python3 scripts/site_proposal/capture_parscoders.py
+
+      - name: Update SITE_SESSION_PARSCODERS secret
+        if: success()
+        run: |
+          test -f /tmp/parscoders-session.json || { echo "session file missing"; exit 1; }
+          gh secret set SITE_SESSION_PARSCODERS \
+            --repo mohammadlali0707-stack/agw-workers \
+            --body-file /tmp/parscoders-session.json
+          echo "SITE_SESSION_PARSCODERS updated"
+
+      - name: Shred session file
+        if: always()
+        run: shred -u /tmp/parscoders-session.json 2>/dev/null || rm -f /tmp/parscoders-session.json
