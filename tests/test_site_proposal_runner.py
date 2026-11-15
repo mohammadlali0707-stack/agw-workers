@@ -39,6 +39,7 @@ from scripts.site_proposal.runner import (
     parse_args,
     run_proposal,
     sanitize_cookies,
+    validate_proposal_payload,
 )
 
 
@@ -686,4 +687,176 @@ def test_local_storage_injection_into_page(temp_results_dir, sample_proposal_dat
 
     assert result["status"] == "preview_ready"
     assert injected_token == "token_abc_123"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Tests for Mandatory proposal.json Payload Prerequisites & Playwright Guard
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_missing_proposal_json_never_launches_playwright(temp_results_dir, monkeypatch):
+    """Ensure that missing proposal.json returns form_error before launching Playwright."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+    with patch("scripts.site_proposal.runner.get_site_adapter") as mock_adapter, \
+         patch("playwright.async_api.async_playwright") as mock_pw:
+        result = asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/nonexistent",
+                job_id="job_missing_proposal",
+                mode="preview",
+                results_dir=temp_results_dir,
+            )
+        )
+        assert result["status"] == "form_error"
+        assert "proposal.json not found" in result["error_message"]
+        mock_adapter.assert_not_called()
+        mock_pw.assert_not_called()
+
+
+def test_malformed_json_never_launches_playwright(temp_results_dir, monkeypatch):
+    """Ensure that malformed JSON in proposal.json returns form_error before launching Playwright."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+    job_dir = temp_results_dir / "jobs" / "job_bad_json"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    with open(job_dir / "proposal.json", "w") as f:
+        f.write("{invalid_json: unterminated")
+
+    with patch("playwright.async_api.async_playwright") as mock_pw:
+        result = asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/bad-json",
+                job_id="job_bad_json",
+                mode="preview",
+                results_dir=temp_results_dir,
+            )
+        )
+        assert result["status"] == "form_error"
+        assert "Failed to parse proposal.json" in result["error_message"]
+        mock_pw.assert_not_called()
+
+
+def test_non_dict_json_never_launches_playwright(temp_results_dir, monkeypatch):
+    """Ensure that non-dictionary JSON in proposal.json returns form_error before launching Playwright."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+    job_dir = temp_results_dir / "jobs" / "job_array_json"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    with open(job_dir / "proposal.json", "w") as f:
+        json.dump(["array", "not", "object"], f)
+
+    with patch("playwright.async_api.async_playwright") as mock_pw:
+        result = asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/array-json",
+                job_id="job_array_json",
+                mode="preview",
+                results_dir=temp_results_dir,
+            )
+        )
+        assert result["status"] == "form_error"
+        assert "proposal.json root must be a JSON object" in result["error_message"]
+        mock_pw.assert_not_called()
+
+
+def test_missing_proposal_text_never_launches_playwright(temp_results_dir, monkeypatch):
+    """Ensure that proposal.json missing proposal_text returns form_error before launching Playwright."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+    job_dir = temp_results_dir / "jobs" / "job_no_text"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    with open(job_dir / "proposal.json", "w") as f:
+        json.dump({"bid_amount": 5000000, "delivery_days": 5}, f)
+
+    with patch("playwright.async_api.async_playwright") as mock_pw:
+        result = asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/no-text",
+                job_id="job_no_text",
+                mode="preview",
+                results_dir=temp_results_dir,
+            )
+        )
+        assert result["status"] == "form_error"
+        assert "proposal_text" in result["error_message"]
+        mock_pw.assert_not_called()
+
+
+def test_invalid_bid_or_days_never_launches_playwright(temp_results_dir, monkeypatch):
+    """Ensure that invalid bid_amount or delivery_days returns form_error before launching Playwright."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+    job_dir = temp_results_dir / "jobs" / "job_invalid_bid"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    with open(job_dir / "proposal.json", "w") as f:
+        json.dump({"proposal_text": "valid text", "bid_amount": -500}, f)
+
+    with patch("playwright.async_api.async_playwright") as mock_pw:
+        result = asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/invalid-bid",
+                job_id="job_invalid_bid",
+                mode="preview",
+                results_dir=temp_results_dir,
+            )
+        )
+        assert result["status"] == "form_error"
+        assert "bid_amount must be a positive number" in result["error_message"]
+        mock_pw.assert_not_called()
+
+
+def test_site_proposal_fixtures_and_verification_checks():
+    """Verify that fixture objects and verification helper functions enforce prerequisites."""
+    from tests.fixtures.site_proposal_fixtures import (
+        VALID_PROPOSAL_PAYLOAD,
+        MINIMAL_PROPOSAL_PAYLOAD,
+        EXPLORE_PROPOSAL_PAYLOAD,
+        INVALID_PAYLOAD_NON_OBJECT,
+        INVALID_PAYLOAD_MISSING_TEXT,
+        INVALID_PAYLOAD_EMPTY_TEXT,
+        INVALID_PAYLOAD_NEGATIVE_BID,
+        INVALID_PAYLOAD_INVALID_DAYS,
+        verify_dispatched_job_payload,
+    )
+
+    # Valid payloads
+    ok, err = verify_dispatched_job_payload(VALID_PROPOSAL_PAYLOAD)
+    assert ok is True and err is None
+
+    ok, err = verify_dispatched_job_payload(MINIMAL_PROPOSAL_PAYLOAD)
+    assert ok is True and err is None
+
+    ok, err = verify_dispatched_job_payload(EXPLORE_PROPOSAL_PAYLOAD)
+    assert ok is True and err is None
+
+    # Invalid payloads
+    ok, err = verify_dispatched_job_payload(INVALID_PAYLOAD_NON_OBJECT)
+    assert ok is False and "JSON object" in err
+
+    ok, err = verify_dispatched_job_payload(INVALID_PAYLOAD_MISSING_TEXT)
+    assert ok is False and "proposal_text" in err
+
+    ok, err = verify_dispatched_job_payload(INVALID_PAYLOAD_EMPTY_TEXT)
+    assert ok is False and "proposal_text" in err
+
+    ok, err = verify_dispatched_job_payload(INVALID_PAYLOAD_NEGATIVE_BID)
+    assert ok is False and "bid_amount" in err
+
+    ok, err = verify_dispatched_job_payload(INVALID_PAYLOAD_INVALID_DAYS)
+    assert ok is False and "delivery_days" in err
+
+
+def test_sample_proposal_json_fixture_files():
+    """Verify that checked-in proposal.json fixture files pass verification check."""
+    from tests.fixtures.site_proposal_fixtures import verify_job_dispatch_prerequisites
+
+    fixture_path_tests = Path("tests/fixtures/sample_proposal.json")
+    ok, err = verify_job_dispatch_prerequisites(fixture_path_tests)
+    assert ok is True and err is None, f"tests/fixtures/sample_proposal.json failed verification: {err}"
+
+    fixture_job_dir = Path("jobs/sample-proposal")
+    ok, err = verify_job_dispatch_prerequisites(fixture_job_dir)
+    assert ok is True and err is None, f"jobs/sample-proposal failed verification: {err}"
+
 

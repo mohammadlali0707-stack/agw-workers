@@ -217,6 +217,47 @@ def save_result(jobs_dir: Path, result_data: dict[str, Any]) -> None:
     os.replace(tmp_file, result_file)
 
 
+def validate_proposal_payload(proposal_data: Any) -> tuple[bool, str | None]:
+    """Validate proposal payload structure and mandatory fields before browser launch.
+
+    Returns:
+        tuple[bool, str | None]: (is_valid, error_message)
+    """
+    if not isinstance(proposal_data, dict):
+        return False, "proposal.json root must be a JSON object"
+
+    # In explore mode, proposal_text is not required
+    if proposal_data.get("_explore"):
+        return True, None
+
+    # Standard proposals require non-empty proposal_text
+    proposal_text = proposal_data.get("proposal_text")
+    if proposal_text is None or not str(proposal_text).strip():
+        return False, "proposal.json missing or empty required field: proposal_text"
+
+    # Validate bid_amount if provided
+    bid_amount = proposal_data.get("bid_amount")
+    if bid_amount is not None:
+        try:
+            amt = float(bid_amount)
+            if amt < 0:
+                return False, "proposal.json bid_amount must be a positive number"
+        except (ValueError, TypeError):
+            return False, f"proposal.json invalid bid_amount value: {bid_amount}"
+
+    # Validate delivery_days if provided
+    delivery_days = proposal_data.get("delivery_days")
+    if delivery_days is not None:
+        try:
+            days = int(delivery_days)
+            if days <= 0:
+                return False, "proposal.json delivery_days must be a positive integer"
+        except (ValueError, TypeError):
+            return False, f"proposal.json invalid delivery_days value: {delivery_days}"
+
+    return True, None
+
+
 async def run_proposal(
     site: str,
     project_url: str,
@@ -294,6 +335,24 @@ async def run_proposal(
             "screenshot_path": None,
             "filled_values": {},
             "error_message": f"Failed to parse proposal.json: {type(e).__name__}",
+            "daily_submit_count": current_submit_count,
+            "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        save_result(jobs_dir, result_data)
+        return result_data
+
+    is_valid, validation_err = validate_proposal_payload(proposal_data)
+    if not is_valid:
+        logger.error("Invalid proposal payload: %s", validation_err)
+        result_data = {
+            "job_id": job_id,
+            "site": site,
+            "project_url": project_url,
+            "mode": mode,
+            "status": "form_error",
+            "screenshot_path": None,
+            "filled_values": {},
+            "error_message": validation_err,
             "daily_submit_count": current_submit_count,
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }

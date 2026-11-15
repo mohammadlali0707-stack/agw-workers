@@ -30,6 +30,18 @@ from acquisition.test_fixtures import (
     get_tier_3_test_pair,
     verify_fixtures_against_manager,
 )
+from tests.fixtures.site_proposal_fixtures import (
+    VALID_PROPOSAL_PAYLOAD,
+    MINIMAL_PROPOSAL_PAYLOAD,
+    EXPLORE_PROPOSAL_PAYLOAD,
+    INVALID_PAYLOAD_NON_OBJECT,
+    INVALID_PAYLOAD_MISSING_TEXT,
+    INVALID_PAYLOAD_EMPTY_TEXT,
+    INVALID_PAYLOAD_NEGATIVE_BID,
+    INVALID_PAYLOAD_INVALID_DAYS,
+    verify_dispatched_job_payload,
+    verify_job_dispatch_prerequisites,
+)
 
 __all__ = [
     "CHATTER_MSG",
@@ -47,4 +59,15 @@ __all__ = [
     "get_keyword_filter_fixtures",
     "get_tier_3_test_pair",
     "verify_fixtures_against_manager",
+    "VALID_PROPOSAL_PAYLOAD",
+    "MINIMAL_PROPOSAL_PAYLOAD",
+    "EXPLORE_PROPOSAL_PAYLOAD",
+    "INVALID_PAYLOAD_NON_OBJECT",
+    "INVALID_PAYLOAD_MISSING_TEXT",
+    "INVALID_PAYLOAD_EMPTY_TEXT",
+    "INVALID_PAYLOAD_NEGATIVE_BID",
+    "INVALID_PAYLOAD_INVALID_DAYS",
+    "verify_dispatched_job_payload",
+    "verify_job_dispatch_prerequisites",
 ]
+

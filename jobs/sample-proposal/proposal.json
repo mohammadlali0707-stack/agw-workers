@@ -1,0 +1,12 @@
+{
+  "job_id": "sample-proposal",
+  "lead_id": "notion-uuid-lead-001",
+  "site": "ponisha",
+  "project_url": "https://ponisha.ir/project/sample-proposal-prerequisite",
+  "proposal_text": "سلام و احترام، این یک نمونه پروپوزال تستی معتبر جهت اعتبارسنجی الزامات ارسال جاب در hq-ai-results است.",
+  "bid_amount": 5000000,
+  "currency": "TOMAN",
+  "delivery_days": 5,
+  "milestone_title": "تحویل فاز آزمایشی و تست‌های کیفی",
+  "created_at": "2026-11-15T12:00:00Z"
+}
