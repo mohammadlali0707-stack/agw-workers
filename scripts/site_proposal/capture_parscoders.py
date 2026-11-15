@@ -72,30 +72,36 @@ def main():
                 # is not a challenge. Only an actual challenge page after clicking
                 # Google (URL containing /challenge) counts as captcha_detected.
 
-                btn = _first_visible(page, GOOGLE_BTN)
+                # The Google button is <a href="/connect-google">; go there directly
+                # instead of hunting the button (its text is inside a nested span).
                 popup = None
                 try:
-                    if btn:
-                        with context.expect_page(timeout=20000) as pinfo:
-                            btn.click()
-                        popup = pinfo.value
-                    else:
-                        print("RESULT google_button_not_found")
-                        return 4
+                    with context.expect_page(timeout=20000) as pinfo:
+                        page.goto("https://parscoders.com/connect-google",
+                                  wait_until="domcontentloaded", timeout=60000)
+                    popup = pinfo.value
                 except Exception:
-                    # same-tab redirect to accounts.google.com
+                    # same-tab redirect to accounts.google.com, or back to parscoders
                     if "accounts.google.com" not in (page.url or ""):
-                        print("RESULT google_button_not_found")
-                        return 4
-                    popup = page
+                        if "/login" not in (page.url or ""):
+                            popup = None  # already back on parscoders; verify below
+                        else:
+                            print("RESULT google_redirect_failed url=%s" % page.url)
+                            return 4
+                    else:
+                        popup = page
+                if popup is None:
+                    # direct navigation already landed back logged in; verify below
+                    pass
+                else:
+                    popup.wait_for_load_state("domcontentloaded")
+                    popup.wait_for_timeout(3000)
 
-                popup.wait_for_load_state("domcontentloaded")
-                popup.wait_for_timeout(3000)
-                if "challenge" in (popup.url or "").lower():
+                if popup is not None and "challenge" in (popup.url or "").lower():
                     print("RESULT captcha_detected")
                     return 3
                 for _ in range(5):  # account chooser -> Continue / Allow
-                    if popup.is_closed():
+                    if popup is None or popup.is_closed():
                         break
                     try:
                         if popup.locator("input[type='password']").count():
