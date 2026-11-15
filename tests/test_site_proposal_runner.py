@@ -429,7 +429,7 @@ def test_result_json_captcha_detected(temp_results_dir, sample_proposal_data, mo
 
 
 def test_result_json_missing_proposal_file(temp_results_dir, monkeypatch):
-    """When proposal.json is missing, record form_error without crashing."""
+    """When proposal.json is missing in preview mode, record missing_proposal gracefully."""
     monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
 
     result = asyncio.run(
@@ -442,9 +442,124 @@ def test_result_json_missing_proposal_file(temp_results_dir, monkeypatch):
         )
     )
 
+    assert result["status"] == "missing_proposal"
+    assert "proposal.json not found" in result["error_message"]
+    assert result["screenshot_path"] is None
+    assert result["error_code"] == "MISSING_PROPOSAL"
+    assert isinstance(result["error_details"], dict)
+    assert result["error_details"]["code"] == "MISSING_PROPOSAL"
+    assert result["error_details"]["mode"] == "preview"
+    assert result["error_details"]["job_id"] == "job_nonexistent"
+    assert result["error_metadata"]["code"] == "MISSING_PROPOSAL"
+
+    # Verify result.json saved to disk contains structured error metadata
+    saved_result_file = temp_results_dir / "jobs" / "job_nonexistent" / "result.json"
+    assert saved_result_file.exists()
+    with open(saved_result_file, "r", encoding="utf-8") as f:
+        disk_result = json.load(f)
+    assert disk_result["status"] == "missing_proposal"
+    assert disk_result["error_code"] == "MISSING_PROPOSAL"
+    assert disk_result["error_details"]["code"] == "MISSING_PROPOSAL"
+
+
+def test_missing_proposal_submit_mode(temp_results_dir, monkeypatch):
+    """When proposal.json is missing in submit mode, record form_error and do not increment count."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+
+    result = asyncio.run(
+        run_proposal(
+            site="ponisha",
+            project_url="https://ponisha.ir/project/missing_submit",
+            job_id="job_nonexistent_submit",
+            mode="submit",
+            results_dir=temp_results_dir,
+        )
+    )
+
     assert result["status"] == "form_error"
     assert "proposal.json not found" in result["error_message"]
     assert result["screenshot_path"] is None
+    assert result["error_code"] == "MISSING_PROPOSAL"
+    assert result["error_details"]["mode"] == "submit"
+    assert result["daily_submit_count"] == 0
+
+
+def test_missing_proposal_preview_vs_submit_exit_codes(temp_results_dir, monkeypatch):
+    """CLI exit code is 0 in preview mode (graceful) and 1 in submit mode when proposal.json is missing."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+
+    # Preview mode: should exit 0
+    exit_code_preview = main([
+        "--site", "ponisha",
+        "--project-url", "https://ponisha.ir/project/missing",
+        "--job-id", "job_cli_miss_preview",
+        "--mode", "preview",
+        "--results-dir", str(temp_results_dir),
+    ])
+    assert exit_code_preview == 0
+
+    # Submit mode: should exit 1
+    exit_code_submit = main([
+        "--site", "ponisha",
+        "--project-url", "https://ponisha.ir/project/missing",
+        "--job-id", "job_cli_miss_submit",
+        "--mode", "submit",
+        "--results-dir", str(temp_results_dir),
+    ])
+    assert exit_code_submit == 1
+
+
+def test_missing_proposal_diagnostic_logging(temp_results_dir, monkeypatch, caplog):
+    """Preview mode uses warning diagnostic log, while submit mode uses error log."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/missing",
+                job_id="job_log_preview",
+                mode="preview",
+                results_dir=temp_results_dir,
+            )
+        )
+    log_messages = [rec.message for rec in caplog.records]
+    assert any("Diagnostic:" in msg and "preview mode" in msg for msg in log_messages)
+    assert not any(rec.levelno >= logging.ERROR for rec in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO):
+        asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/missing",
+                job_id="job_log_submit",
+                mode="submit",
+                results_dir=temp_results_dir,
+            )
+        )
+    assert any(rec.levelno >= logging.ERROR and "Submit aborted" in rec.message for rec in caplog.records)
+
+
+def test_empty_proposal_file_preview_mode(temp_results_dir, monkeypatch):
+    """When proposal.json exists but is empty dict, preview mode records missing_proposal gracefully."""
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+    setup_proposal_file(temp_results_dir, "job_empty_prop", {})
+
+    result = asyncio.run(
+        run_proposal(
+            site="ponisha",
+            project_url="https://ponisha.ir/project/empty",
+            job_id="job_empty_prop",
+            mode="preview",
+            results_dir=temp_results_dir,
+        )
+    )
+
+    assert result["status"] == "missing_proposal"
+    assert result["error_code"] == "EMPTY_PROPOSAL_DATA"
+    assert result["error_details"]["code"] == "EMPTY_PROPOSAL_DATA"
 
 
 def test_result_json_missing_session_records_login_required(temp_results_dir, sample_proposal_data, monkeypatch):

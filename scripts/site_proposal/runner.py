@@ -305,16 +305,44 @@ async def run_proposal(
     # 2. Read proposal.json
     proposal_file = jobs_dir / "proposal.json"
     if not proposal_file.exists():
-        logger.error("proposal.json not found at %s", proposal_file)
+        if mode == "preview":
+            logger.warning(
+                "Diagnostic: proposal.json absent at %s for job '%s' (preview mode). Handled gracefully.",
+                proposal_file,
+                job_id,
+            )
+            error_status = "missing_proposal"
+        else:
+            logger.error(
+                "Submit aborted: proposal.json absent at %s for job '%s' (submit mode).",
+                proposal_file,
+                job_id,
+            )
+            error_status = "form_error"
+
+        err_details = {
+            "error_code": "MISSING_PROPOSAL",
+            "code": "MISSING_PROPOSAL",
+            "reason": "proposal_file_not_found",
+            "message": f"proposal.json not found in jobs/{job_id}",
+            "job_id": job_id,
+            "site": site,
+            "mode": mode,
+            "expected_path": str(proposal_file),
+            "results_dir": str(results_path),
+        }
         result_data = {
             "job_id": job_id,
             "site": site,
             "project_url": project_url,
             "mode": mode,
-            "status": "form_error",
+            "status": error_status,
             "screenshot_path": None,
             "filled_values": {},
             "error_message": f"proposal.json not found in jobs/{job_id}",
+            "error_code": "MISSING_PROPOSAL",
+            "error_details": err_details,
+            "error_metadata": err_details,
             "daily_submit_count": current_submit_count,
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
@@ -326,6 +354,17 @@ async def run_proposal(
             proposal_data = json.load(f)
     except Exception as e:
         logger.error("Failed to parse proposal.json: %s", type(e).__name__)
+        err_details = {
+            "error_code": "INVALID_PROPOSAL_JSON",
+            "code": "INVALID_PROPOSAL_JSON",
+            "reason": "json_parse_error",
+            "message": f"Failed to parse proposal.json: {type(e).__name__}",
+            "job_id": job_id,
+            "site": site,
+            "mode": mode,
+            "expected_path": str(proposal_file),
+            "exception_type": type(e).__name__,
+        }
         result_data = {
             "job_id": job_id,
             "site": site,
@@ -335,6 +374,46 @@ async def run_proposal(
             "screenshot_path": None,
             "filled_values": {},
             "error_message": f"Failed to parse proposal.json: {type(e).__name__}",
+            "error_code": "INVALID_PROPOSAL_JSON",
+            "error_details": err_details,
+            "error_metadata": err_details,
+            "daily_submit_count": current_submit_count,
+            "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        save_result(jobs_dir, result_data)
+        return result_data
+
+    if not isinstance(proposal_data, dict) or not proposal_data:
+        err_msg = f"proposal.json contains empty or invalid data in jobs/{job_id}"
+        if mode == "preview":
+            logger.warning("Diagnostic: %s (preview mode). Handled gracefully.", err_msg)
+            error_status = "missing_proposal"
+        else:
+            logger.error("Submit aborted: %s (submit mode).", err_msg)
+            error_status = "form_error"
+
+        err_details = {
+            "error_code": "EMPTY_PROPOSAL_DATA",
+            "code": "EMPTY_PROPOSAL_DATA",
+            "reason": "empty_or_invalid_proposal_data",
+            "message": err_msg,
+            "job_id": job_id,
+            "site": site,
+            "mode": mode,
+            "expected_path": str(proposal_file),
+        }
+        result_data = {
+            "job_id": job_id,
+            "site": site,
+            "project_url": project_url,
+            "mode": mode,
+            "status": error_status,
+            "screenshot_path": None,
+            "filled_values": {},
+            "error_message": err_msg,
+            "error_code": "EMPTY_PROPOSAL_DATA",
+            "error_details": err_details,
+            "error_metadata": err_details,
             "daily_submit_count": current_submit_count,
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
@@ -558,6 +637,8 @@ def main(argv: list[str] | None = None) -> int:
     status = result.get("status")
     logger.info("Runner finished for job %s with status: %s", args.job_id, status)
     if status in ("preview_ready", "submitted", "rate_limited", "login_required", "captcha_detected"):
+        return 0
+    if status == "missing_proposal" and args.mode == "preview":
         return 0
     return 1
 
