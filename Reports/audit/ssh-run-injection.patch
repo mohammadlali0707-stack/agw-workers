@@ -1,0 +1,22 @@
+--- a/.github/workflows/ssh-run.yml
++++ b/.github/workflows/ssh-run.yml
+@@ -45,6 +45,10 @@
+ 
+       - name: Run command on VPS
+         id: run
++        env:
++          COMMAND: ${{ inputs.command }}
++          TIMEOUT: ${{ inputs.timeout }}
++          WORKING_DIR: ${{ inputs.working_dir }}
+         run: |
+           ssh \
+             -i ~/.ssh/id_rsa \
+@@ -53,7 +57,7 @@
+             -o ConnectTimeout=30 \
+             -o IdentitiesOnly=yes -v \
+             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+-            "cd ${{ inputs.working_dir }} && timeout ${{ inputs.timeout }} bash -c '${{ inputs.command }}'"
++            "cd $WORKING_DIR && timeout $TIMEOUT bash -c '$COMMAND'"
+ 
+       - name: Cleanup
+         if: always()
