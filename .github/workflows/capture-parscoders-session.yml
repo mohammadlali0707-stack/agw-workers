@@ -45,7 +45,7 @@ jobs:
           test -f /tmp/parscoders-session.json || { echo "session file missing"; exit 1; }
           gh secret set SITE_SESSION_PARSCODERS \
             --repo mohammadlali0707-stack/agw-workers \
-            --body-file /tmp/parscoders-session.json
+            < /tmp/parscoders-session.json
           echo "SITE_SESSION_PARSCODERS updated"
 
       - name: Shred session file
