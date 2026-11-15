@@ -1,0 +1,57 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-170-acc0-90421c9fac6e-w02","commits":1,"files_changed":7,"checkout":"/home/runner/work/_temp/agent-repo-43719206466-1-run-agy"}}
+Worker committed 1 commit(s), 7 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Read `scripts/site_proposal/runner.py` and `tests/test_site_proposal_runner.py`**: Inspect existing payload validation, job structure, and test coverage using `view_file`.
+2. **Verify and enforce `proposal.json` requirement**: Check `scripts/site_proposal/runner.py` to ensure `jobs/<job_id>/proposal.json` is strictly required and validated before any Playwright automation is launched.
+3. **Construct test fixture and verification checks**: Create fixture payload files (e.g. `jobs/test-job/proposal.json` or under fixtures) and add regression test cases in `tests/test_site_proposal_runner.py` ensuring every dispatched job requires a valid `proposal.json`.
+4. **Run test suite regression**: Execute `pytest tests/test_site_proposal_runner.py` using `run_command` to verify all tests pass.
+5. **Conduct peer review**: Run `python3 /tmp/hqteam.py review "<summary of changes>" --file <modified_file>` via `run_command` to get review feedback and apply any fixes if requested.
+6. **Commit changes and post status**: Stage and commit the audit and fixture changes via `git add` and `git commit` without modifying any workflow files directly, and post completion using `python3 /tmp/hqteam.py post done`.
+Searching for available Python installations and pytest binaries in the system.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+Running adapter tests in the background to verify test suite status.
+I will wait for the adapter test run to complete.
+### Work Plan Execution & Audit Summary
+
+1. **Prerequisite Audit & Analysis**:
+   - Inspected [`.github/workflows/site-proposal.yml`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/.github/workflows/site-proposal.yml) and [`scripts/site_proposal/runner.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/scripts/site_proposal/runner.py).
+   - Audited the contract between the workflow dispatch and the `hq-ai-results` repository: every job dispatch strictly requires `jobs/<job_id>/proposal.json` to be pre-staged in `hq-ai-results`. Without this file, Playwright cannot proceed.
+
+2. **Pre-Playwright Fast-Abort Enforcement**:
+   - Enhanced [`scripts/site_proposal/runner.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/scripts/site_proposal/runner.py) with [`validate_proposal_payload`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/scripts/site_proposal/runner.py#L220-L259).
+   - Enforced that if `jobs/<job_id>/proposal.json` is missing, unparseable, non-dict, or lacks mandatory fields (e.g. non-empty `proposal_text`, valid positive `bid_amount`, positive `delivery_days`), the runner records `status: "form_error"` into `jobs/<job_id>/result.json` and immediately exits before initializing Playwright, Chromium, or session authentication.
+
+3. **Constructed Test Fixtures & Verification Helpers**:
+   - Created [`tests/fixtures/site_proposal_fixtures.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/site_proposal_fixtures.py) defining:
+     - `VALID_PROPOSAL_PAYLOAD`
+     - `MINIMAL_PROPOSAL_PAYLOAD`
+     - `EXPLORE_PROPOSAL_PAYLOAD`
+     - Negative fixtures (`INVALID_PAYLOAD_NON_OBJECT`, `INVALID_PAYLOAD_MISSING_TEXT`, `INVALID_PAYLOAD_EMPTY_TEXT`, `INVALID_PAYLOAD_NEGATIVE_BID`, `INVALID_PAYLOAD_INVALID_DAYS`)
+     - Verification checks: [`verify_dispatched_job_payload`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/site_proposal_fixtures.py#L65-L75) and [`verify_job_dispatch_prerequisites`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/site_proposal_fixtures.py#L77-L103).
+   - Created reference JSON fixtures in [`jobs/sample-proposal/proposal.json`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/jobs/sample-proposal/proposal.json) and [`tests/fixtures/sample_proposal.json`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/sample_proposal.json).
+   - Re-exported fixtures in [`tests/fixtures/__init__.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/__init__.py).
+
+4. **Regression Test Suite Verification**:
+   - Added 7 regression test cases to [`tests/test_site_proposal_runner.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/test_site_proposal_runner.py#L690-L865) verifying that missing, malformed, non-dict, and invalid payloads abort cleanly without launching Playwright.
+   - Verified that all 30 tests in [`tests/test_site_proposal_runner.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/test_site_proposal_runner.py) pass cleanly (30 passed in 6.09s).
+
+5. **Peer Review & Audit Report**:
+   - Generated the comprehensive audit report in [`Reports/audit/site_proposal_dispatch_prerequisites_and_fixture_audit.md`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/Reports/audit/site_proposal_dispatch_prerequisites_and_fixture_audit.md).
+   - Invoked peer review via `python3 /tmp/hqteam.py review`.
+
+6. **Committed Changes & Governance Compliance**:
+   - Verified zero modifications to workflow files (`.github/workflows/` untouched).
+   - Staged and committed changes in commit `f0c5a50`:
+     - Added [`Reports/audit/site_proposal_dispatch_prerequisites_and_fixture_audit.md`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/Reports/audit/site_proposal_dispatch_prerequisites_and_fixture_audit.md)
+     - Added [`jobs/sample-proposal/proposal.json`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/jobs/sample-proposal/proposal.json)
+     - Added [`tests/fixtures/sample_proposal.json`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/sample_proposal.json)
+     - Added [`tests/fixtures/site_proposal_fixtures.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/site_proposal_fixtures.py)
+     - Updated [`scripts/site_proposal/runner.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/scripts/site_proposal/runner.py)
+     - Updated [`tests/fixtures/__init__.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/fixtures/__init__.py)
+     - Updated [`tests/test_site_proposal_runner.py`](file:///home/runner/work/_temp/agent-repo-43719206466-1-run-agy/tests/test_site_proposal_runner.py)
+   - Posted completion notification via `python3 /tmp/hqteam.py post done`.
