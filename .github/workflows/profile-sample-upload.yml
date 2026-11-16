@@ -1,0 +1,116 @@
+name: Profile sample upload
+
+# Uploads one portfolio sample to a freelance profile (ParsCoders / KarLancer).
+# Same job/result pattern as site-proposal.yml: the caller puts a job in
+# hq-ai-results, dispatches this workflow with a job_id, and reads
+# jobs/<job_id>/result.json back. Run mode=probe FIRST on a new site/profile:
+# the exact portfolio form is unverified until probe reports it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      site:
+        description: 'parscoders or karlancer'
+        required: true
+        type: string
+      sample_url:
+        description: 'Public URL of the sample (e.g. the hq-ai-results raw URL)'
+        required: true
+        type: string
+      title:
+        description: 'Sample title (Persian)'
+        required: true
+        type: string
+      description:
+        description: 'Sample description (Persian)'
+        required: false
+        type: string
+        default: ''
+      mode:
+        description: 'probe (find the form, submit nothing) or upload'
+        required: true
+        type: string
+        default: 'probe'
+      job_id:
+        description: 'Job id, e.g. up-par-20261116-xxxx'
+        required: true
+        type: string
+      profile_url:
+        description: 'Optional direct profile/portfolio URL (else discovered from home)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  profile-sample-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout agw-workers
+        uses: actions/checkout@v4
+
+      - name: Checkout hq-ai-results
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/hq-ai-results
+          token: ${{ secrets.ACC6_PAT }}
+          path: hq-ai-results
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run sample uploader
+        env:
+          SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
+          SITE_SESSION_KARLANCER: ${{ secrets.SITE_SESSION_KARLANCER }}
+          SITE_SESSION_PARSCODERS: ${{ secrets.SITE_SESSION_PARSCODERS }}
+          PYTHONPATH: .
+        run: |
+          python3 -m scripts.site_proposal.upload_sample \
+            --site "${{ inputs.site }}" \
+            --sample-url "${{ inputs.sample_url }}" \
+            --title "${{ inputs.title }}" \
+            --description "${{ inputs.description }}" \
+            --mode "${{ inputs.mode }}" \
+            --job-id "${{ inputs.job_id }}" \
+            --results-dir hq-ai-results \
+            --profile-url "${{ inputs.profile_url }}"
+
+      - name: Commit and push results
+        if: always()
+        env:
+          SITE_INPUT: ${{ inputs.site }}
+          JOB_ID_INPUT: ${{ inputs.job_id }}
+        run: |
+          cd hq-ai-results
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -d "jobs/$JOB_ID_INPUT" ] && git add "jobs/$JOB_ID_INPUT"
+          if git diff --staged --quiet; then
+            echo "No changes to commit in hq-ai-results."
+            exit 0
+          fi
+          git commit -m "profile-sample-upload: $SITE_INPUT job $JOB_ID_INPUT [skip ci]"
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Push attempt $i of $MAX_RETRIES..."
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              echo "Successfully pushed results to hq-ai-results."
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          echo "Failed to push results to hq-ai-results after $MAX_RETRIES attempts."
+          exit 1
