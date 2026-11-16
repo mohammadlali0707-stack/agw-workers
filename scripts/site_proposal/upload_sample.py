@@ -18,6 +18,10 @@ Modes:
            required" before writing upload logic.
   upload — fill the portfolio form (title, description, sample link) and
            submit, then re-load the profile and verify the sample appears.
+  attach-test — like upload, but STOPS before the publish click: attach a
+           real image, verify the form reveals and the publish button
+           enables, then exit. Submits NOTHING. Tests the one chain a probe
+           cannot: attach -> form reveal -> publish enabled.
 
 Usage (on the runner):
     python3 -m scripts.site_proposal.upload_sample \
@@ -849,16 +853,19 @@ async def main_async(args):
                 result["note"] = "probe only: form structure recorded, nothing submitted"
                 return save()
             # ---- upload mode: capture the sample page itself for an image field ----
+            # attach-test skips this: it always uses the --screenshot file (the
+            # rendered demo PNG), and fails fast without one.
             sample_png = os.path.join(out_dir, "sample.png")
-            try:
-                shot = await ctx.new_page()
-                await shot.goto(args.sample_url, wait_until="domcontentloaded", timeout=60000)
-                await shot.wait_for_timeout(2500)
-                await shot.screenshot(path=sample_png)
-                await shot.close()
-                result["sample_screenshot"] = True
-            except Exception:
-                result["sample_screenshot"] = False
+            if args.mode == "upload":
+                try:
+                    shot = await ctx.new_page()
+                    await shot.goto(args.sample_url, wait_until="domcontentloaded", timeout=60000)
+                    await shot.wait_for_timeout(2500)
+                    await shot.screenshot(path=sample_png)
+                    await shot.close()
+                    result["sample_screenshot"] = True
+                except Exception:
+                    result["sample_screenshot"] = False
             # ---- upload mode: fill the portfolio form ----
             target = None
             for form in forms:
@@ -924,6 +931,26 @@ async def main_async(args):
                 result["publish_state"] = await publish_button_state(page)
                 result["error"] = "publish button stayed disabled after filling fields + image"
                 return save()
+            # ---- attach-test: STOP HERE. Publish (and draft) are NEVER clicked,
+            # nothing is submitted, no sample is created. The chain
+            # attach -> form reveal -> publish enabled is the whole point. ----
+            if args.mode == "attach-test":
+                result["attach_test"] = {
+                    "attached_ok": bool(filled.get("image", {}).get("attached")),
+                    "attach_signal": filled.get("image", {}).get("signal"),
+                    "image_file": os.path.basename(shot_file) if shot_file else None,
+                    "form_visible": form_visible,
+                    "title_filled": filled.get("title"),
+                    "description_filled": filled.get("description"),
+                    "skills_selected": vals,
+                    "skills_texts": texts,
+                    "publish_enabled": True,
+                    "publish_state": await publish_button_state(page),
+                }
+                result["ok"] = True
+                result["note"] = ("attach-test only: image attached, form revealed, "
+                                  "publish enabled — publish NOT clicked, nothing submitted")
+                return save()
             # (5) Submit EXPLICITLY via the publish button (id, then its exact
             # text). NEVER a generic button[type=submit] — the first submit
             # button on this form is the DRAFT button (save_draft), and
@@ -979,7 +1006,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test"])
     ap.add_argument("--job-id", required=True)
     ap.add_argument("--results-dir", required=True)
     ap.add_argument("--profile-url", default="")
