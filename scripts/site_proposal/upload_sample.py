@@ -883,7 +883,12 @@ async def main_async(args):
             if shot_file:
                 filled["image"] = await attach_image(page, shot_file)
             else:
-                filled["image"] = {"attached": False, "error": "no screenshot file available"}
+                # The image is mandatory: the form stays hidden (d-none) and
+                # the publish button stays disabled without it. Fail fast
+                # instead of waiting out the visibility timeout.
+                result["filled"] = {"image": {"attached": False, "error": "no screenshot file available"}}
+                result["error"] = "no screenshot file available — the image is required to reveal the form"
+                return save()
             # (1b) The form inputs are hidden (d-none) until the image is
             # attached. Do not fill until they are visible — filling hidden
             # fields fails silently (probe 007 proved this).
