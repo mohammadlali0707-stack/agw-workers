@@ -35,6 +35,12 @@ PROFILE_WORDS = ("پروفایل", "نمونه کار", "نمونه‌کار", "
 # Probe 2026-11-16 found the old logic returning a /resume/portfolio/show/<id>/ display
 # page (an existing sample), whose only form is a feedback form — no title field.
 ADD_WORDS = ("add", "create", "new", "manage", "edit", "افزودن", "ایجاد", "جدید", "مدیریت", "ویرایش", "اضافه")
+# Account holder's name — the logged-in header shows it (proven by the proposal
+# preview screenshot, run 43859946135: «محمد لالی» in the header). Used to find
+# the username/panel link and as a positive logged-in signal.
+USERNAME = "محمد"
+# Words that mark the logged-in user panel/dashboard link.
+PANEL_WORDS = ("panel", "dashboard", "پنل", "داشبورد", "کاربری", "my-account")
 TITLE_WORDS = ("عنوان", "title", "نام نمونه")
 DESC_WORDS = ("توضیح", "شرح", "description", "توضیحات")
 LINK_WORDS = ("لینک", "آدرس", "url", "link", "پیوند")
@@ -112,47 +118,162 @@ async def dump_forms(page):
     return forms
 
 
-async def find_profile_url(page, home):
-    """From the logged-in home page, find the best profile/portfolio link.
+async def collect_links(page):
+    """All <a href> links on the page, with text and whether inside <header>."""
+    try:
+        return await page.evaluate(
+            """() => [...document.querySelectorAll('a[href]')].map(a => ({
+                href: a.getAttribute('href') || '',
+                text: (a.innerText || '').trim().slice(0, 80),
+                in_header: !!a.closest('header')
+            })).filter(l => l.href)""")
+    except Exception:
+        return []
 
-    Preference order (probe 2026-11-16): (1) an ADD/MANAGE link (a portfolio
-    add page, not a sample display page); (2) any profile/portfolio link that
-    is not a /show/ display page; (3) the first profile/portfolio link.
-    """
-    links = []
-    for a in await page.query_selector_all("a[href]"):
-        try:
-            href = await a.get_attribute("href")
-            text = (await a.inner_text()).strip()
-        except Exception:
+
+async def detect_logged_in(page, links):
+    """Logged-in indicator, so a probe can tell logged-in from logged-out
+    instead of inferring it from footer links (probe 2026-11-16 misread this:
+    the session was valid all along — the proposal preview proved it).
+    Positive signals: the username in the header, a logout link. Negative:
+    a login/register prompt or a /login URL."""
+    header_text = ""
+    try:
+        header_text = await page.evaluate(
+            "() => { const h = document.querySelector('header'); return h ? h.innerText : ''; }") or ""
+    except Exception:
+        pass
+    url = page.url or ""
+    username_in_header = USERNAME in header_text
+    logout = any(("خروج" in (l.get("text") or "")) or ("logout" in (l.get("href") or "").lower()) for l in links)
+    login_prompt = any(("ورود" in (l.get("text") or "")) or ("ثبت نام" in (l.get("text") or ""))
+                    or ("ثبت‌نام" in (l.get("text") or "")) for l in links) or ("/login" in url.lower())
+    return {"username_in_header": username_in_header, "logout_link": logout,
+            "login_prompt": login_prompt, "url": url,
+            "logged_in": bool(username_in_header or logout) and not login_prompt}
+
+
+def _abs_url(home, href):
+    return home.rstrip("/") + href if href.startswith("/") else href
+
+
+def _is_profile(l):
+    return any(word in (l.get("text") or "") for word in PROFILE_WORDS)
+
+
+def _is_add(l):
+    hay = ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
+    return any(w.lower() in hay for w in ADD_WORDS)
+
+
+def _pick_add_link(links, home):
+    """A portfolio ADD link: portfolio-ish (text or href) + add word, never a
+    /show/ display page."""
+    for l in links:
+        href = (l.get("href") or "").lower()
+        if "/show/" in href:
             continue
-        if href:
-            links.append({"href": href, "text": text[:80]})
+        portfolioish = _is_profile(l) or ("portfolio" in href) or ("نمونه" in href)
+        if portfolioish and _is_add(l):
+            return _abs_url(home, l["href"])
+    return None
 
-    def _abs(href):
-        return home.rstrip("/") + href if href.startswith("/") else href
 
-    def _is_profile(l):
-        return any(word in l["text"] for word in PROFILE_WORDS)
-
-    def _is_add(l):
-        hay = (l["href"] + " " + l["text"]).lower()
-        return any(w.lower() in hay for w in ADD_WORDS)
-
-    # (1) add/manage link
-    for l in links:
-        if _is_profile(l) and _is_add(l):
-            return _abs(l["href"]), links
-    # (2) profile link that is not a sample display page
-    for l in links:
-        if _is_profile(l) and "/show/" not in l["href"]:
-            return _abs(l["href"]), links
-    # (3) first profile link (original behaviour)
-    for word in PROFILE_WORDS:
+def _pick_panel_link(links, home):
+    """The logged-in user panel/dashboard URL: the username link (header first),
+    or a link whose href/text mentions panel/dashboard. Returns (url, is_dropdown):
+    is_dropdown True when the username link is a menu trigger (href '#'/javascript)
+    that must be clicked before its menu links exist."""
+    is_dropdown = False
+    for prefer_header in (True, False):
         for l in links:
-            if word in l["text"]:
-                return _abs(l["href"]), links
-    return None, links
+            if prefer_header and not l.get("in_header"):
+                continue
+            if USERNAME in (l.get("text") or ""):
+                href = (l.get("href") or "").strip()
+                if href and href not in ("#", "javascript:void(0)", "javascript:;", "javascript:"):
+                    return _abs_url(home, href), False
+                is_dropdown = True
+    for l in links:
+        hay = ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
+        if any(w.lower() in hay for w in PANEL_WORDS):
+            return _abs_url(home, l["href"]), is_dropdown
+    return None, is_dropdown
+
+
+async def find_profile_url(page, home):
+    """Find the portfolio ADD page.
+
+    The add-sample link lives in the logged-in user panel/dashboard, not on the
+    home page (probes 2026-11-16: the home page only links to a /show/ display
+    page and the public /skill-portfolio listing). So: (1) an add link on the
+    home page if one exists; (2) go to the panel (via the username/header link,
+    opening its dropdown menu first if it is one) and search for the add link
+    there; (3) fall back to any non-/show/ profile link on the home page, then
+    the first profile link. Returns (url, info) where info carries the
+    logged-in indicator, the panel URL and the link lists. No URL is ever
+    guessed — every URL comes from a link on the actual logged-in page.
+    """
+    info = {"panel_url": None, "logged_in": {}, "home_links": [], "panel_links": []}
+    home_links = await collect_links(page)
+    info["home_links"] = home_links
+    info["logged_in"] = await detect_logged_in(page, home_links)
+
+    # (1) add link right on the home page
+    add = _pick_add_link(home_links, home)
+    if add:
+        return add, info
+
+    # (2) panel: find its URL, or open the username dropdown and re-collect
+    panel_url, is_dropdown = _pick_panel_link(home_links, home)
+    if is_dropdown:
+        try:
+            loc = page.locator("header a:has-text('%s')" % USERNAME)
+            if await loc.count() == 0:
+                loc = page.locator("a:has-text('%s')" % USERNAME)
+            if await loc.count() > 0:
+                await loc.first.click(timeout=5000)
+                await page.wait_for_timeout(1500)
+                menu_links = await collect_links(page)
+                info["menu_links"] = menu_links
+                add = _pick_add_link(menu_links, home)
+                if add:
+                    return add, info
+                panel_url, _ = _pick_panel_link(menu_links, home)
+        except Exception as e:  # noqa: BLE001 - record and fall through
+            info["menu_error"] = f"{type(e).__name__}: {e}"
+    if panel_url:
+        info["panel_url"] = panel_url
+        try:
+            await page.goto(panel_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(2000)
+            panel_links = await collect_links(page)
+            info["panel_links"] = panel_links
+            add = _pick_add_link(panel_links, home)
+            if add:
+                return add, info
+            info["panel_note"] = "panel reached but no add-sample link found there"
+        except Exception as e:  # noqa: BLE001 - record and fall through
+            info["panel_error"] = f"{type(e).__name__}: {e}"
+        # fall through to home-page fallbacks; reload home for a fresh link list
+        try:
+            await page.goto(home, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(2000)
+            home_links = await collect_links(page)
+            info["home_links"] = home_links
+        except Exception:
+            pass
+
+    # (3) any profile link that is not a /show/ display page
+    for l in home_links:
+        if _is_profile(l) and "/show/" not in (l.get("href") or ""):
+            return _abs_url(home, l["href"]), info
+    # (4) first profile link (original behaviour)
+    for word in PROFILE_WORDS:
+        for l in home_links:
+            if word in (l.get("text") or ""):
+                return _abs_url(home, l["href"]), info
+    return None, info
 
 
 def pick_field(fields, words):
@@ -217,12 +338,27 @@ async def main_async(args):
             await page.reload(wait_until="domcontentloaded")
             await page.wait_for_timeout(2000)
             profile_url = args.profile_url
-            links = []
+            info = {}
             if not profile_url:
-                profile_url, links = await find_profile_url(page, home)
-            result["links_found"] = links[:40]
+                profile_url, info = await find_profile_url(page, home)
+            result["links_found"] = (info.get("home_links") or [])[:40]
+            result["logged_in"] = info.get("logged_in", {})
+            if info.get("panel_url"):
+                result["panel_url"] = info["panel_url"]
+            if info.get("panel_links"):
+                result["panel_links"] = info["panel_links"][:40]
+            if info.get("menu_links"):
+                result["menu_links"] = info["menu_links"][:40]
+            for key in ("panel_note", "panel_error", "menu_error"):
+                if info.get(key):
+                    result[key] = info[key]
             if not profile_url:
-                result["error"] = "could not find a profile/portfolio link from the home page (not logged in?)"
+                li = info.get("logged_in", {})
+                result["error"] = (
+                    "could not find a profile/portfolio link"
+                    + (" (not logged in)" if not li.get("logged_in") else
+                       " (logged in, but no portfolio link found on home page or panel)")
+                )
                 await page.screenshot(path=os.path.join(out_dir, "home.png"))
                 return save()
             result["profile_url"] = profile_url
