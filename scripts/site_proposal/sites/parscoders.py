@@ -420,11 +420,21 @@ class ParscodersAdapter:
                         "body": b2[:1500]}
 
             proposal_text = str(proposal_data.get("proposal_text", ""))
-            await text_loc.click()
             if is_editor:
-                await text_loc.press_sequentially(proposal_text, delay=10)
+                # Rich-text body (TinyMCE/CKEditor): a plain click() can hang
+                # 30s on actionability (run 43829285293+1: click on the
+                # TinyMCE body never completed). press_sequentially focuses
+                # the element itself and types, no click-point needed.
+                try:
+                    await text_loc.press_sequentially(proposal_text, delay=10)
+                except Exception:
+                    await text_loc.evaluate(
+                        "(el, txt) => { el.focus(); document.execCommand('insertText', false, txt); }",
+                        proposal_text,
+                    )
                 fv["proposal_len"] = len((await text_loc.inner_text() or "").strip())
             else:
+                await text_loc.click()
                 await text_loc.fill(proposal_text)
                 fv["proposal_len"] = len(await text_loc.input_value())
 
