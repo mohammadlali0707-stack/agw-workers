@@ -63,6 +63,8 @@ LOGIN_TEXT_PATTERNS: List[str] = [
     "ابتدا وارد حساب کاربری خود شوید",
     "ابتدا وارد شوید",
     "وارد شوید یا ثبت نام کنید",
+    "ثبت نام در پارس‌کدرز",
+    "قبلا عضو پارس‌کدرز",
     "ورود به حساب کاربری",
     "ایمیل یا رمز عبور",
 ]
@@ -202,19 +204,38 @@ async def _form_diagnostics(page: Any) -> str:
 
 
 async def _detect_captcha(page: Any) -> bool:
-    for sel in CAPTCHA_SELECTORS:
-        try:
-            if await page.locator(sel).count() > 0:
-                return True
-        except Exception:
-            pass
-    for text_sel in CAPTCHA_TEXT_SELECTORS:
-        try:
-            if await page.locator(text_sel).count() > 0:
-                return True
-        except Exception:
-            pass
-    return False
+    """True only if a captcha challenge is actually VISIBLE.
+
+    The signup/login form embeds its captcha widget in the DOM even when no
+    challenge is shown, so counting matching elements (hidden included)
+    misreports 'captcha' on a plain logged-out page (2026-11-16: the signup
+    page was reported as 'captcha after expand'). Check visibility in the
+    page instead; innerText already excludes hidden text.
+    """
+    try:
+        return bool(await page.evaluate(
+            """([sels, texts]) => {
+                const vis = (el) => {
+                    if (!el) return false;
+                    const r = el.getBoundingClientRect();
+                    if (r.width === 0 && r.height === 0) return false;
+                    const cs = getComputedStyle(el);
+                    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+                    if (el.offsetParent === null && cs.position !== 'fixed') return false;
+                    return true;
+                };
+                for (const s of sels) {
+                    for (const el of document.querySelectorAll(s)) {
+                        if (vis(el)) return true;
+                    }
+                }
+                const t = document.body ? (document.body.innerText || '') : '');
+                return texts.some((x) => t.includes(x));
+            }""",
+            [CAPTCHA_SELECTORS, CAPTCHA_TEXT_SELECTORS],
+        ))
+    except Exception:
+        return False
 
 
 async def _detect_login_required(page: Any) -> bool:
