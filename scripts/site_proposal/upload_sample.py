@@ -31,6 +31,10 @@ import time
 
 SITE_HOME = {"parscoders": "https://parscoders.com", "karlancer": "https://karlancer.com"}
 PROFILE_WORDS = ("پروفایل", "نمونه کار", "نمونه‌کار", "portfolio", "پروفایل من", "سوابق")
+# Words that mark a portfolio ADD/MANAGE link (as opposed to a sample display page).
+# Probe 2026-11-16 found the old logic returning a /resume/portfolio/show/<id>/ display
+# page (an existing sample), whose only form is a feedback form — no title field.
+ADD_WORDS = ("add", "create", "new", "manage", "edit", "افزودن", "ایجاد", "جدید", "مدیریت", "ویرایش", "اضافه")
 TITLE_WORDS = ("عنوان", "title", "نام نمونه")
 DESC_WORDS = ("توضیح", "شرح", "description", "توضیحات")
 LINK_WORDS = ("لینک", "آدرس", "url", "link", "پیوند")
@@ -109,7 +113,12 @@ async def dump_forms(page):
 
 
 async def find_profile_url(page, home):
-    """From the logged-in home page, find the best profile/portfolio link."""
+    """From the logged-in home page, find the best profile/portfolio link.
+
+    Preference order (probe 2026-11-16): (1) an ADD/MANAGE link (a portfolio
+    add page, not a sample display page); (2) any profile/portfolio link that
+    is not a /show/ display page; (3) the first profile/portfolio link.
+    """
     links = []
     for a in await page.query_selector_all("a[href]"):
         try:
@@ -119,13 +128,30 @@ async def find_profile_url(page, home):
             continue
         if href:
             links.append({"href": href, "text": text[:80]})
+
+    def _abs(href):
+        return home.rstrip("/") + href if href.startswith("/") else href
+
+    def _is_profile(l):
+        return any(word in l["text"] for word in PROFILE_WORDS)
+
+    def _is_add(l):
+        hay = (l["href"] + " " + l["text"]).lower()
+        return any(w.lower() in hay for w in ADD_WORDS)
+
+    # (1) add/manage link
+    for l in links:
+        if _is_profile(l) and _is_add(l):
+            return _abs(l["href"]), links
+    # (2) profile link that is not a sample display page
+    for l in links:
+        if _is_profile(l) and "/show/" not in l["href"]:
+            return _abs(l["href"]), links
+    # (3) first profile link (original behaviour)
     for word in PROFILE_WORDS:
         for l in links:
             if word in l["text"]:
-                href = l["href"]
-                if href.startswith("/"):
-                    href = home.rstrip("/") + href
-                return href, links
+                return _abs(l["href"]), links
     return None, links
 
 
