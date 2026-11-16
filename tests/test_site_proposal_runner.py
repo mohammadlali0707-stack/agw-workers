@@ -810,21 +810,35 @@ def test_local_storage_injection_into_page(temp_results_dir, sample_proposal_dat
 
 
 def test_missing_proposal_json_never_launches_playwright(temp_results_dir, monkeypatch):
-    """Ensure that missing proposal.json returns form_error before launching Playwright."""
+    """Ensure that missing proposal.json returns missing_proposal (preview) or form_error (submit) before Playwright."""
     monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
     with patch("scripts.site_proposal.runner.get_site_adapter") as mock_adapter, \
          patch("playwright.async_api.async_playwright") as mock_pw:
-        result = asyncio.run(
+        result_prev = asyncio.run(
             run_proposal(
                 site="ponisha",
                 project_url="https://ponisha.ir/project/nonexistent",
-                job_id="job_missing_proposal",
+                job_id="job_missing_proposal_prev",
                 mode="preview",
                 results_dir=temp_results_dir,
             )
         )
-        assert result["status"] == "form_error"
-        assert "proposal.json not found" in result["error_message"]
+        assert result_prev["status"] == "missing_proposal"
+        assert "proposal.json not found" in result_prev["error_message"]
+        mock_adapter.assert_not_called()
+        mock_pw.assert_not_called()
+
+        result_sub = asyncio.run(
+            run_proposal(
+                site="ponisha",
+                project_url="https://ponisha.ir/project/nonexistent",
+                job_id="job_missing_proposal_sub",
+                mode="submit",
+                results_dir=temp_results_dir,
+            )
+        )
+        assert result_sub["status"] == "form_error"
+        assert "proposal.json not found" in result_sub["error_message"]
         mock_adapter.assert_not_called()
         mock_pw.assert_not_called()
 
@@ -853,7 +867,7 @@ def test_malformed_json_never_launches_playwright(temp_results_dir, monkeypatch)
 
 
 def test_non_dict_json_never_launches_playwright(temp_results_dir, monkeypatch):
-    """Ensure that non-dictionary JSON in proposal.json returns form_error before launching Playwright."""
+    """Ensure that non-dictionary JSON in proposal.json returns gracefully before launching Playwright."""
     monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
     job_dir = temp_results_dir / "jobs" / "job_array_json"
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -870,8 +884,8 @@ def test_non_dict_json_never_launches_playwright(temp_results_dir, monkeypatch):
                 results_dir=temp_results_dir,
             )
         )
-        assert result["status"] == "form_error"
-        assert "proposal.json root must be a JSON object" in result["error_message"]
+        assert result["status"] == "missing_proposal"
+        assert "empty or invalid data" in result["error_message"]
         mock_pw.assert_not_called()
 
 
@@ -973,5 +987,185 @@ def test_sample_proposal_json_fixture_files():
     fixture_job_dir = Path("jobs/sample-proposal")
     ok, err = verify_job_dispatch_prerequisites(fixture_job_dir)
     assert ok is True and err is None, f"jobs/sample-proposal failed verification: {err}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Tests for login_required Handling, Exit Codes, and Secret Masking
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_main_cli_login_required_preview_mode_exits_zero(temp_results_dir, sample_proposal_data, monkeypatch):
+    """When adapter returns login_required in preview mode, main() exits with code 0."""
+    setup_proposal_file(temp_results_dir, "job_cli_lr_prev", sample_proposal_data)
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "auth", "value": "xyz"}]}}))
+
+    adapter = MockSiteAdapter(status="login_required", error_message="Session expired, please login")
+
+    with patch("scripts.site_proposal.runner.get_site_adapter", return_value=adapter):
+        exit_code = main([
+            "--site", "ponisha",
+            "--project-url", sample_proposal_data["project_url"],
+            "--job-id", "job_cli_lr_prev",
+            "--mode", "preview",
+            "--results-dir", str(temp_results_dir),
+        ])
+
+    assert exit_code == 0
+    res_file = temp_results_dir / "jobs" / "job_cli_lr_prev" / "result.json"
+    assert res_file.exists()
+    with open(res_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["status"] == "login_required"
+    assert data["mode"] == "preview"
+    assert data["error_message"] == "Session expired, please login"
+
+
+def test_main_cli_login_required_submit_mode_exits_zero_and_preserves_count(temp_results_dir, sample_proposal_data, monkeypatch):
+    """When adapter returns login_required in submit mode, main() exits 0 and does NOT increment submit count."""
+    today = get_today_tehran()
+    counts_file = temp_results_dir / "state" / "site_submit_counts.json"
+    counts_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(counts_file, "w") as f:
+        json.dump({today: {"ponisha": 2}}, f)
+
+    setup_proposal_file(temp_results_dir, "job_cli_lr_sub", sample_proposal_data)
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "auth", "value": "xyz"}]}}))
+
+    adapter = MockSiteAdapter(status="login_required", error_message="Login required to post proposal")
+
+    with patch("scripts.site_proposal.runner.get_site_adapter", return_value=adapter):
+        exit_code = main([
+            "--site", "ponisha",
+            "--project-url", sample_proposal_data["project_url"],
+            "--job-id", "job_cli_lr_sub",
+            "--mode", "submit",
+            "--results-dir", str(temp_results_dir),
+        ])
+
+    assert exit_code == 0
+    res_file = temp_results_dir / "jobs" / "job_cli_lr_sub" / "result.json"
+    assert res_file.exists()
+    with open(res_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["status"] == "login_required"
+    assert data["mode"] == "submit"
+    assert data["daily_submit_count"] == 2
+
+    # Verify counts file on disk remains unchanged (2, not incremented)
+    counts = load_submit_counts(counts_file)
+    assert counts[today]["ponisha"] == 2
+
+
+def test_main_cli_missing_session_exits_zero_preview_and_submit(temp_results_dir, sample_proposal_data, monkeypatch):
+    """When session credentials are missing, runner returns login_required and main() exits 0 in both modes."""
+    monkeypatch.delenv("SITE_SESSIONS", raising=False)
+    monkeypatch.delenv("SITE_SESSION_PONISHA", raising=False)
+
+    # Preview mode
+    setup_proposal_file(temp_results_dir, "job_no_sess_prev", sample_proposal_data)
+    exit_code_prev = main([
+        "--site", "ponisha",
+        "--project-url", sample_proposal_data["project_url"],
+        "--job-id", "job_no_sess_prev",
+        "--mode", "preview",
+        "--results-dir", str(temp_results_dir),
+    ])
+    assert exit_code_prev == 0
+    res_prev = json.loads((temp_results_dir / "jobs" / "job_no_sess_prev" / "result.json").read_text(encoding="utf-8"))
+    assert res_prev["status"] == "login_required"
+
+    # Submit mode
+    setup_proposal_file(temp_results_dir, "job_no_sess_sub", sample_proposal_data)
+    exit_code_sub = main([
+        "--site", "ponisha",
+        "--project-url", sample_proposal_data["project_url"],
+        "--job-id", "job_no_sess_sub",
+        "--mode", "submit",
+        "--results-dir", str(temp_results_dir),
+    ])
+    assert exit_code_sub == 0
+    res_sub = json.loads((temp_results_dir / "jobs" / "job_no_sess_sub" / "result.json").read_text(encoding="utf-8"))
+    assert res_sub["status"] == "login_required"
+    assert res_sub["daily_submit_count"] == 0
+
+
+def test_login_required_masks_sensitive_data(temp_results_dir, sample_proposal_data, monkeypatch):
+    """Verify that credentials and sensitive patterns are masked in result.json on login_required."""
+    secret_cookie = "SUPER_SECRET_COOKIE_VAL_99999"
+    secret_pass = "my_plain_secret_password"
+    jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.t-IDcSemACt8x4iTMC6Y5nM3iMTWqHGnZAqW_aeINJ8"
+
+    monkeypatch.setenv("SITE_SESSION_PONISHA", json.dumps({
+        "cookies": [{"name": "auth", "value": secret_cookie, "domain": "ponisha.ir"}],
+        "password": secret_pass,
+    }))
+
+    adapter = MockSiteAdapter(
+        status="login_required",
+        error_message=f"Failed auth for user: {secret_pass} with {secret_cookie} Bearer {jwt_token} and token={secret_pass}",
+        filled_values={"secret_token": secret_cookie, "note": f"Auth token={secret_pass}"},
+    )
+
+    setup_proposal_file(temp_results_dir, "job_mask_test", sample_proposal_data)
+
+    result = asyncio.run(
+        run_proposal(
+            site="ponisha",
+            project_url=sample_proposal_data["project_url"],
+            job_id="job_mask_test",
+            mode="preview",
+            results_dir=temp_results_dir,
+            adapter=adapter,
+        )
+    )
+
+    assert result["status"] == "login_required"
+    assert secret_cookie not in result["error_message"]
+    assert secret_pass not in result["error_message"]
+    assert jwt_token not in result["error_message"]
+    assert "[REDACTED]" in result["error_message"]
+
+    # Verify result.json on disk contains no leaked secrets
+    disk_file = temp_results_dir / "jobs" / "job_mask_test" / "result.json"
+    disk_text = disk_file.read_text(encoding="utf-8")
+    assert secret_cookie not in disk_text
+    assert secret_pass not in disk_text
+    assert jwt_token not in disk_text
+
+
+def test_login_required_result_schema_conformance(temp_results_dir, sample_proposal_data, monkeypatch):
+    """Verify full schema and type conformance of result.json for login_required outcomes."""
+    setup_proposal_file(temp_results_dir, "job_schema_lr", sample_proposal_data)
+    monkeypatch.setenv("SITE_SESSIONS", json.dumps({"ponisha": {"cookies": [{"name": "a", "value": "b"}]}}))
+
+    adapter = MockSiteAdapter(status="login_required", error_message="Session invalid")
+
+    result = asyncio.run(
+        run_proposal(
+            site="ponisha",
+            project_url=sample_proposal_data["project_url"],
+            job_id="job_schema_lr",
+            mode="preview",
+            results_dir=temp_results_dir,
+            adapter=adapter,
+        )
+    )
+
+    disk_result = json.loads((temp_results_dir / "jobs" / "job_schema_lr" / "result.json").read_text(encoding="utf-8"))
+
+    expected_keys = {
+        "job_id", "site", "project_url", "mode", "status",
+        "screenshot_path", "filled_values", "error_message",
+        "daily_submit_count", "updated_at",
+    }
+    assert expected_keys.issubset(disk_result.keys())
+    assert disk_result["status"] == "login_required"
+    assert isinstance(disk_result["daily_submit_count"], int)
+    assert isinstance(disk_result["filled_values"], dict)
+    assert disk_result["job_id"] == "job_schema_lr"
+    assert disk_result["site"] == "ponisha"
+    assert disk_result["mode"] == "preview"
+    assert "T" in disk_result["updated_at"]
+
 
 

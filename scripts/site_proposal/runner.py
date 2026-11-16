@@ -62,8 +62,28 @@ def mask_secrets(text: str | None, extra_secrets: list[str] | None = None) -> st
                         for v in s_data.get("localStorage", {}).values():
                             if v and len(str(v)) > 4:
                                 candidates.append(str(v))
+                        for k, val in s_data.items():
+                            if k in ("password", "token", "secret", "api_key", "access_token") and isinstance(val, str) and len(val) > 3:
+                                candidates.append(val)
         except Exception:
             pass
+
+    for env_k, env_v in os.environ.items():
+        if env_k.startswith("SITE_SESSION_") and env_v:
+            try:
+                parsed_one = json.loads(env_v)
+                if isinstance(parsed_one, dict):
+                    for c in parsed_one.get("cookies", []):
+                        if isinstance(c, dict) and c.get("value") and len(str(c["value"])) > 4:
+                            candidates.append(str(c["value"]))
+                    for v in parsed_one.get("localStorage", {}).values():
+                        if v and len(str(v)) > 4:
+                            candidates.append(str(v))
+                    for k, val in parsed_one.items():
+                        if k in ("password", "token", "secret", "api_key", "access_token") and isinstance(val, str) and len(val) > 3:
+                            candidates.append(val)
+            except Exception:
+                pass
 
     for s in set(candidates):
         if s and len(s) > 3:
@@ -72,12 +92,29 @@ def mask_secrets(text: str | None, extra_secrets: list[str] | None = None) -> st
     # Generic patterns: tokens, auth headers, passwords
     masked = re.sub(r"(bearer\s+)[A-Za-z0-9_\-\.]{8,}", r"\1[REDACTED]", masked, flags=re.I)
     masked = re.sub(
-        r"([?&](?:token|auth|key|secret|password|access_token|cookie)=)[^& \t\n\r]+",
+        r"((?:[?&]|\b)(?:token|auth|key|secret|password|access_token|cookie)=)[^& \t\n\r]+",
+        r"\1[REDACTED]",
+        masked,
+        flags=re.I,
+    )
+    masked = re.sub(
+        r"(\b(?:password|passwd|secret|token|api_key)\s*[:=]\s*)[^\s&,;]+",
         r"\1[REDACTED]",
         masked,
         flags=re.I,
     )
     return masked
+
+
+def mask_secrets_in_obj(data: Any, extra_secrets: list[str] | None = None) -> Any:
+    """Recursively mask secrets across strings, dicts, and lists."""
+    if isinstance(data, str):
+        return mask_secrets(data, extra_secrets=extra_secrets)
+    if isinstance(data, dict):
+        return {k: mask_secrets_in_obj(v, extra_secrets=extra_secrets) for k, v in data.items()}
+    if isinstance(data, list):
+        return [mask_secrets_in_obj(v, extra_secrets=extra_secrets) for v in data]
+    return data
 
 
 def get_today_tehran() -> str:
@@ -210,8 +247,9 @@ def save_result(jobs_dir: Path, result_data: dict[str, Any]) -> None:
     jobs_dir.mkdir(parents=True, exist_ok=True)
     result_file = jobs_dir / "result.json"
     tmp_file = jobs_dir / "result.json.tmp"
+    clean_data = mask_secrets_in_obj(result_data)
     with open(tmp_file, "w", encoding="utf-8") as f:
-        json.dump(result_data, f, indent=2, ensure_ascii=False)
+        json.dump(clean_data, f, indent=2, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp_file, result_file)
@@ -456,7 +494,7 @@ async def run_proposal(
             "status": "login_required",
             "screenshot_path": None,
             "filled_values": {},
-            "error_message": session_err,
+            "error_message": mask_secrets(session_err),
             "daily_submit_count": current_submit_count,
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
@@ -550,7 +588,7 @@ async def run_proposal(
                         }
 
                     status = flow_result.get("status", "form_error")
-                    filled_values = flow_result.get("filled_values", {})
+                    filled_values = mask_secrets_in_obj(flow_result.get("filled_values", {}))
                     error_message = mask_secrets(flow_result.get("error_message"))
 
                     # Fallback filled_values from proposal_data if adapter omitted them on success
@@ -623,7 +661,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entrypoint."""
+    """CLI entrypoint for site proposal runner.
+
+    Returns:
+        0 on success or expected operational conditions (preview_ready, submitted,
+        rate_limited, login_required, captcha_detected; missing_proposal in preview mode),
+        preventing spurious CI workflow failure while accurately persisting status to result.json.
+        1 on unexpected fatal failures or form_error in submit mode.
+    """
     args = parse_args(argv)
     result = asyncio.run(
         run_proposal(
@@ -636,6 +681,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     status = result.get("status")
     logger.info("Runner finished for job %s with status: %s", args.job_id, status)
+    # Expected operational conditions (login_required, rate_limited, captcha_detected)
+    # exit with code 0 in both preview and submit modes to prevent spurious CI workflow failure
     if status in ("preview_ready", "submitted", "rate_limited", "login_required", "captcha_detected"):
         return 0
     if status == "missing_proposal" and args.mode == "preview":
