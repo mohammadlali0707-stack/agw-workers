@@ -636,6 +636,33 @@ async def attach_image(page, shot_file):
     return out
 
 
+async def wait_form_visible(page, timeout_s=60):
+    """Wait until the form inputs are visible.
+
+    The inputs live in #formInputsParent, which starts with class d-none
+    (hidden) — the page only reveals it after an image is attached through
+    the widget. Returns True when the title field is visible.
+    """
+    import time as _t
+    start = _t.time()
+    while _t.time() - start < timeout_s:
+        try:
+            vis = await page.evaluate(
+                """() => {
+                  const t = document.querySelector('#app_bundle_portfolio_title');
+                  if (!t) return false;
+                  const r = t.getBoundingClientRect();
+                  const cs = getComputedStyle(t);
+                  return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden';
+                }""")
+        except Exception:
+            vis = False
+        if vis:
+            return True
+        await page.wait_for_timeout(2000)
+    return False
+
+
 async def publish_button_state(page):
     """(disabled, exists) for the publish and draft buttons."""
     try:
@@ -780,7 +807,22 @@ async def main_async(args):
                 # enabled — that answers "what enables the buttons" without
                 # submitting anything. The page is discarded when the browser
                 # closes, so no sample is created.
+                # NOTE (probe 007): the inputs live in #formInputsParent with
+                # class d-none — the page only reveals them after an image is
+                # attached. A dry-fill without an image therefore cannot fill
+                # anything. For the probe we reveal the container via JS (an
+                # inspection aid only; the real flow reveals it by attaching
+                # the image) so the fill/skills/publish logic can be verified.
                 dry = {"publish_before": await publish_button_state(page)}
+                try:
+                    dry["form_hidden_initially"] = await page.evaluate(
+                        "() => { const p = document.querySelector('#formInputsParent');"
+                        " return p ? p.classList.contains('d-none') : null; }")
+                    await page.evaluate(
+                        "() => { const p = document.querySelector('#formInputsParent');"
+                        " if (p) p.classList.remove('d-none'); }")
+                except Exception:
+                    dry["form_hidden_initially"] = None
                 target = None
                 for form in forms:
                     if pick_field(form["fields"], TITLE_WORDS):
@@ -842,6 +884,15 @@ async def main_async(args):
                 filled["image"] = await attach_image(page, shot_file)
             else:
                 filled["image"] = {"attached": False, "error": "no screenshot file available"}
+            # (1b) The form inputs are hidden (d-none) until the image is
+            # attached. Do not fill until they are visible — filling hidden
+            # fields fails silently (probe 007 proved this).
+            form_visible = await wait_form_visible(page, timeout_s=60)
+            filled["form_visible_after_attach"] = form_visible
+            if not form_visible:
+                result["filled"] = filled
+                result["error"] = "form inputs never became visible after image attach"
+                return save()
             # (2) Fill title + description.
             tf = pick_field(fields, TITLE_WORDS)
             df = pick_field(fields, DESC_WORDS)
