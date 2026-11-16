@@ -1,0 +1,58 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-172-acc2-314a123436fd-w02","commits":1,"files_changed":3,"checkout":"/home/runner/work/_temp/agent-repo-43831605734-1-run-agy"}}
+Worker committed 1 commit(s), 3 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Examine code and tests**: Read [scripts/site_proposal/sites/parscoders.py](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/scripts/site_proposal/sites/parscoders.py) and [tests/test_site_proposal_adapters.py](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/tests/test_site_proposal_adapters.py) using `view_file` to understand the current `_detect_login_required` implementation, `run_site_flow` execution path, and existing test patterns.
+2. **Check team board and documentation**: Read `/tmp/hqteam.py read` using `run_command` and search docs for secret documentation conventions regarding `SITE_SESSION_PARSCODERS`.
+3. **Enhance login detection in `parscoders.py`**: Update `_detect_login_required` and page inspection logic in [scripts/site_proposal/sites/parscoders.py](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/scripts/site_proposal/sites/parscoders.py) to reliably detect unauthenticated project pages, login prompts, Google OAuth buttons/links (including Persian text variations like "ورود با گوگل"), and registration banners, ensuring `run_site_flow` immediately returns status `'login_required'`.
+4. **Add unit tests**: Add test cases in [tests/test_site_proposal_adapters.py](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/tests/test_site_proposal_adapters.py) validating detection of unauthenticated states, Google login buttons, Persian prompts, and registration banners.
+5. **Document secret refresh requirement**: Update documentation detailing the operational requirement to refresh the `SITE_SESSION_PARSCODERS` secret.
+6. **Verify and test**: Run `python3 -m py_compile` on modified files and run test suites using `run_command` to verify syntax and functionality.
+7. **Coordinate peer review and post status**: Run `python3 /tmp/hqteam.py review` on the changes and post completion with `python3 /tmp/hqteam.py post done`.
+8. **Git commit**: Stage and commit the changes ensuring diff <= 400 lines and `.github/workflows/` remains untouched.
+root agent idle; waiting up to 28m0s for 2 background task(s)
+The test suite is running in the background. Waiting for test execution to complete.
+Waiting for the background test execution to complete.
+Waiting for pytest execution to finish.
+### Summary of Changes
+
+1. **Hardened Unauthenticated State & Login Prompt Detection**:
+   - In [`_detect_login_required`](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/scripts/site_proposal/sites/parscoders.py#L313-L344) within [scripts/site_proposal/sites/parscoders.py](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/scripts/site_proposal/sites/parscoders.py), added comprehensive detection for:
+     - Google OAuth links and buttons (`a[href*='connect-google']`, `a.google-sign-in`, `.btn-google`, `[data-provider='google']`, and Persian button texts including `"ورود با گوگل"`, `"ورود از طریق گوگل"`, `"ثبت نام با گوگل"`, `"اتصال با گوگل"`, and English variants).
+     - Registration and guest banners (`.register-banner`, `.registration-banner`, `.signup-banner`, `.guest-banner`, `.auth-banner`, etc.).
+     - Login modals, password inputs, and auth forms (`input[type='password']`, `form[action*='login']`, `.login-modal`, etc.).
+     - Unauthenticated proposal links (`a[href*='login']:has-text('پیشنهاد')`).
+     - Expanded Persian login text patterns matching unauthenticated project page states.
+
+2. **Immediate Return of `login_required`**:
+   - In [`ParscodersAdapter.run_site_flow`](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/scripts/site_proposal/sites/parscoders.py#L400-L530):
+     - Evaluates `_detect_login_required` immediately on page load (`page.goto`) and before attempting form expansion.
+     - Checks `_detect_login_required` immediately after clicking expand buttons (`ثبت پیشنهاد`) if an auth prompt or modal is revealed.
+     - Short-circuits `_wait_visible_description` and `_wait_visible_textarea` on every poll iteration when unauthenticated rather than burning 15s timeouts.
+     - Ensures that if proposal fields are absent due to unauthenticated state, the method immediately returns `{"status": "login_required"}` instead of falling through to timeout as `form_error` (which would exit code 1 in `scripts/site_proposal/runner.py`).
+
+3. **Added Unit Tests**:
+   - In [tests/test_site_proposal_adapters.py](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/tests/test_site_proposal_adapters.py), implemented tests validating:
+     - `test_get_site_adapter_parscoders` (registry resolution and case-insensitivity)
+     - `test_parscoders_login_required_redirect` (redirect to `/login`)
+     - `test_parscoders_login_required_prompt` (Persian login alert)
+     - `test_parscoders_login_required_google_oauth` (Google connect/OAuth buttons and Persian "ورود با گوگل")
+     - `test_parscoders_login_required_registration_banner` (registration banners)
+     - `test_parscoders_login_required_unauth_proposal_link` (proposal button pointing to login)
+     - `test_parscoders_login_required_expand_reveals_login` (modal revealing auth inputs on expand)
+     - `test_parscoders_preview_ready_authenticated` (valid authenticated flow)
+     - `test_callable_instance_support` (callable adapter instances)
+
+4. **Documented Operational Requirement**:
+   - Created [Reports/audit/parscoders_session_refresh_operational_requirement.md](file:///home/runner/work/_temp/agent-repo-43831605734-1-run-agy/Reports/audit/parscoders_session_refresh_operational_requirement.md) and updated class docstrings detailing the procedure for renewing `SITE_SESSION_PARSCODERS` via `.github/workflows/capture-parscoders-session.yml` (automated OAuth capture) or manual session extraction.
+
+5. **Validation & Git Hygiene**:
+   - Validated syntax with `python3 -m py_compile` across all modified files.
+   - Verified that all 8 Parscoders unit tests pass cleanly.
+   - Maintained diff limit (279 lines changed in diffstat, <= 400 lines total).
+   - Zero modifications to any files under `.github/workflows/`.
+   - Committed changes in `79b605a`.
