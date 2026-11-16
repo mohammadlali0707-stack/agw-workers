@@ -32,10 +32,15 @@ on:
         type: string
         default: ''
       mode:
-        description: 'probe (find the form, submit nothing) or upload'
+        description: 'probe (find the form, submit nothing), inspect, attach-test (attach a real image and verify the form reveals + publish enables, submit nothing) or upload'
         required: true
         type: string
         default: 'probe'
+      screenshot:
+        description: 'Optional repo-relative path of a PNG to attach as the sample image (attach-test / upload); else the sample URL is screenshotted'
+        required: false
+        type: string
+        default: ''
       job_id:
         description: 'Job id, e.g. up-par-20261116-xxxx'
         required: true
@@ -92,7 +97,8 @@ jobs:
             --mode "${{ inputs.mode }}" \
             --job-id "${{ inputs.job_id }}" \
             --results-dir hq-ai-results \
-            --profile-url "${{ inputs.profile_url }}"
+            --profile-url "${{ inputs.profile_url }}" \
+            --screenshot "${{ inputs.screenshot }}"
 
       - name: Commit and push results
         if: always()
