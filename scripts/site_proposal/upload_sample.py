@@ -27,7 +27,6 @@ import asyncio
 import json
 import os
 import sys
-import time
 
 SITE_HOME = {"parscoders": "https://parscoders.com", "karlancer": "https://karlancer.com"}
 PROFILE_WORDS = ("پروفایل", "نمونه کار", "نمونه‌کار", "portfolio", "پروفایل من", "سوابق")
@@ -72,24 +71,42 @@ def load_session(site):
 
 
 def sanitize_cookies(cookies, default_domain=None):
-    """Clean cookie dicts for Playwright context.add_cookies (mirror of runner.py)."""
+    """Clean cookie dicts for Playwright context.add_cookies (mirror of runner.py).
+
+    NOTE: this deliberately does NOT drop cookies whose `expires` is in the
+    past. The uploader's old expiry filter dropped them — but session cookies
+    are stored with expires=-1, so the filter dropped the very session cookie
+    the site needs, and the page rendered logged-out even with a valid session.
+    The runner keeps them and works; mirror it exactly.
+    """
     out = []
-    now = time.time()
     for c in cookies or []:
-        if not isinstance(c, dict) or not c.get("name") or c.get("value") is None:
+        if not isinstance(c, dict):
             continue
-        if c.get("expires") and c["expires"] < now:
+        clean = {}
+        for key in ("name", "value", "url", "domain", "path", "expires", "httpOnly", "secure", "sameSite"):
+            if key in c and c[key] is not None:
+                clean[key] = c[key]
+        if "name" not in clean or "value" not in clean:
             continue
-        nc = {"name": c["name"], "value": str(c["value"]),
-              "domain": c.get("domain") or default_domain,
-              "path": c.get("path") or "/"}
-        if c.get("secure") is not None:
-            nc["secure"] = bool(c["secure"])
-        if c.get("httpOnly") is not None:
-            nc["httpOnly"] = bool(c["httpOnly"])
-        if c.get("sameSite") in ("Strict", "Lax", "None"):
-            nc["sameSite"] = c["sameSite"]
-        out.append(nc)
+        clean["name"] = str(clean["name"])
+        clean["value"] = str(clean["value"])
+        if "sameSite" in clean:
+            s = str(clean["sameSite"]).capitalize()
+            if s in ("Strict", "Lax", "None"):
+                clean["sameSite"] = s
+            else:
+                del clean["sameSite"]
+        if "expires" in clean:
+            try:
+                clean["expires"] = float(clean["expires"])
+            except (ValueError, TypeError):
+                del clean["expires"]
+        if "url" not in clean:
+            clean.setdefault("path", "/")
+            if "domain" not in clean and default_domain:
+                clean["domain"] = default_domain
+        out.append(clean)
     return out
 
 
@@ -322,20 +339,30 @@ async def main_async(args):
         return save()
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch()
-            ctx = await browser.new_context()
+            browser = await pw.chromium.launch(headless=True)
+            ctx = await browser.new_context(viewport={"width": 1280, "height": 800})
             cookies = sanitize_cookies(session.get("cookies"), home.split("//")[1])
             if cookies:
                 await ctx.add_cookies(cookies)
+            # Inject localStorage via add_init_script BEFORE any page loads
+            # (mirror of runner.py). The old approach — load the page, set
+            # localStorage, reload — left the home page rendering logged-out
+            # even with a valid session.
+            ls_data = session.get("localStorage") or {}
+            if isinstance(ls_data, dict) and ls_data:
+                ls_json = json.dumps(ls_data)
+                init_script = f"""(() => {{
+                    try {{
+                        const data = {ls_json};
+                        for (const [k, v] of Object.entries(data)) {{
+                            const val = typeof v === 'string' ? v : JSON.stringify(v);
+                            window.localStorage.setItem(k, val);
+                        }}
+                    }} catch (e) {{}}
+                }})();"""
+                await ctx.add_init_script(init_script)
             page = await ctx.new_page()
             await page.goto(home, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(2000)
-            for k, v in (session.get("localStorage") or {}).items():
-                try:
-                    await page.evaluate("(kv) => localStorage.setItem(kv[0], kv[1])", [k, v])
-                except Exception:
-                    pass
-            await page.reload(wait_until="domcontentloaded")
             await page.wait_for_timeout(2000)
             profile_url = args.profile_url
             info = {}
