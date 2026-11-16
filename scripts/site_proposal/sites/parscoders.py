@@ -203,8 +203,10 @@ async def _wait_visible_description(page: Any, tries: int = 15) -> Tuple[Optiona
     editor inside the bid modal, not a plain textarea: the hidden
     <textarea name=message> in the DOM is only the editor's backing field,
     so waiting for a visible textarea never succeeds (run 43829285293:
-    modal open, all textareas hid). Prefer a visible contenteditable;
-    fall back to a visible textarea.
+    modal open, all textareas hid). The editor is usually CKEditor-style:
+    either an inline contenteditable element, or a contenteditable body
+    inside an iframe. Prefer a visible contenteditable; fall back to a
+    visible textarea.
     """
     for _ in range(tries):
         loc = await _first_matching_locator(page, EDITOR_SELECTORS)
@@ -214,6 +216,16 @@ async def _wait_visible_description(page: Any, tries: int = 15) -> Tuple[Optiona
                     return loc, True
             except Exception:
                 pass
+        try:
+            for fr in page.frames:
+                try:
+                    body = fr.locator("body[contenteditable='true']")
+                    if await body.count() > 0 and await body.first.is_visible():
+                        return body.first, True
+                except Exception:
+                    continue
+        except Exception:
+            pass
         loc = await _first_matching_locator(page, TEXT_SELECTORS)
         if loc is not None:
             try:
@@ -231,9 +243,11 @@ async def _form_diagnostics(page: Any) -> str:
         info = await page.evaluate("""() => {
             const tas = [...document.querySelectorAll('textarea')].map(t => (t.name || '') + ':' + (t.offsetParent ? 'vis' : 'hid'));
             const btns = [...document.querySelectorAll('button,a')].map(e => (e.innerText || '').trim()).filter(t => t && t.length < 40).slice(0, 12);
-            return 'textareas=[' + tas.join(',') + '] buttons=[' + btns.join('|') + ']';
+            const ce = [...document.querySelectorAll('[contenteditable]')].map(e => (e.tagName || '') + '.' + (e.className || '').toString().slice(0, 30) + ':' + (e.offsetParent ? 'vis' : 'hid'));
+            const ifs = [...document.querySelectorAll('iframe')].map(f => (f.title || f.id || f.src || '').toString().slice(0, 40));
+            return 'textareas=[' + tas.join(',') + '] buttons=[' + btns.join('|') + '] contenteditable=[' + ce.join(',') + '] iframes=[' + ifs.join(',') + ']';
         }""")
-        return str(info)[:400]
+        return str(info)[:600]
     except Exception:
         return "diagnostics unavailable"
 
@@ -363,14 +377,15 @@ class ParscodersAdapter:
             if _re.search(r"پروژه (بسته|منقضی|به اتمام رسیده|غیرفعال)|مهلت (ارسال )?(پیشنهاد )?(تمام|به پایان)", b):
                 return {"status": "closed", "filled_values": fv, "error_message": "project is closed"}
 
-            # 2. Open the proposal form. The textarea stays aria-hidden until
-            # the form opens, so poll for a VISIBLE textarea and retry the
-            # other expand buttons before giving up (a fixed 3s sleep plus a
-            # hidden fallback match caused run 43718025581 to time out 30s
-            # on click()). If the form is already open, the first poll
-            # returns immediately.
+            # 2. Open the proposal form. The description field stays hidden
+            # until the form opens, so poll for a VISIBLE description field
+            # (rich-text editor or textarea) and retry the other expand
+            # buttons before giving up (a fixed 3s sleep plus a hidden
+            # fallback match caused run 43718025581 to time out 30s on
+            # click()). If the form is already open, the first poll returns
+            # immediately.
             expand_clicked = False
-            if not await _wait_visible_textarea(page, tries=3):
+            if not (await _wait_visible_description(page, tries=3))[0]:
                 for sel in EXPAND_BUTTON_SELECTORS:
                     try:
                         loc = page.locator(sel)
@@ -383,7 +398,7 @@ class ParscodersAdapter:
                         await first.click()
                         expand_clicked = True
                         logger.info("Clicked expand button: %s", sel)
-                        if await _wait_visible_textarea(page, tries=8):
+                        if (await _wait_visible_description(page, tries=8))[0]:
                             break
                     except Exception:
                         continue
