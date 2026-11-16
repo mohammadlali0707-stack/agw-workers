@@ -52,22 +52,52 @@ LOGIN_URL_PATTERNS: List[str] = [
     "/login",
     "/auth",
     "/signin",
+    "/register",
+    "/signup",
     "parscoders.com/login",
     "parscoders.com/auth",
+    "parscoders.com/register",
+    "parscoders.com/signup",
+    "connect-google",
+    "connect/google",
+    "accounts.google.com",
+]
+
+LOGIN_SELECTORS: List[str] = [
+    # Google OAuth links and buttons (Persian and English)
+    "a[href*='connect-google']", "a[href*='connect/google']", "a[href*='accounts.google.com']",
+    "a[href*='auth/google']", "a.google-sign-in", "button.google-sign-in", ".btn-google",
+    "[data-provider='google']", "[aria-label*='Google' i]",
+    ":is(a, button):has-text('ورود با گوگل')", ":is(a, button):has-text('ورود از طریق گوگل')",
+    ":is(a, button):has-text('ثبت نام با گوگل')", ":is(a, button):has-text('ثبت‌نام با گوگل')",
+    ":is(a, button):has-text('اتصال با گوگل')", ":is(a, button):has-text('Sign in with Google')",
+    ":is(a, button):has-text('Log in with Google')", ":is(a, button):has-text('Continue with Google')",
+    # Password inputs and login forms
+    "input[type='password']", "input[name='password']", "form[action*='login']", "form[action*='auth']",
+    # Login prompts & modals
+    ".login-modal", "#login-modal", ".auth-modal", "#auth-modal", ".login-box", ".login-prompt",
+    "[class*='login-modal']", "[class*='auth-modal']", "[class*='login-prompt']",
+    # Proposal links leading to auth
+    "a[href*='login']:has-text('پیشنهاد')", "a[href*='auth']:has-text('پیشنهاد')",
+    # Registration banners & guest alerts
+    ".register-banner", ".registration-banner", ".signup-banner", ".guest-banner", ".auth-banner",
+    "#register-banner", "#registration-banner", "#guest-banner",
+    "[class*='register-banner']", "[class*='registration-banner']", "[class*='guest-banner']",
 ]
 
 LOGIN_TEXT_PATTERNS: List[str] = [
-    "برای ثبت پیشنهاد وارد شوید",
-    "برای ارسال پیشنهاد وارد شوید",
-    "جهت ارسال پیشنهاد باید وارد شوید",
-    "ابتدا وارد حساب کاربری خود شوید",
-    "ابتدا وارد شوید",
-    "وارد شوید یا ثبت نام کنید",
-    "ثبت نام در پارس‌کدرز",
-    "قبلا عضو پارس‌کدرز",
-    "ورود به حساب کاربری",
-    "ایمیل یا رمز عبور",
+    "برای ثبت پیشنهاد وارد شوید", "برای ثبت پیشنهاد ابتدا وارد شوید", "برای ارسال پیشنهاد وارد شوید",
+    "برای ارسال پیشنهاد ابتدا وارد شوید", "برای ارسال پیشنهاد باید وارد شوید", "جهت ارسال پیشنهاد باید وارد شوید",
+    "جهت ثبت پیشنهاد باید وارد شوید", "ابتدا وارد حساب کاربری خود شوید", "ابتدا وارد شوید",
+    "وارد شوید یا ثبت نام کنید", "وارد شوید یا ثبت‌نام کنید", "ثبت نام در پارس‌کدرز", "ثبت‌نام در پارس‌کدرز",
+    "قبلا عضو پارس‌کدرز", "عضو پارس‌کدرز نیستید", "هنوز عضو پارس‌کدرز نیستید", "ورود به حساب کاربری",
+    "ورود به حساب", "ورود به سایت", "ورود / ثبت‌نام", "ورود یا ثبت نام", "ورود کاربران",
+    "ورود با گوگل", "ورود از طریق گوگل", "ورود با حساب گوگل", "ثبت نام با گوگل", "ثبت‌نام با گوگل",
+    "اتصال با گوگل", "با گوگل وارد شوید", "حساب کاربری گوگل", "ایمیل یا رمز عبور", "نام کاربری یا رمز عبور",
+    "نام کاربری یا ایمیل", "فراموشی رمز عبور", "ایجاد حساب کاربری", "حساب کاربری ندارید",
+    "هنوز ثبت نام نکرده اید", "Sign in with Google", "Log in with Google", "Continue with Google",
 ]
+
 
 TEXT_SELECTORS: List[str] = [
     "textarea[name='message']",
@@ -174,17 +204,16 @@ async def _first_matching_locator(page: Any, selectors: List[str]) -> Optional[A
     return None
 
 
+
+
 async def _wait_visible_textarea(page: Any, tries: int = 15) -> Optional[Any]:
     """Poll until a proposal textarea is VISIBLE; None on timeout.
 
-    The Parscoders form keeps its textarea aria-hidden until the form is
-    opened, so a hidden match must never be clicked: Playwright's click()
-    then burns its whole 30s timeout waiting for visibility (run
-    43718025581 / job sp-auto-par-622171-1105081735, textarea
-    name=message id=init_message_message). _first_matching_locator's
-    fallback returns hidden elements, so re-check visibility here.
+    Short-circuits immediately if login_required is detected to avoid 15s wait.
     """
     for _ in range(tries):
+        if await _detect_login_required(page):
+            return None
         loc = await _first_matching_locator(page, TEXT_SELECTORS)
         if loc is not None:
             try:
@@ -199,16 +228,11 @@ async def _wait_visible_textarea(page: Any, tries: int = 15) -> Optional[Any]:
 async def _wait_visible_description(page: Any, tries: int = 15) -> Tuple[Optional[Any], bool]:
     """Poll for the proposal description field; returns (locator, is_editor).
 
-    Parscoders renders the description as a rich-text (contenteditable)
-    editor inside the bid modal, not a plain textarea: the hidden
-    <textarea name=message> in the DOM is only the editor's backing field,
-    so waiting for a visible textarea never succeeds (run 43829285293:
-    modal open, all textareas hid). The editor is usually CKEditor-style:
-    either an inline contenteditable element, or a contenteditable body
-    inside an iframe. Prefer a visible contenteditable; fall back to a
-    visible textarea.
+    Short-circuits immediately if login_required is detected to avoid 15s wait.
     """
     for _ in range(tries):
+        if await _detect_login_required(page):
+            return None, False
         loc = await _first_matching_locator(page, EDITOR_SELECTORS)
         if loc is not None:
             try:
@@ -235,6 +259,7 @@ async def _wait_visible_description(page: Any, tries: int = 15) -> Tuple[Optiona
                 pass
         await page.wait_for_timeout(1000)
     return None, False
+
 
 
 async def _form_diagnostics(page: Any) -> str:
@@ -286,21 +311,35 @@ async def _detect_captcha(page: Any) -> bool:
 
 
 async def _detect_login_required(page: Any) -> bool:
+    """Detect unauthenticated state, login redirects, prompts, Google buttons, or banners."""
     current_url = getattr(page, "url", "") or ""
     if any(pat in current_url.lower() for pat in LOGIN_URL_PATTERNS):
         return True
+
+    for sel in LOGIN_SELECTORS:
+        try:
+            loc = page.locator(sel)
+            cnt = await loc.count()
+            if cnt > 0:
+                for i in range(min(cnt, 5)):
+                    try:
+                        if await loc.nth(i).is_visible():
+                            return True
+                    except Exception:
+                        pass
+                if any(k in sel for k in ("password", "connect-google", "google-sign-in", "btn-google", "register-banner", "registration-banner", "signup-banner", "guest-banner", "auth-banner")):
+                    return True
+        except Exception:
+            continue
+
     try:
-        if await page.locator("input[type='password']").count() > 0:
-            return True
-    except Exception:
-        pass
-    try:
-        body = await page.evaluate("() => document.body.innerText")
+        body = await page.evaluate("() => (document.body ? document.body.innerText : '')")
         for pat in LOGIN_TEXT_PATTERNS:
             if pat in body:
                 return True
     except Exception:
         pass
+
     return False
 
 
@@ -309,6 +348,7 @@ async def _body(page: Any) -> str:
         return await page.evaluate("() => document.body.innerText")
     except Exception:
         return ""
+
 
 
 async def _errors(page: Any) -> List[str]:
@@ -336,6 +376,13 @@ class ParscodersAdapter:
     """Parscoders bid flow:
     project page -> 'ثبت پیشنهاد' button -> fill form (text, amount, days) -> submit.
     Uses SITE_SESSION_PARSCODERS for auth. Daily limit: 5 bids (shared runner limit).
+
+    Operational Requirement:
+    When a session expires, Parscoders renders unauthenticated project pages, login prompts,
+    Google OAuth buttons ('ورود با گوگل'), or registration banners. The adapter immediately
+    returns status 'login_required' (exit code 0 in runner.py). The SITE_SESSION_PARSCODERS
+    secret must then be refreshed by triggering `.github/workflows/capture-parscoders-session.yml`
+    or running `scripts/site_proposal/capture_parscoders.py`.
     """
 
     @classmethod
@@ -354,11 +401,13 @@ class ParscodersAdapter:
             return {"status": "form_error", "filled_values": {}, "error_message": "project_url is missing"}
 
         submit = str(mode).strip().lower() == "submit"
+        wait_ms = int(proposal_data.get("_wait_ms", 5000))
 
         try:
             # 1. Navigate to project page
             await page.goto(url, wait_until="domcontentloaded")
-            await page.wait_for_timeout(5000)
+            if wait_ms > 0:
+                await page.wait_for_timeout(wait_ms)
 
             if await _detect_captcha(page):
                 return {"status": "captcha_detected", "filled_values": fv, "error_message": "captcha on page"}
@@ -377,15 +426,13 @@ class ParscodersAdapter:
             if _re.search(r"پروژه (بسته|منقضی|به اتمام رسیده|غیرفعال)|مهلت (ارسال )?(پیشنهاد )?(تمام|به پایان)", b):
                 return {"status": "closed", "filled_values": fv, "error_message": "project is closed"}
 
-            # 2. Open the proposal form. The description field stays hidden
-            # until the form opens, so poll for a VISIBLE description field
-            # (rich-text editor or textarea) and retry the other expand
-            # buttons before giving up (a fixed 3s sleep plus a hidden
-            # fallback match caused run 43718025581 to time out 30s on
-            # click()). If the form is already open, the first poll returns
-            # immediately.
+            # 2. Open the proposal form. If login is required, immediately return login_required
             expand_clicked = False
-            if not (await _wait_visible_description(page, tries=3))[0]:
+            desc_tries = 1 if wait_ms == 0 else 3
+            if not (await _wait_visible_description(page, tries=desc_tries))[0]:
+                if await _detect_login_required(page):
+                    return {"status": "login_required", "filled_values": {}, "error_message": "session expired or not logged in"}
+
                 for sel in EXPAND_BUTTON_SELECTORS:
                     try:
                         loc = page.locator(sel)
@@ -398,7 +445,11 @@ class ParscodersAdapter:
                         await first.click()
                         expand_clicked = True
                         logger.info("Clicked expand button: %s", sel)
-                        if (await _wait_visible_description(page, tries=8))[0]:
+                        if wait_ms > 0:
+                            await page.wait_for_timeout(1000)
+                        if await _detect_login_required(page):
+                            return {"status": "login_required", "filled_values": {}, "error_message": "login required after expand"}
+                        if (await _wait_visible_description(page, tries=1 if wait_ms == 0 else 8))[0]:
                             break
                     except Exception:
                         continue
@@ -410,9 +461,10 @@ class ParscodersAdapter:
                 return {"status": "login_required", "filled_values": {}, "error_message": "login required after expand"}
 
             # 3. Fill form fields
-            # Proposal text: rich-text editor (contenteditable) or textarea
-            text_loc, is_editor = await _wait_visible_description(page, tries=15)
+            text_loc, is_editor = await _wait_visible_description(page, tries=1 if wait_ms == 0 else 15)
             if not text_loc:
+                if await _detect_login_required(page):
+                    return {"status": "login_required", "filled_values": {}, "error_message": "login required: proposal form not accessible"}
                 diag = await _form_diagnostics(page)
                 b2 = await _body(page)
                 return {"status": "form_error", "filled_values": fv,

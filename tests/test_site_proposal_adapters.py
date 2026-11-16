@@ -15,6 +15,7 @@ from scripts.site_proposal.sites import (
     get_site_adapter,
     PonishaAdapter,
     KarlancerAdapter,
+    ParscodersAdapter,
 )
 
 PONISHA_HTML = """<!DOCTYPE html><html lang="fa"><head><meta charset="utf-8"></head><body>
@@ -41,6 +42,14 @@ CAPTCHA_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
 
 LOGIN_PROMPT_HTML = """<!DOCTYPE html><html lang="fa"><head><meta charset="utf-8"></head><body>
 <div class="alert">برای ارسال پیشنهاد وارد شوید</div><a href="/login">ورود</a></body></html>"""
+
+PARSCODERS_LOGIN_PROMPT_HTML = '<div class="alert alert-warning">برای ثبت پیشنهاد ابتدا وارد شوید</div><a href="/login">ورود به حساب کاربری</a>'
+PARSCODERS_GOOGLE_HTML = '<div class="auth-box"><a href="https://parscoders.com/connect-google" class="google-sign-in">ورود با گوگل</a><button class="btn-google">ورود از طریق گوگل</button></div>'
+PARSCODERS_BANNER_HTML = '<div class="register-banner"><h4>ثبت نام در پارس‌کدرز</h4><p>برای ارسال پیشنهاد باید عضو شوید</p></div>'
+PARSCODERS_UNAUTH_PROJECT_HTML = '<div class="project-header"><h1>پروژه</h1></div><div class="bid-section"><a href="/login" class="btn">ثبت پیشنهاد</a></div>'
+PARSCODERS_EXPAND_LOGIN_HTML = '<button id="bid-btn" onclick="document.getElementById(\'login-modal\').style.display=\'block\';">ثبت پیشنهاد</button><div id="login-modal" style="display:none;"><a href="/connect-google" class="btn-google">ورود با گوگل</a><input type="password" name="password" /></div>'
+PARSCODERS_AUTH_HTML = '<div id="project-form"><textarea name="message"></textarea><input type="text" name="amount" /><input type="number" name="delivery_days" /><button type="submit">ثبت پیشنهاد</button></div>'
+
 
 
 @pytest_asyncio.fixture
@@ -71,14 +80,21 @@ def test_get_site_adapter_karlancer():
     assert hasattr(adapter, "run_site_flow")
 
 
+def test_get_site_adapter_parscoders():
+    adapter = get_site_adapter("parscoders")
+    assert adapter is ParscodersAdapter
+    assert hasattr(adapter, "run_site_flow")
+
+
 def test_get_site_adapter_case_insensitive():
     assert get_site_adapter("PoNiShA") is PonishaAdapter
     assert get_site_adapter("KARLANCER") is KarlancerAdapter
+    assert get_site_adapter("PaRsCoDeRs") is ParscodersAdapter
 
 
 def test_get_site_adapter_unsupported():
     with pytest.raises(ValueError, match="Unsupported site"):
-        get_site_adapter("freelancer")
+        get_site_adapter("unsupported_platform")
 
 
 def test_get_site_adapter_invalid_input():
@@ -86,6 +102,7 @@ def test_get_site_adapter_invalid_input():
         get_site_adapter("")
     with pytest.raises(ValueError, match="non-empty string"):
         get_site_adapter(None)  # type: ignore
+
 
 
 # --- Ponisha Tests ---
@@ -242,8 +259,90 @@ async def test_submit_button_missing(test_page):
     assert "دکمه ثبت نهایی" in res["error_message"]
 
 
+# --- Parscoders Tests ---
+
+
+@pytest.mark.asyncio
+async def test_parscoders_login_required_redirect(test_page):
+    page = test_page
+    url = "https://parscoders.com/project/301"
+    login_url = "https://parscoders.com/login"
+    await page.route(url, lambda r: r.fulfill(status=302, headers={"Location": login_url}))
+    await page.route(login_url, lambda r: r.fulfill(status=200, body="<input type='password'>", content_type="text/html; charset=utf-8"))
+    res = await ParscodersAdapter.run_site_flow(page, None, {"project_url": url, "proposal_text": "t", "_wait_ms": 0}, mode="preview")
+    assert res["status"] == "login_required"
+    assert res["filled_values"] == {}
+
+
+@pytest.mark.asyncio
+async def test_parscoders_login_required_prompt(test_page):
+    page = test_page
+    url = "https://parscoders.com/project/302"
+    await page.route(url, lambda r: r.fulfill(status=200, body=PARSCODERS_LOGIN_PROMPT_HTML, content_type="text/html; charset=utf-8"))
+    res = await ParscodersAdapter.run_site_flow(page, None, {"project_url": url, "proposal_text": "t", "_wait_ms": 0}, mode="preview")
+    assert res["status"] == "login_required"
+    assert res["filled_values"] == {}
+
+
+@pytest.mark.asyncio
+async def test_parscoders_login_required_google_oauth(test_page):
+    page = test_page
+    url = "https://parscoders.com/project/303"
+    await page.route(url, lambda r: r.fulfill(status=200, body=PARSCODERS_GOOGLE_HTML, content_type="text/html; charset=utf-8"))
+    res = await ParscodersAdapter.run_site_flow(page, None, {"project_url": url, "proposal_text": "t", "_wait_ms": 0}, mode="preview")
+    assert res["status"] == "login_required"
+    assert res["filled_values"] == {}
+
+
+@pytest.mark.asyncio
+async def test_parscoders_login_required_registration_banner(test_page):
+    page = test_page
+    url = "https://parscoders.com/project/304"
+    await page.route(url, lambda r: r.fulfill(status=200, body=PARSCODERS_BANNER_HTML, content_type="text/html; charset=utf-8"))
+    res = await ParscodersAdapter.run_site_flow(page, None, {"project_url": url, "proposal_text": "t", "_wait_ms": 0}, mode="preview")
+    assert res["status"] == "login_required"
+    assert res["filled_values"] == {}
+
+
+@pytest.mark.asyncio
+async def test_parscoders_login_required_unauth_proposal_link(test_page):
+    page = test_page
+    url = "https://parscoders.com/project/305"
+    await page.route(url, lambda r: r.fulfill(status=200, body=PARSCODERS_UNAUTH_PROJECT_HTML, content_type="text/html; charset=utf-8"))
+    res = await ParscodersAdapter.run_site_flow(page, None, {"project_url": url, "proposal_text": "t", "_wait_ms": 0}, mode="preview")
+    assert res["status"] == "login_required"
+    assert res["filled_values"] == {}
+
+
+@pytest.mark.asyncio
+async def test_parscoders_login_required_expand_reveals_login(test_page):
+    page = test_page
+    url = "https://parscoders.com/project/306"
+    await page.route(url, lambda r: r.fulfill(status=200, body=PARSCODERS_EXPAND_LOGIN_HTML, content_type="text/html; charset=utf-8"))
+    res = await ParscodersAdapter.run_site_flow(page, None, {"project_url": url, "proposal_text": "t", "_wait_ms": 0}, mode="preview")
+    assert res["status"] == "login_required"
+    assert res["filled_values"] == {}
+
+
+@pytest.mark.asyncio
+async def test_parscoders_preview_ready_authenticated(test_page):
+    page = test_page
+    url = "https://parscoders.com/project/307"
+    await page.route(url, lambda r: r.fulfill(status=200, body=PARSCODERS_AUTH_HTML, content_type="text/html; charset=utf-8"))
+    proposal = {"project_url": url, "proposal_text": "پیشنهاد تست پارسکدرز", "bid_amount": 2500000, "delivery_days": 4, "_wait_ms": 0}
+    res = await ParscodersAdapter.run_site_flow(page, None, proposal, mode="preview")
+    assert res["status"] == "preview_ready"
+    assert res["error_message"] is None
+    assert res["filled_values"]["proposal_len"] == len("پیشنهاد تست پارسکدرز")
+    assert res["filled_values"]["bid_amount"] == "2500000"
+    assert res["filled_values"]["delivery_days"] == "4"
+
+
 def test_callable_instance_support():
     adapter = PonishaAdapter()
     assert callable(adapter)
     k_adapter = KarlancerAdapter()
     assert callable(k_adapter)
+    p_adapter = ParscodersAdapter()
+    assert callable(p_adapter)
+
