@@ -492,6 +492,16 @@ async def inspect_portfolio_page(page):
           }
         });
       });
+      // Full text of the inline script that wires the uploader (init options,
+      // what enables the buttons, what fills cropProps) — the part the
+      // snippets above only show in fragments.
+      out.uploader_script = '';
+      document.querySelectorAll('script:not([src])').forEach(s => {
+        const t = s.textContent || '';
+        if (t.includes('cropProps') && t.includes('uploader') && !out.uploader_script) {
+          out.uploader_script = t.slice(0, 20000);
+        }
+      });
       return out;
     }
     """
