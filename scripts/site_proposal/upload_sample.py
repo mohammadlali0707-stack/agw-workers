@@ -11,6 +11,11 @@ Modes:
   probe  — find the profile/portfolio page, screenshot it, dump the form
            structure. Submits NOTHING. Run this first on a new site/profile:
            the exact portfolio form is UNVERIFIED until probe reports it.
+  inspect — like probe, plus a deep dump of the create page: button types,
+           hidden file inputs, the image widget's HTML, the skills select's
+           options/required state. Submits NOTHING. Use it to answer "how
+           does the image get attached / which button submits / is skills
+           required" before writing upload logic.
   upload — fill the portfolio form (title, description, sample link) and
            submit, then re-load the profile and verify the sample appears.
 
@@ -391,6 +396,85 @@ def pick_field(fields, words):
     return None
 
 
+async def inspect_portfolio_page(page):
+    """Deep inspection of the portfolio create page (inspect mode only).
+
+    Answers three questions without submitting anything:
+      1. how is an image attached (plain file input / hidden file input /
+         a JS crop/upload widget)?
+      2. what are the submit buttons' type attributes (draft vs submit)?
+      3. is the skills select required, and how does it work (plain select
+         or a JS widget like select2 with an AJAX search box)?
+    """
+    js = r"""
+    () => {
+      const out = {buttons: [], file_inputs: [], upload_hits: [], skills: {},
+                   fields_required: {}, form_attrs: {}, widget_html: '',
+                   select2_present: false, cropper_present: false};
+      const forms = [...document.querySelectorAll('form')];
+      const pf = forms.find(f => f.querySelector('[name="app_bundle_portfolio[title]"]')) || forms[0];
+      if (pf) {
+        out.form_attrs = {action: pf.action || '', method: pf.method || '',
+                          enctype: pf.enctype || '', novalidate: pf.hasAttribute('novalidate')};
+        pf.querySelectorAll('button, input[type=submit], input[type=button]').forEach(b => {
+          out.buttons.push({tag: b.tagName.toLowerCase(), type: b.getAttribute('type'),
+            name: b.getAttribute('name'), id: b.getAttribute('id'),
+            text: (b.innerText || b.value || '').trim().slice(0, 80),
+            cls: (b.getAttribute('class') || '').slice(0, 120), disabled: !!b.disabled});
+        });
+        pf.querySelectorAll('input, textarea, select').forEach(el => {
+          const key = el.getAttribute('name') || el.getAttribute('id') || el.tagName;
+          out.fields_required[key] = {required: el.hasAttribute('required'),
+            aria_required: el.getAttribute('aria-required'),
+            tag: el.tagName.toLowerCase(), type: el.getAttribute('type')};
+        });
+        out.widget_html = pf.outerHTML.slice(0, 20000);
+      }
+      document.querySelectorAll('input[type=file]').forEach(el => {
+        const cs = getComputedStyle(el);
+        out.file_inputs.push({id: el.getAttribute('id'), name: el.getAttribute('name'),
+          accept: el.getAttribute('accept'), multiple: el.hasAttribute('multiple'),
+          display: cs.display, visibility: cs.visibility,
+          offsetParentNull: el.offsetParent === null,
+          cls: (el.getAttribute('class') || '').slice(0, 120),
+          parent_html: (el.parentElement ? el.parentElement.outerHTML : '').slice(0, 600)});
+      });
+      const needles = ['آپلود', 'تصویر', 'عکس', 'upload', 'dropzone', 'cropper', 'crop',
+                       'انتخاب فایل', 'انتخاب تصویر'];
+      document.querySelectorAll('div, span, label, button, a, input').forEach(el => {
+        const hay = ((el.getAttribute('class') || '') + ' ' + (el.getAttribute('id') || '')
+          + ' ' + (el.innerText || '').slice(0, 60) + ' '
+          + [...el.attributes].map(a => a.name + '=' + a.value).join(' ')).toLowerCase();
+        if (needles.some(n => hay.includes(n.toLowerCase())) && el.children.length < 6) {
+          out.upload_hits.push({tag: el.tagName.toLowerCase(),
+            cls: (el.getAttribute('class') || '').slice(0, 100),
+            id: el.getAttribute('id'), text: (el.innerText || '').trim().slice(0, 80),
+            html: el.outerHTML.slice(0, 500)});
+        }
+      });
+      out.upload_hits = out.upload_hits.slice(0, 30);
+      const sel = document.querySelector('#app_bundle_portfolio_skills');
+      if (sel) {
+        out.skills = {tag: 'select', name: sel.getAttribute('name'),
+          multiple: sel.hasAttribute('multiple'), required: sel.hasAttribute('required'),
+          options: [...sel.options].map(o => ({value: o.value,
+            text: o.text.trim().slice(0, 60), selected: o.selected})).slice(0, 80),
+          option_count: sel.options.length, visible: sel.offsetParent !== null,
+          cls: (sel.getAttribute('class') || '').slice(0, 120)};
+      }
+      out.select2_present = !!document.querySelector(
+        '.select2-container, [class*=select2], [class*=chosen], [class*=selectize]');
+      out.cropper_present = !!document.querySelector(
+        '[class*=cropper], [class*=crop], [data-crop]');
+      return out;
+    }
+    """
+    try:
+        return await page.evaluate(js)
+    except Exception as e:  # noqa: BLE001 - inspection failure must not crash the run
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 async def fill_field(page, field, value):
     sel = None
     if field.get("id"):
@@ -495,6 +579,13 @@ async def main_async(args):
             result["forms"] = forms
             with open(os.path.join(out_dir, "forms.json"), "w", encoding="utf-8") as f:
                 json.dump(forms, f, ensure_ascii=False, indent=2)
+            if args.mode == "inspect":
+                result["inspection"] = await inspect_portfolio_page(page)
+                with open(os.path.join(out_dir, "inspect.json"), "w", encoding="utf-8") as f:
+                    json.dump(result["inspection"], f, ensure_ascii=False, indent=2)
+                result["ok"] = True
+                result["note"] = "inspection only: page structure recorded, nothing submitted"
+                return save()
             if args.mode == "probe":
                 result["ok"] = True
                 result["note"] = "probe only: form structure recorded, nothing submitted"
@@ -587,7 +678,7 @@ def main():
     ap.add_argument("--sample-url", required=True)
     ap.add_argument("--title", required=True)
     ap.add_argument("--description", default="")
-    ap.add_argument("--mode", required=True, choices=["probe", "upload"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload"])
     ap.add_argument("--job-id", required=True)
     ap.add_argument("--results-dir", required=True)
     ap.add_argument("--profile-url", default="")
