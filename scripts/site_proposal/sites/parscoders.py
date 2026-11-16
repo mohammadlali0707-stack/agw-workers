@@ -209,33 +209,31 @@ async def _detect_captcha(page: Any) -> bool:
     The signup/login form embeds its captcha widget in the DOM even when no
     challenge is shown, so counting matching elements (hidden included)
     misreports 'captcha' on a plain logged-out page (2026-11-16: the signup
-    page was reported as 'captcha after expand'). Check visibility in the
-    page instead; innerText already excludes hidden text.
+    page was reported as 'captcha after expand'). Visibility is checked in
+    Python via is_visible(); the text check uses rendered innerText, which
+    already excludes hidden text. (No JS evaluate here: an earlier version
+    carried an unbalanced paren that silently disabled this check.)
     """
+    for sel in CAPTCHA_SELECTORS:
+        try:
+            loc = page.locator(sel)
+            for i in range(await loc.count()):
+                try:
+                    if await loc.nth(i).is_visible():
+                        return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
     try:
-        return bool(await page.evaluate(
-            """([sels, texts]) => {
-                const vis = (el) => {
-                    if (!el) return false;
-                    const r = el.getBoundingClientRect();
-                    if (r.width === 0 && r.height === 0) return false;
-                    const cs = getComputedStyle(el);
-                    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
-                    if (el.offsetParent === null && cs.position !== 'fixed') return false;
-                    return true;
-                };
-                for (const s of sels) {
-                    for (const el of document.querySelectorAll(s)) {
-                        if (vis(el)) return true;
-                    }
-                }
-                const t = document.body ? (document.body.innerText || '') : '');
-                return texts.some((x) => t.includes(x));
-            }""",
-            [CAPTCHA_SELECTORS, CAPTCHA_TEXT_SELECTORS],
-        ))
+        body = await _body(page)
+        for pat in CAPTCHA_TEXT_SELECTORS:
+            text = pat[len(":has-text('"):-2] if pat.startswith(":has-text('") else pat
+            if text and text in body:
+                return True
     except Exception:
-        return False
+        pass
+    return False
 
 
 async def _detect_login_required(page: Any) -> bool:
