@@ -34,6 +34,13 @@ PROFILE_WORDS = ("پروفایل", "نمونه کار", "نمونه‌کار", "
 # Probe 2026-11-16 found the old logic returning a /resume/portfolio/show/<id>/ display
 # page (an existing sample), whose only form is a feedback form — no title field.
 ADD_WORDS = ("add", "create", "new", "manage", "edit", "افزودن", "ایجاد", "جدید", "مدیریت", "ویرایش", "اضافه")
+# Strict add pick (probe 004): the add link must be about a SAMPLE/portfolio,
+# not just a profile — "ویرایش اطلاعات/پروفایل" (edit profile) matched the loose
+# pick and led to /user-info/update, a personal-info form with no title field.
+# "ویرایش"/"edit" are NOT add words: editing a profile is not adding a sample.
+SAMPLE_WORDS = ("نمونه", "portfolio", "sample")
+ADD_WORDS_STRICT = ("add", "create", "new", "افزودن", "ایجاد", "جدید", "اضافه")
+MANAGE_WORDS = ("manage", "مدیریت")
 # Account holder's name — the logged-in header shows it (proven by the proposal
 # preview screenshot, run 43859946135: «محمد لالی» in the header). Used to find
 # the username/panel link and as a positive logged-in signal.
@@ -163,8 +170,12 @@ async def detect_logged_in(page, links):
     url = page.url or ""
     username_in_header = USERNAME in header_text
     logout = any(("خروج" in (l.get("text") or "")) or ("logout" in (l.get("href") or "").lower()) for l in links)
-    login_prompt = any(("ورود" in (l.get("text") or "")) or ("ثبت نام" in (l.get("text") or ""))
-                    or ("ثبت‌نام" in (l.get("text") or "")) for l in links) or ("/login" in url.lower())
+    # Login prompt counts ONLY in the header: the footer keeps "ورود"/"ثبت نام"
+    # links even when logged in (probe 004: username in header, yet a footer
+    # link still tripped the page-wide check and reported logged_in=false).
+    login_prompt = any((l.get("in_header") and
+                        (("ورود" in (l.get("text") or "")) or ("ثبت نام" in (l.get("text") or ""))
+                         or ("ثبت‌نام" in (l.get("text") or "")))) for l in links) or ("/login" in url.lower())
     return {"username_in_header": username_in_header, "logout_link": logout,
             "login_prompt": login_prompt, "url": url,
             "logged_in": bool(username_in_header or logout) and not login_prompt}
@@ -184,14 +195,33 @@ def _is_add(l):
 
 
 def _pick_add_link(links, home):
-    """A portfolio ADD link: portfolio-ish (text or href) + add word, never a
-    /show/ display page."""
+    """A portfolio ADD link: a SAMPLE/portfolio word + a strict add word,
+    never a /show/ display page. "ویرایش پروفایل" must NOT match (it is a
+    profile edit, not a sample add)."""
+    for l in links:
+        href = (l.get("href") or "").lower()
+        text = (l.get("text") or "")
+        if "/show/" in href:
+            continue
+        hay = (href + " " + text).lower()
+        sampleish = any(w.lower() in hay for w in SAMPLE_WORDS)
+        addish = any(w.lower() in hay for w in ADD_WORDS_STRICT)
+        if sampleish and addish:
+            return _abs_url(home, l["href"])
+    return None
+
+
+def _pick_manage_link(links, home):
+    """A portfolio MANAGE page (e.g. 'مدیریت نمونه کار'): the add button may
+    live there instead of the panel. Second tier after the strict add pick."""
     for l in links:
         href = (l.get("href") or "").lower()
         if "/show/" in href:
             continue
-        portfolioish = _is_profile(l) or ("portfolio" in href) or ("نمونه" in href)
-        if portfolioish and _is_add(l):
+        hay = (href + " " + (l.get("text") or "")).lower()
+        sampleish = any(w.lower() in hay for w in SAMPLE_WORDS)
+        manageish = any(w.lower() in hay for w in MANAGE_WORDS)
+        if sampleish and manageish:
             return _abs_url(home, l["href"])
     return None
 
@@ -269,7 +299,20 @@ async def find_profile_url(page, home):
             add = _pick_add_link(panel_links, home)
             if add:
                 return add, info
-            info["panel_note"] = "panel reached but no add-sample link found there"
+            # second tier: a portfolio manage page may hold the add button
+            manage_url = _pick_manage_link(panel_links, home)
+            if manage_url:
+                info["manage_url"] = manage_url
+                await page.goto(manage_url, wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(2000)
+                manage_links = await collect_links(page)
+                info["manage_links"] = manage_links
+                add = _pick_add_link(manage_links, home)
+                if add:
+                    return add, info
+                info["manage_note"] = "manage page reached but no add-sample link found there"
+            else:
+                info["panel_note"] = "panel reached but no add-sample link found there"
         except Exception as e:  # noqa: BLE001 - record and fall through
             info["panel_error"] = f"{type(e).__name__}: {e}"
         # fall through to home-page fallbacks; reload home for a fresh link list
@@ -281,9 +324,11 @@ async def find_profile_url(page, home):
         except Exception:
             pass
 
-    # (3) any profile link that is not a /show/ display page
+    # (3) any SAMPLE/portfolio link that is not a /show/ display page
+    # (a bare "پروفایل" link is a profile edit, not a sample page)
     for l in home_links:
-        if _is_profile(l) and "/show/" not in (l.get("href") or ""):
+        hay = ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
+        if any(w.lower() in hay for w in SAMPLE_WORDS) and "/show/" not in (l.get("href") or ""):
             return _abs_url(home, l["href"]), info
     # (4) first profile link (original behaviour)
     for word in PROFILE_WORDS:
@@ -368,15 +413,19 @@ async def main_async(args):
             info = {}
             if not profile_url:
                 profile_url, info = await find_profile_url(page, home)
-            result["links_found"] = (info.get("home_links") or [])[:40]
+            result["links_found"] = (info.get("home_links") or [])[:200]
             result["logged_in"] = info.get("logged_in", {})
             if info.get("panel_url"):
                 result["panel_url"] = info["panel_url"]
             if info.get("panel_links"):
-                result["panel_links"] = info["panel_links"][:40]
+                result["panel_links"] = info["panel_links"][:200]
             if info.get("menu_links"):
-                result["menu_links"] = info["menu_links"][:40]
-            for key in ("panel_note", "panel_error", "menu_error"):
+                result["menu_links"] = info["menu_links"][:200]
+            if info.get("manage_url"):
+                result["manage_url"] = info["manage_url"]
+            if info.get("manage_links"):
+                result["manage_links"] = info["manage_links"][:200]
+            for key in ("panel_note", "panel_error", "menu_error", "manage_note"):
                 if info.get(key):
                     result[key] = info[key]
             if not profile_url:
