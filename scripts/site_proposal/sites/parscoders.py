@@ -15,7 +15,7 @@ Bid flow: project page -> "ثبت پیشنهاد" button -> form modal/page ->
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,12 @@ TEXT_SELECTORS: List[str] = [
     "textarea#description",
     "textarea#proposal",
     "textarea",
+]
+
+EDITOR_SELECTORS: List[str] = [
+    "[contenteditable='true']",
+    ".ql-editor",
+    "[contenteditable]",
 ]
 
 AMOUNT_SELECTORS: List[str] = [
@@ -188,6 +194,35 @@ async def _wait_visible_textarea(page: Any, tries: int = 15) -> Optional[Any]:
                 pass
         await page.wait_for_timeout(1000)
     return None
+
+
+async def _wait_visible_description(page: Any, tries: int = 15) -> Tuple[Optional[Any], bool]:
+    """Poll for the proposal description field; returns (locator, is_editor).
+
+    Parscoders renders the description as a rich-text (contenteditable)
+    editor inside the bid modal, not a plain textarea: the hidden
+    <textarea name=message> in the DOM is only the editor's backing field,
+    so waiting for a visible textarea never succeeds (run 43829285293:
+    modal open, all textareas hid). Prefer a visible contenteditable;
+    fall back to a visible textarea.
+    """
+    for _ in range(tries):
+        loc = await _first_matching_locator(page, EDITOR_SELECTORS)
+        if loc is not None:
+            try:
+                if await loc.is_visible():
+                    return loc, True
+            except Exception:
+                pass
+        loc = await _first_matching_locator(page, TEXT_SELECTORS)
+        if loc is not None:
+            try:
+                if await loc.is_visible():
+                    return loc, False
+            except Exception:
+                pass
+        await page.wait_for_timeout(1000)
+    return None, False
 
 
 async def _form_diagnostics(page: Any) -> str:
@@ -360,8 +395,8 @@ class ParscodersAdapter:
                 return {"status": "login_required", "filled_values": {}, "error_message": "login required after expand"}
 
             # 3. Fill form fields
-            # Proposal text (must be visible - never click a hidden textarea)
-            text_loc = await _wait_visible_textarea(page, tries=15)
+            # Proposal text: rich-text editor (contenteditable) or textarea
+            text_loc, is_editor = await _wait_visible_description(page, tries=15)
             if not text_loc:
                 diag = await _form_diagnostics(page)
                 b2 = await _body(page)
@@ -371,8 +406,12 @@ class ParscodersAdapter:
 
             proposal_text = str(proposal_data.get("proposal_text", ""))
             await text_loc.click()
-            await text_loc.fill(proposal_text)
-            fv["proposal_len"] = len(await text_loc.input_value())
+            if is_editor:
+                await text_loc.press_sequentially(proposal_text, delay=10)
+                fv["proposal_len"] = len((await text_loc.inner_text() or "").strip())
+            else:
+                await text_loc.fill(proposal_text)
+                fv["proposal_len"] = len(await text_loc.input_value())
 
             # Bid amount
             amount_loc = await _first_matching_locator(page, AMOUNT_SELECTORS)
