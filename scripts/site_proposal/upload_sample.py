@@ -55,6 +55,13 @@ PANEL_WORDS = ("panel", "dashboard", "پنل", "داشبورد", "کاربری",
 TITLE_WORDS = ("عنوان", "title", "نام نمونه")
 DESC_WORDS = ("توضیح", "شرح", "description", "توضیحات")
 LINK_WORDS = ("لینک", "آدرس", "url", "link", "پیوند")
+# Skills select (probe 2026-11-16): required (≥1), select2, max 5 selections.
+# DEFAULT_SKILLS is ONLY a fallback when the lead's skills match no live
+# option — and they are the user's own true skills, never invented ones.
+DEFAULT_SKILLS = ("هوش مصنوعی", "پایتون")
+MAX_SKILLS = 5
+PUBLISH_BUTTON_ID = "app_bundle_portfolio_publish"
+DRAFT_BUTTON_ID = "app_bundle_portfolio_save_draft"
 
 
 def load_session(site):
@@ -511,6 +518,151 @@ async def inspect_portfolio_page(page):
         return {"error": f"{type(e).__name__}: {e}"}
 
 
+async def select_skills(page, wanted):
+    """Select skills in the required multi-select (select2, max 5).
+
+    wanted: list of skill names (from the lead). Each is matched against the
+    LIVE option list (case-insensitive substring, either direction) so the
+    uploader never depends on hardcoded option ids. Falls back to
+    DEFAULT_SKILLS (the user's own true skills) when nothing matched.
+    Returns (selected_values, selected_texts, used_default).
+    """
+    sel = "#app_bundle_portfolio_skills"
+    try:
+        options = await page.evaluate(
+            """() => [...document.querySelectorAll('#app_bundle_portfolio_skills option')]
+                .map(o => ({value: o.value, text: (o.text || '').trim()}))""")
+    except Exception:
+        return [], [], False
+
+    def match(name):
+        n = (name or "").strip().lower()
+        if not n:
+            return None
+        for o in options:
+            t = o["text"].lower()
+            if n in t or t in n:
+                return o
+        return None
+
+    picked = []
+    for name in (wanted or []):
+        m = match(name)
+        if m and m["value"] not in [p["value"] for p in picked]:
+            picked.append(m)
+        if len(picked) >= MAX_SKILLS:
+            break
+    used_default = False
+    if not picked:
+        used_default = True
+        for name in DEFAULT_SKILLS:
+            m = match(name)
+            if m and m["value"] not in [p["value"] for p in picked]:
+                picked.append(m)
+            if len(picked) >= 2:
+                break
+    if not picked:
+        return [], [], used_default
+    try:
+        await page.select_option(sel, [p["value"] for p in picked], timeout=10000)
+    except Exception:
+        return [], [], used_default
+    try:
+        selected = await page.evaluate(
+            """() => [...document.querySelectorAll('#app_bundle_portfolio_skills option:checked')]
+                .map(o => ({value: o.value, text: (o.text || '').trim()}))""")
+    except Exception:
+        selected = picked
+    return [s["value"] for s in selected], [s["text"] for s in selected], used_default
+
+
+async def attach_image(page, shot_file):
+    """Attach the sample screenshot through the image widget.
+
+    The widget is NOT a plain file input inside the form: #file-input is a
+    visibility:hidden input OUTSIDE any form, wired to PortfolioUploader,
+    which uploads the file by AJAX and records crop data in the hidden
+    app_bundle_portfolio[cropProps] field. Playwright set_input_files works
+    on the hidden input and fires the change event the uploader listens to.
+    Completion is observed via DOM signals (cropProps filled, drop-area
+    content/class change, publish button enabled). Returns a dict; a timeout
+    does not stop the run — the publish click handler itself blocks while an
+    upload is incomplete, and verification catches a blocked submit.
+    """
+    out = {"attached": False, "signal": None, "crop_props": ""}
+    try:
+        await page.set_input_files("#file-input", shot_file, timeout=15000)
+        out["attached"] = True
+    except Exception as e:  # noqa: BLE001 - record and continue without an image
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+    try:
+        before = await page.evaluate(
+            "() => { const da = document.querySelector('#upload-drop-area');"
+            " return da ? da.innerHTML : ''; }")
+    except Exception:
+        before = ""
+    import time as _t
+    start = _t.time()
+    while _t.time() - start < 60:
+        try:
+            state = await page.evaluate(
+                """() => {
+                  const cp = document.querySelector('#app_bundle_portfolio_cropProps');
+                  const da = document.querySelector('#upload-drop-area');
+                  const pb = document.querySelector('#app_bundle_portfolio_publish');
+                  return {crop: cp ? (cp.value || '') : '',
+                          drop_html: da ? da.innerHTML : '',
+                          drop_cls: da ? (da.getAttribute('class') || '') : '',
+                          publish_disabled: pb ? !!pb.disabled : null};
+                }""")
+        except Exception:
+            state = {}
+        out["crop_props"] = state.get("crop", "")
+        if state.get("crop"):
+            out["signal"] = "cropProps filled"
+            return out
+        if state.get("drop_html") and state["drop_html"] != before:
+            out["signal"] = "drop-area content changed"
+            return out
+        if state.get("drop_cls") and "before-drop-div" not in state["drop_cls"]:
+            out["signal"] = "drop-area class changed"
+            return out
+        if state.get("publish_disabled") is False:
+            out["signal"] = "publish button enabled"
+            return out
+        await page.wait_for_timeout(2000)
+    out["signal"] = "timeout: no completion signal in 60s"
+    return out
+
+
+async def publish_button_state(page):
+    """(disabled, exists) for the publish and draft buttons."""
+    try:
+        return await page.evaluate(
+            """() => {
+              const p = document.querySelector('#app_bundle_portfolio_publish');
+              const d = document.querySelector('#app_bundle_portfolio_save_draft');
+              return {publish_disabled: p ? !!p.disabled : null,
+                      draft_disabled: d ? !!d.disabled : null,
+                      publish_exists: !!p, draft_exists: !!d};
+            }""")
+    except Exception:
+        return {}
+
+
+async def wait_publish_enabled(page, timeout_s=60):
+    """Wait until the publish button is enabled. Returns True/False."""
+    import time as _t
+    start = _t.time()
+    while _t.time() - start < timeout_s:
+        st = await publish_button_state(page)
+        if st.get("publish_disabled") is False:
+            return True
+        await page.wait_for_timeout(2000)
+    return False
+
+
 async def fill_field(page, field, value):
     sel = None
     if field.get("id"):
@@ -623,6 +775,34 @@ async def main_async(args):
                 result["note"] = "inspection only: page structure recorded, nothing submitted"
                 return save()
             if args.mode == "probe":
+                # Dry-fill (probe only, no submit, no file attach): fill the
+                # required fields and report whether the publish button becomes
+                # enabled — that answers "what enables the buttons" without
+                # submitting anything. The page is discarded when the browser
+                # closes, so no sample is created.
+                dry = {"publish_before": await publish_button_state(page)}
+                target = None
+                for form in forms:
+                    if pick_field(form["fields"], TITLE_WORDS):
+                        target = form
+                        break
+                if target:
+                    fields = target["fields"]
+                    tf = pick_field(fields, TITLE_WORDS)
+                    df = pick_field(fields, DESC_WORDS)
+                    dry["title_filled"] = await fill_field(page, tf, args.title) if tf else False
+                    dry["description_filled"] = await fill_field(page, df, args.description) if df else False
+                    vals, texts, used_default = await select_skills(
+                        page, [s.strip() for s in (args.skills or "").split(",") if s.strip()])
+                    dry["skills_selected"] = vals
+                    dry["skills_texts"] = texts
+                    dry["skills_used_default"] = used_default
+                    await page.wait_for_timeout(3000)
+                    dry["publish_after"] = await publish_button_state(page)
+                    dry["publish_enabled_after_fill"] = await wait_publish_enabled(page, timeout_s=15)
+                else:
+                    dry["error"] = "no portfolio form with a title field found"
+                result["dry_fill"] = dry
                 result["ok"] = True
                 result["note"] = "probe only: form structure recorded, nothing submitted"
                 return save()
@@ -648,16 +828,10 @@ async def main_async(args):
                 return save()
             fields = target["fields"]
             filled = {}
-            tf = pick_field(fields, TITLE_WORDS)
-            df = pick_field(fields, DESC_WORDS)
-            lf = pick_field(fields, LINK_WORDS)
-            if tf:
-                filled["title"] = await fill_field(page, tf, args.title)
-            if df:
-                filled["description"] = await fill_field(page, df, args.description)
-            if lf:
-                filled["link"] = await fill_field(page, lf, args.sample_url)
-            result["filled"] = filled
+            # (1) Attach the image FIRST through the widget (#file-input +
+            # PortfolioUploader, AJAX). The upload runs while we fill the
+            # fields. ParsCoders' form has no link field — the sample IS the
+            # uploaded image (thumbnail) + title/description/skills.
             if args.screenshot and os.path.isfile(args.screenshot):
                 shot_file = args.screenshot
             elif os.path.isfile(sample_png):
@@ -665,31 +839,64 @@ async def main_async(args):
             else:
                 shot_file = None
             if shot_file:
-                for f in fields:
-                    if (f.get("type") or "") == "file":
-                        try:
-                            sel = ("#" + f["id"]) if f.get("id") else (f"[name='{f['name']}']" if f.get("name") else None)
-                            if sel:
-                                await page.set_input_files(sel, shot_file)
-                                filled["image"] = True
-                        except Exception:
-                            filled["image"] = False
-            if not any(filled.values()):
+                filled["image"] = await attach_image(page, shot_file)
+            else:
+                filled["image"] = {"attached": False, "error": "no screenshot file available"}
+            # (2) Fill title + description.
+            tf = pick_field(fields, TITLE_WORDS)
+            df = pick_field(fields, DESC_WORDS)
+            if tf:
+                filled["title"] = await fill_field(page, tf, args.title)
+            if df:
+                filled["description"] = await fill_field(page, df, args.description)
+            # (3) Skills — required (≥1). Fail rather than submit without one.
+            vals, texts, used_default = await select_skills(
+                page, [s.strip() for s in (args.skills or "").split(",") if s.strip()])
+            filled["skills"] = {"values": vals, "texts": texts, "used_default": used_default}
+            if not vals:
+                result["filled"] = filled
+                result["error"] = "could not select any skill (required field); refusing to submit"
+                return save()
+            result["filled"] = filled
+            if not any([filled.get("title"), filled.get("description"), vals]):
                 result["error"] = "could not fill any portfolio field"
                 return save()
-            submitted = False
-            for sel in ("button[type=submit]", "input[type=submit]", "button:has-text('ثبت')", "button:has-text('ذخیره')"):
+            # (4) Wait for the publish button to enable (it starts disabled).
+            # Never force a disabled button — that would bypass the site's
+            # own validation.
+            if not await wait_publish_enabled(page, timeout_s=60):
+                result["publish_state"] = await publish_button_state(page)
+                result["error"] = "publish button stayed disabled after filling fields + image"
+                return save()
+            # (5) Submit EXPLICITLY via the publish button (id, then its exact
+            # text). NEVER a generic button[type=submit] — the first submit
+            # button on this form is the DRAFT button (save_draft), and
+            # ':has-text(ذخیره)' also matches the draft.
+            clicked = None
+            for sel in (f"#{PUBLISH_BUTTON_ID}", "button:has-text('ارسال نمونه‌کار')"):
                 try:
-                    await page.click(sel, timeout=5000)
-                    submitted = True
+                    await page.click(sel, timeout=10000)
+                    clicked = sel
                     break
                 except Exception:
                     continue
-            result["submitted"] = submitted
-            if not submitted:
-                result["error"] = "could not click a submit button"
+            result["submit_clicked"] = clicked
+            if not clicked:
+                result["error"] = "could not click the publish button"
                 return save()
             await page.wait_for_timeout(4000)
+            # Did the site's own handler block the submit (upload incomplete)?
+            try:
+                blocked = await page.evaluate(
+                    "() => { const s = document.querySelector('.swal2-container, .swal-modal');"
+                    " return !!s && s.offsetParent !== null; }")
+            except Exception:
+                blocked = False
+            result["submit_blocked_by_upload_warning"] = bool(blocked)
+            if blocked:
+                result["error"] = "publish click was blocked by the site (upload still in progress)"
+                return save()
+            result["submitted"] = True
             await page.screenshot(path=os.path.join(out_dir, "after_submit.png"))
             await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(2000)
@@ -714,6 +921,8 @@ def main():
     ap.add_argument("--sample-url", required=True)
     ap.add_argument("--title", required=True)
     ap.add_argument("--description", default="")
+    ap.add_argument("--skills", default="",
+                    help="Comma-separated skill names from the lead (matched against the live option list).")
     ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload"])
     ap.add_argument("--job-id", required=True)
     ap.add_argument("--results-dir", required=True)
