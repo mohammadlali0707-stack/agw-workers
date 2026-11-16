@@ -458,7 +458,7 @@ async def inspect_portfolio_page(page):
         out.skills = {tag: 'select', name: sel.getAttribute('name'),
           multiple: sel.hasAttribute('multiple'), required: sel.hasAttribute('required'),
           options: [...sel.options].map(o => ({value: o.value,
-            text: o.text.trim().slice(0, 60), selected: o.selected})).slice(0, 80),
+            text: o.text.trim().slice(0, 60), selected: o.selected})),
           option_count: sel.options.length, visible: sel.offsetParent !== null,
           cls: (sel.getAttribute('class') || '').slice(0, 120)};
       }
@@ -466,6 +466,32 @@ async def inspect_portfolio_page(page):
         '.select2-container, [class*=select2], [class*=chosen], [class*=selectize]');
       out.cropper_present = !!document.querySelector(
         '[class*=cropper], [class*=crop], [data-crop]');
+      // Image widget: the drop area + the cropProps field's surroundings + the
+      // scripts that wire the upload (so the attach mechanism can be read
+      // without actually uploading a file).
+      const drop = document.querySelector('#upload-drop-area');
+      out.upload_widget = drop ? {html: drop.outerHTML.slice(0, 5000),
+        parent_html: (drop.parentElement ? drop.parentElement.outerHTML : '').slice(0, 5000)} : null;
+      const cp = document.querySelector('#app_bundle_portfolio_cropProps');
+      out.crop_props = cp ? {value: cp.value || '',
+        parent_html: (cp.parentElement ? cp.parentElement.outerHTML : '').slice(0, 2000),
+        form: !!(cp.form), form_name: cp.form ? (cp.form.getAttribute('name') || '') : ''} : null;
+      const fi = document.querySelector('#file-input');
+      out.file_input_detail = fi ? {in_form: !!(fi.form),
+        form_name: fi.form ? (fi.form.getAttribute('name') || '') : '',
+        onchange: fi.getAttribute('onchange') || '',
+        data_attrs: [...fi.attributes].map(a => a.name + '=' + a.value).join(' ').slice(0, 500)} : null;
+      out.script_srcs = [...document.querySelectorAll('script[src]')].map(s => s.getAttribute('src')).slice(0, 60);
+      out.inline_upload_js = [];
+      document.querySelectorAll('script:not([src])').forEach(s => {
+        const t = s.textContent || '';
+        ['cropProps', 'file-input', 'upload-drop-area'].forEach(kw => {
+          const i = t.indexOf(kw);
+          if (i >= 0 && out.inline_upload_js.length < 10) {
+            out.inline_upload_js.push({kw, snippet: t.slice(Math.max(0, i - 200), i + 600)});
+          }
+        });
+      });
       return out;
     }
     """
