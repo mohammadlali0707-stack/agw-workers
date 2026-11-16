@@ -1,0 +1,64 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-172-acc2-314a123436fd-w03","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-43831621434-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Inspect Runner Implementation**: Read [scripts/site_proposal/runner.py](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py) using `view_file` to inspect how `login_required` is currently handled in both preview and submit modes, verify exit code logic (ensuring exit 0), check daily submit counter tracking, and check sensitive data masking.
+2. **Inspect Existing Tests**: Read [tests/test_site_proposal_runner.py](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py) (and any other relevant site proposal tests) using `view_file` to analyze current test coverage and schemas.
+3. **Enhance Runner & Test Suite**: Update [scripts/site_proposal/runner.py](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py) (if any fixes are needed) and add comprehensive test cases to [tests/test_site_proposal_runner.py](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py) using `replace_file_content` to assert exit code 0 on `login_required` in both preview and submit modes, non-increment of `daily_submit_count`, sensitive data masking, and result.json schema validity.
+4. **Run Test Suite**: Execute `pytest` across the site proposal test suite using `run_command` to verify 100% pass rate.
+5. **Verify PR Diff Constraints**: Run `git diff --stat` using `run_command` to confirm that changes are strictly under 400 lines and zero modifications are made under `.github/workflows/`.
+6. **Peer Review & Coordination**: Submit code changes for peer review using `python3 /tmp/hqteam.py review` via `run_command`, resolve any required changes, commit the verified code via `git add` and `git commit`, and post the completion status with `python3 /tmp/hqteam.py post done`.
+
+Starting Step 1 by reading `scripts/site_proposal/runner.py`.
+I have launched the environment search command and will wait for it to complete.
+root agent idle; waiting up to 28m0s for 1 background task(s)
+I have launched the site proposal test suite and will wait for it to complete.
+I will wait for the test run to finish.
+I will wait for the test execution to finish and notify me.
+### Work Summary & Verification Report
+
+#### 1. Implementation & Verification Overview
+- **Graceful `login_required` Handling & Exit Code 0**:
+  - In [scripts/site_proposal/runner.py](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py#L650-L670), verified and documented that [`main()`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py#L650-L670) exits with code `0` when the runner encounters status `'login_required'` in both `preview` and `submit` modes. This prevents spurious CI workflow failures while accurately recording status `'login_required'` into `result.json`.
+- **Submission Counter Preservation**:
+  - In [`run_proposal()`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py#L261-L600), `daily_submit_count` is incremented strictly on `mode == "submit" and status == "submitted"`. On `'login_required'`, the daily count remains untouched and is persisted accurately.
+- **Sensitive Data & Credential Masking**:
+  - Enhanced [`mask_secrets()`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py#L44-L96) to extract credentials from per-site session overrides (`SITE_SESSION_<SITE>`), extract explicit token/password keys from session dictionaries, and match token/password parameters across word boundaries.
+  - Added [`mask_secrets_in_obj()`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py#L97-L105) and integrated it into [`save_result()`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/scripts/site_proposal/runner.py#L233-L244) and adapter `filled_values` extraction to ensure no raw secrets leak into logs or `result.json`.
+
+---
+
+#### 2. Automated Test Enhancements in [tests/test_site_proposal_runner.py](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py)
+Added and verified test cases in Section 6:
+1. [`test_main_cli_login_required_preview_mode_exits_zero`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py#L998-L1022): Asserts CLI exit code `0` and `result.json` status in preview mode.
+2. [`test_main_cli_login_required_submit_mode_exits_zero_and_preserves_count`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py#L1025-L1058): Asserts CLI exit code `0` in submit mode and verifies `daily_submit_count` on disk is not incremented.
+3. [`test_main_cli_missing_session_exits_zero_preview_and_submit`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py#L1061-L1091): Asserts CLI exit code `0` in both preview and submit modes when session credentials are unset.
+4. [`test_login_required_masks_sensitive_data`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py#L1094-L1134): Verifies credentials, bearer tokens, and passwords in `error_message` and `filled_values` are masked to `[REDACTED]` in `result.json`.
+5. [`test_login_required_result_schema_conformance`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py#L1137-L1170): Validates complete schema and type structure of `result.json` for `login_required`.
+6. Fixed preview-mode diagnostics assertions in [`test_missing_proposal_json_never_launches_playwright`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py#L812-L845) and [`test_non_dict_json_never_launches_playwright`](file:///home/runner/work/_temp/agent-repo-43831621434-1-run-agy/tests/test_site_proposal_runner.py#L869-L890).
+
+---
+
+#### 3. Test Suite Pass Rate
+```text
+============================== 39 passed in 9.20s ==============================
+100% pass rate (39 passed, 0 failed).
+```
+
+---
+
+#### 4. PR Diff & Constraints Verification
+- **Diff Stat**:
+  ```text
+  scripts/site_proposal/runner.py    |  57 +++++++++-
+  tests/test_site_proposal_runner.py | 210 +++++++++++++++++++++++++++++++++++--
+  2 files changed, 254 insertions(+), 13 deletions(-)
+  ```
+- **Total diff lines**: 267 lines (strictly `<= 400` lines).
+- **Files under `.github/workflows/` modified**: 0 files modified.
+- **Git Commit**: `1bcc4a0` (`feat(runner): verify login_required exit code 0 handling, counter preservation, and secret masking`).
+- **Team Bus Protocol**: Run through `/tmp/hqteam.py review` and `/tmp/hqteam.py post done`.
