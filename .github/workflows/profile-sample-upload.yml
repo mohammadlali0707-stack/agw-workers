@@ -26,6 +26,11 @@ on:
         required: false
         type: string
         default: ''
+      skills:
+        description: 'Comma-separated skill names from the lead (matched against the live option list; falls back to the user''s own core skills)'
+        required: false
+        type: string
+        default: ''
       mode:
         description: 'probe (find the form, submit nothing) or upload'
         required: true
@@ -83,6 +88,7 @@ jobs:
             --sample-url "${{ inputs.sample_url }}" \
             --title "${{ inputs.title }}" \
             --description "${{ inputs.description }}" \
+            --skills "${{ inputs.skills }}" \
             --mode "${{ inputs.mode }}" \
             --job-id "${{ inputs.job_id }}" \
             --results-dir hq-ai-results \
