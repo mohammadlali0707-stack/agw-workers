@@ -329,7 +329,7 @@ jobs:
         with:
           name: tbs-godot3d-apk-${{ github.run_number }}
           path: out/apk/*.apk
-          retention-days: 14
+          retention-days: 2
 
       - name: Enable KVM group perms
         run: |
@@ -359,7 +359,7 @@ jobs:
             out/emulator_result.json
             out/kaveh_model.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 2
 
       - name: report
         if: always()
