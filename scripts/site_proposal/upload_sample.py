@@ -226,6 +226,32 @@ def _pick_manage_link(links, home):
     return None
 
 
+def _pick_portfolio_list_link(links, home):
+    """The portfolio LIST page (e.g. 'نمونه کارهای من' -> /resume/portfolio/):
+    the add button lives there, not on the panel. Its link text is just 'my
+    samples' — no add/manage word — so it needs its own pick: a /portfolio
+    href that is not a /show/ display page and not the public /skill-portfolio
+    browse page."""
+    for l in links:
+        href = (l.get("href") or "").lower()
+        if "/portfolio" in href and "/show/" not in href and "skill-portfolio" not in href:
+            return _abs_url(home, l["href"])
+    return None
+
+
+async def collect_buttons(page):
+    """Visible button/link texts that could open an add-sample form (a <button>
+    or a JS link, not an <a href>). The add control may be a button, not a link."""
+    try:
+        return await page.evaluate(
+            """() => [...document.querySelectorAll('button, a[href=\"#\"], [role=\"button\"]')]
+                .filter(e => e.offsetParent !== null)
+                .map(e => (e.innerText || '').trim().slice(0, 80))
+                .filter(t => t).slice(0, 60)""")
+    except Exception:
+        return []
+
+
 def _pick_panel_link(links, home):
     """The logged-in user panel/dashboard URL: the username link (header first),
     or a link whose href/text mentions panel/dashboard. Returns (url, is_dropdown):
@@ -299,7 +325,23 @@ async def find_profile_url(page, home):
             add = _pick_add_link(panel_links, home)
             if add:
                 return add, info
-            # second tier: a portfolio manage page may hold the add button
+            # second tier: the portfolio LIST page holds the add control
+            list_url = _pick_portfolio_list_link(panel_links, home)
+            if list_url:
+                info["portfolio_list_url"] = list_url
+                await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(2000)
+                list_links = await collect_links(page)
+                info["list_links"] = list_links
+                add = _pick_add_link(list_links, home)
+                if add:
+                    return add, info
+                # The add control may be a button/modal on the list page, not
+                # a link. Report the list page itself so the probe dumps its
+                # forms and buttons — that is where the add mechanism lives.
+                info["list_note"] = "portfolio list page reached; no add link there (add may be a button/modal)"
+                return list_url, info
+            # third tier: a portfolio manage page may hold the add button
             manage_url = _pick_manage_link(panel_links, home)
             if manage_url:
                 info["manage_url"] = manage_url
@@ -324,11 +366,14 @@ async def find_profile_url(page, home):
         except Exception:
             pass
 
-    # (3) any SAMPLE/portfolio link that is not a /show/ display page
-    # (a bare "پروفایل" link is a profile edit, not a sample page)
+    # (3) any SAMPLE/portfolio link that is not a /show/ display page and not
+    # the public /skill-portfolio browse page (a bare "پروفایل" link is a
+    # profile edit, not a sample page)
     for l in home_links:
-        hay = ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
-        if any(w.lower() in hay for w in SAMPLE_WORDS) and "/show/" not in (l.get("href") or ""):
+        href = (l.get("href") or "").lower()
+        hay = (href + " " + (l.get("text") or "")).lower()
+        if (any(w.lower() in hay for w in SAMPLE_WORDS) and "/show/" not in href
+                and "skill-portfolio" not in href):
             return _abs_url(home, l["href"]), info
     # (4) first profile link (original behaviour)
     for word in PROFILE_WORDS:
@@ -425,7 +470,11 @@ async def main_async(args):
                 result["manage_url"] = info["manage_url"]
             if info.get("manage_links"):
                 result["manage_links"] = info["manage_links"][:200]
-            for key in ("panel_note", "panel_error", "menu_error", "manage_note"):
+            if info.get("portfolio_list_url"):
+                result["portfolio_list_url"] = info["portfolio_list_url"]
+            if info.get("list_links"):
+                result["list_links"] = info["list_links"][:200]
+            for key in ("panel_note", "panel_error", "menu_error", "manage_note", "list_note"):
                 if info.get(key):
                     result[key] = info[key]
             if not profile_url:
@@ -441,6 +490,7 @@ async def main_async(args):
             await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(2000)
             await page.screenshot(path=os.path.join(out_dir, "profile.png"))
+            result["buttons"] = await collect_buttons(page)
             forms = await dump_forms(page)
             result["forms"] = forms
             with open(os.path.join(out_dir, "forms.json"), "w", encoding="utf-8") as f:
