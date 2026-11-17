@@ -1210,10 +1210,13 @@ async def service_create(page, home, out_dir, args):
     # form, or the tag input ignores Enter and the dropdown picks race
     step1 = {}
     step1["skills_ready"] = await wait_skills_ready(page)
+    # the category menu offers only design services; for a bot the right
+    # category is "طراحی ربات" (bot design) — there is no programming
+    # category in this menu
     step1["category"] = await pick_dropdown_option(
-        page, "دسته‌بندی خدمت", ("برنامه نویسی", "پایتون", "برنامه‌نویسی"))
+        page, "دسته‌بندی خدمت", ("طراحی ربات",))
     step1["subcategory"] = await pick_dropdown_option(
-        page, "زیردسته", ("پایتون", "ربات", "برنامه‌نویسی پایتون", "برنامه نویسی"))
+        page, "زیردسته", ("ربات تلگرام", "تلگرام", "ربات", "اتوماسیون", "پایتون"))
     skills_added = []
     for s in [x.strip() for x in (args.skills or "").split(",") if x.strip()]:
         if await add_skill_tag(page, s):
@@ -1258,6 +1261,8 @@ async def service_create(page, home, out_dir, args):
         return res
     if not step1.get("subcategory"):
         res["error"] = "step 1: could not pick a subcategory (verified pick failed)"
+        res["subcategory_dropdown_dump"] = await dump_dropdown_options(page, "زیردسته")
+        await page.screenshot(path=os.path.join(out_dir, "service_subcategory_debug.png"))
         return res
     if len(skills_added) < 3:
         res["error"] = (f"step 1: only {len(skills_added)} skill(s) added "
