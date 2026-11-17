@@ -944,23 +944,23 @@ async def click_dropdown_option(page, wants):
         return None
 
 
-async def read_dropdown_value(page, button_text):
-    """Read the text of the dropdown control that contains button_text.
-    Returns the SMALLEST visible element containing the label (the control
-    itself, whose text becomes label + chosen value after a pick), or ''."""
+async def read_section_text(page, anchor_text):
+    """Read the text of the smallest visible container holding anchor_text
+    (a section heading that stays constant, e.g. 'یک دسته‌بندی انتخاب
+    کنید'). The section's text gains the chosen value after a pick."""
     try:
         return await page.evaluate(
-            """(bt) => {
+            """(anchor) => {
                 let best = null, bestLen = 1e9;
-                for (const e of document.querySelectorAll('div, button, span')) {
+                for (const e of document.querySelectorAll('div')) {
                     if (e.offsetParent === null) continue;
                     const t = (e.innerText || '').trim();
-                    if (t.includes(bt) && t.length < bestLen && t.length < 120) {
+                    if (t.includes(anchor) && t.length < bestLen && t.length < 300) {
                         best = e; bestLen = t.length;
                     }
                 }
                 return best ? best.innerText.trim() : '';
-            }""", button_text)
+            }""", anchor_text)
     except Exception:
         return ""
 
@@ -1045,14 +1045,16 @@ async def dump_dropdown_options(page, button_text):
         return []
 
 
-async def pick_dropdown_option(page, button_text, wants):
+async def pick_dropdown_option(page, button_text, wants, anchor_text=None):
     """Open a dropdown by clicking its button, then pick an option by text.
-    VERIFIES the pick: the button must show the chosen value afterwards
-    (a click on a look-alike element elsewhere on the page is a false
-    positive and must be reported, not trusted). Returns the picked text
-    only when verified, else None."""
+    VERIFIES the pick via the section's anchor heading (which stays
+    constant): the section text must gain the picked value afterwards.
+    The old check searched for the button label, but the label is REPLACED
+    by the chosen value, so that check always failed. Returns the picked
+    text only when verified, else None."""
     try:
-        before = await read_dropdown_value(page, button_text)
+        anchor = anchor_text or button_text
+        before = await read_section_text(page, anchor)
         if not await click_button_by_text(page, button_text):
             try:
                 loc = page.locator(f":text('{button_text}')")
@@ -1067,10 +1069,9 @@ async def pick_dropdown_option(page, button_text, wants):
         if not picked:
             return None
         await page.wait_for_timeout(1000)
-        after = await read_dropdown_value(page, button_text)
-        # the control's text must now contain the picked value (beyond the
-        # label/placeholder it had before); if it only still shows the
-        # placeholder, the pick did not stick
+        after = await read_section_text(page, anchor)
+        # the section must now show the picked value (and differ from
+        # before); if the menu is still open and nothing changed, it failed
         if picked in after and after != before:
             return picked
         return None
@@ -1214,9 +1215,11 @@ async def service_create(page, home, out_dir, args):
     # category is "طراحی ربات" (bot design) — there is no programming
     # category in this menu
     step1["category"] = await pick_dropdown_option(
-        page, "دسته‌بندی خدمت", ("طراحی ربات",))
+        page, "دسته‌بندی خدمت", ("طراحی ربات",),
+        anchor_text="یک دسته‌بندی انتخاب کنید")
     step1["subcategory"] = await pick_dropdown_option(
-        page, "زیردسته", ("ربات تلگرام", "تلگرام", "ربات", "اتوماسیون", "پایتون"))
+        page, "زیردسته", ("ربات تلگرام", "تلگرام", "ربات", "اتوماسیون", "پایتون"),
+        anchor_text="یک زیر دسته انتخاب کنید")
     skills_added = []
     for s in [x.strip() for x in (args.skills or "").split(",") if x.strip()]:
         if await add_skill_tag(page, s):
