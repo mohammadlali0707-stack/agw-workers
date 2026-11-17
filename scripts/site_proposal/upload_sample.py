@@ -1161,6 +1161,51 @@ async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug
         return None
 
 
+async def click_suggested_skill(page, skill):
+    """Click a suggested-skill chip whose text exactly equals the skill.
+    The 'مهارت‌های پیشنهادی' (suggested skills) chips are the reliable way
+    to add a skill — typing into the tag input only works when the typed
+    text matches a suggestion, and the chip click is direct. Returns True
+    when a tag chip with the skill text appears afterwards."""
+    try:
+        clicked = await page.evaluate(
+            """(skill) => {
+                const inp = document.querySelector('input[name="tag"]');
+                const inpRect = inp ? inp.getBoundingClientRect() : null;
+                const cands = [...document.querySelectorAll('div, span, button, li')]
+                    .filter(e => e.offsetParent !== null &&
+                        (e.innerText || '').trim() === skill);
+                if (!cands.length) return false;
+                // prefer the chip nearest the tag input (the suggested
+                // skills row sits just below it)
+                let best = null, bestDist = 1e9;
+                for (const c of cands) {
+                    const r = c.getBoundingClientRect();
+                    const d = inpRect ? Math.abs(r.top - inpRect.bottom) : 0;
+                    if (d < bestDist) { best = c; bestDist = d; }
+                }
+                if (best) { best.click(); return true; }
+                return false;
+            }""", skill)
+        if not clicked:
+            return False
+        await page.wait_for_timeout(1000)
+        # verify a tag chip with this skill now exists
+        try:
+            present = await page.evaluate(
+                """(skill) => {
+                    const els = [...document.querySelectorAll('div, span, button, li')]
+                        .filter(e => e.offsetParent !== null &&
+                            (e.innerText || '').trim() === skill);
+                    return els.length > 0;
+                }""", skill)
+            return bool(present)
+        except Exception:
+            return True
+    except Exception:
+        return False
+
+
 async def add_skill_tag(page, skill):
     """Add one skill tag: type it into the tag input, wait for the suggestion
     dropdown, click the matching suggestion, and VERIFY a tag chip appeared.
@@ -1308,7 +1353,11 @@ async def service_create(page, home, out_dir, args):
     step1["subcategory_debug"] = sub_dbg
     skills_added = []
     for s in [x.strip() for x in (args.skills or "").split(",") if x.strip()]:
-        if await add_skill_tag(page, s):
+        # prefer clicking the suggested-skill chip (direct, reliable);
+        # fall back to typing it into the tag input
+        if await click_suggested_skill(page, s):
+            skills_added.append(s)
+        elif await add_skill_tag(page, s):
             skills_added.append(s)
     step1["skills_added"] = skills_added
     # title LAST (the suggestions loading re-renders the form and can clear
