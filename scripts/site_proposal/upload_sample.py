@@ -1122,6 +1122,25 @@ async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug
         menu_open = await page.evaluate(
             "() => !!document.querySelector('.dropdown-menu.show')")
         dbg["menu_open"] = menu_open
+        # snapshot the ACTUAL menu state right now: which .show menus
+        # exist, what they contain, and how many dropdown items are visible
+        try:
+            dbg["menu_state"] = await page.evaluate(
+                """() => {
+                    const menus = [...document.querySelectorAll('.dropdown-menu.show')];
+                    const items = [...document.querySelectorAll('.dropdown-item')];
+                    const vis = items.filter(e => e.offsetParent !== null);
+                    return {
+                        show_menus: menus.length,
+                        show_menus_text: menus.map(m => (m.innerText || '').trim().slice(0, 200)),
+                        show_menus_cls: menus.map(m => (m.className || '').toString().slice(0, 120)),
+                        dropdown_items_total: items.length,
+                        dropdown_items_visible: vis.length,
+                        visible_item_texts: vis.slice(0, 15).map(e => (e.innerText || '').trim()),
+                    };
+                }""")
+        except Exception as e:
+            dbg["menu_state_error"] = f"{type(e).__name__}: {e}"
         # the menu container appears before its items load (they come from
         # an API and can take many seconds) — poll until the wanted option
         # actually appears, then click it
