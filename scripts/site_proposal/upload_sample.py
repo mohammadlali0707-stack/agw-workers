@@ -739,6 +739,27 @@ async def dump_select_options(page):
         return []
 
 
+async def dump_all_inputs(page):
+    """Every input/textarea/select/contenteditable on the page, whether or not
+    it sits inside a <form>. Karlancer's panel is a React SPA: the service
+    form may be div-based, so dump_forms() (form-only) can miss it."""
+    try:
+        return await page.evaluate(
+            """() => [...document.querySelectorAll('input, textarea, select, [contenteditable="true"]')].map(e => ({
+                tag: e.tagName.toLowerCase(),
+                type: e.getAttribute('type') || '',
+                name: e.getAttribute('name') || '',
+                id: e.id || '',
+                placeholder: e.getAttribute('placeholder') || '',
+                visible: !!(e.offsetParent !== null),
+                label: (() => { const l = e.closest('label'); if (l) return l.innerText.trim().slice(0, 80);
+                    const id = e.id; if (id) { const lab = document.querySelector(`label[for='${id}']`);
+                    if (lab) return lab.innerText.trim().slice(0, 80); } return ''; })()
+            }))""")
+    except Exception:
+        return []
+
+
 async def service_probe(page, home, out_dir):
     """Karlancer service flow probe. Submits NOTHING.
 
@@ -788,6 +809,40 @@ async def service_probe(page, home, out_dir):
         res["create_buttons"] = await collect_buttons(page)
         res["create_forms"] = await dump_forms(page)
         res["create_selects"] = await dump_select_options(page)
+        res["create_all_inputs"] = await dump_all_inputs(page)
+        try:
+            res["create_body_text"] = (await page.inner_text("body"))[:4000]
+        except Exception:
+            pass
+        # The create page first asks for the service TYPE (professional
+        # services vs. online teaching). Click "خدمات حرفه‌ای" to reach the
+        # actual form, then dump everything again.
+        clicked_type = None
+        for word in ("خدمات حرفه‌ای", "خدمات حرفه اي"):
+            try:
+                loc = page.locator(f"text={word}")
+                if await loc.count() > 0:
+                    await loc.first.click(timeout=5000)
+                    clicked_type = word
+                    break
+            except Exception as e:  # noqa: BLE001 - record and continue
+                res.setdefault("type_click_errors", []).append(f"{word}: {type(e).__name__}: {e}")
+        res["type_clicked"] = clicked_type
+        if clicked_type:
+            await page.wait_for_timeout(3000)
+            await page.screenshot(path=os.path.join(out_dir, "service_create_step2.png"))
+            res["step2_url"] = page.url
+            try:
+                res["step2_headings"] = await page.evaluate(
+                    "() => [...document.querySelectorAll('h1,h2,h3')].map(h => h.innerText.trim()).filter(t => t).slice(0, 20)")
+                res["step2_body_text"] = (await page.inner_text("body"))[:5000]
+            except Exception:
+                pass
+            res["step2_links"] = (await collect_links(page))[:200]
+            res["step2_buttons"] = await collect_buttons(page)
+            res["step2_forms"] = await dump_forms(page)
+            res["step2_selects"] = await dump_select_options(page)
+            res["step2_all_inputs"] = await dump_all_inputs(page)
     else:
         # Maybe a <button> (not a link) opens the create form/modal.
         clicked = None
