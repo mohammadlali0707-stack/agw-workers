@@ -911,28 +911,32 @@ async def click_button_by_text(page, text):
 
 
 async def click_dropdown_option(page, wants):
-    """Click the first visible option-like element whose text contains one of
-    the wanted substrings, in order. SCOPED to real dropdown options only
-    (li / [role=option] / [role=menuitem]) — the page's "top skills" chips
-    and other buttons contain the same words and must NOT be clicked.
-    Prefers the SHORTEST matching text (the real option) and returns the
-    matched text, or None."""
+    """Click the first visible option whose text contains one of the wanted
+    substrings, in order. The real options are SPAN.dropdown-item inside
+    DIV.dropdown-menu.show (a Bootstrap-style menu) — NOT li/role=option,
+    which is why earlier picks found nothing. Prefers the SHORTEST matching
+    text (the real option) and returns the matched text, or None."""
     try:
         return await page.evaluate(
             """(wants) => {
-                const sels = ['li', '[role="option"]', '[role="menuitem"]'];
+                // 1) prefer the open menu's own items (precise, no footer chips)
+                const menu = document.querySelector('.dropdown-menu.show');
+                const scopes = menu ? [menu, document] : [document];
                 for (const w of wants) {
-                    let best = null, bestLen = 1e9;
-                    for (const sel of sels) {
-                        for (const e of document.querySelectorAll(sel)) {
-                            if (e.offsetParent === null) continue;
-                            const t = (e.innerText || '').trim();
-                            if (t && t.includes(w) && t.length < 80 && t.length < bestLen) {
-                                best = e; bestLen = t.length;
+                    for (const scope of scopes) {
+                        let best = null, bestLen = 1e9;
+                        const sels = ['.dropdown-item', 'li', '[role="option"]', '[role="menuitem"]'];
+                        for (const sel of sels) {
+                            for (const e of scope.querySelectorAll(sel)) {
+                                if (e.offsetParent === null) continue;
+                                const t = (e.innerText || '').trim();
+                                if (t && t.includes(w) && t.length < 80 && t.length < bestLen) {
+                                    best = e; bestLen = t.length;
+                                }
                             }
                         }
+                        if (best) { best.click(); return best.innerText.trim(); }
                     }
-                    if (best) { best.click(); return best.innerText.trim(); }
                 }
                 return null;
             }""", list(wants))
@@ -1020,50 +1024,23 @@ async def price_input_visible(page):
 
 
 async def dump_dropdown_options(page, button_text):
-    """Debug: open a dropdown and find every visible element containing the
-    wanted option words, with tag/class/parent, so the real option element
-    can be identified. Returns a list of dicts."""
+    """Debug: open a dropdown and list EVERY option in its open menu
+    (span.dropdown-item inside div.dropdown-menu.show), so the real
+    category list is known. Returns a list of option texts."""
     try:
-        # the menu may already be open (from the failed pick) or closed;
-        # click once, and if no option appears, click again to re-open it
         for _ in range(2):
             await click_button_by_text(page, button_text)
             await page.wait_for_timeout(1500)
-            found = await page.evaluate(
+            items = await page.evaluate(
                 """() => {
-                    const wants = ['برنامه نویسی', 'پایتون', 'طراحی'];
-                    for (const e of document.querySelectorAll('*')) {
-                        if (e.offsetParent === null) continue;
-                        const t = (e.innerText || '').trim();
-                        if (t && t.length <= 80 && wants.some(w => t.includes(w))) return true;
-                    }
-                    return false;
+                    const menu = document.querySelector('.dropdown-menu.show');
+                    if (!menu) return null;
+                    return [...menu.querySelectorAll('.dropdown-item, [role="option"], li')]
+                        .map(e => (e.innerText || '').trim()).filter(Boolean);
                 }""")
-            if found:
-                break
-        return await page.evaluate(
-            """() => {
-                const out = [];
-                const seen = new Set();
-                const wants = ['برنامه نویسی', 'پایتون', 'طراحی'];
-                for (const e of document.querySelectorAll('*')) {
-                    if (e.offsetParent === null) continue;
-                    const t = (e.innerText || '').trim();
-                    if (!t || t.length > 80) continue;
-                    if (!wants.some(w => t.includes(w))) continue;
-                    const key = e.tagName + '|' + (e.className || '').toString().slice(0, 60) + '|' + t;
-                    if (seen.has(key)) continue;
-                    seen.add(key);
-                    const p = e.parentElement;
-                    out.push({tag: e.tagName,
-                              cls: (e.className || '').toString().slice(0, 100),
-                              text: t,
-                              parent_tag: p ? p.tagName : '',
-                              parent_cls: p ? (p.className || '').toString().slice(0, 100) : ''});
-                    if (out.length >= 40) break;
-                }
-                return out;
-            }""")
+            if items:
+                return items
+        return []
     except Exception:
         return []
 
