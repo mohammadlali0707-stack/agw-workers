@@ -1688,10 +1688,12 @@ async def service_create(page, home, out_dir, args):
     await page.wait_for_timeout(5000)
     await page.screenshot(path=os.path.join(out_dir, "service_after_submit.png"))
     # UPSELL MODAL: after the form submit, Karlancer shows an upsell modal
-    # ("upgrade to a featured service", 49,000 Toman). The service is NOT
-    # created yet — the modal must be dealt with first. NEVER buy the
-    # featured upgrade (real money, no approval): close the modal with its
-    # × button, which completes the FREE submission.
+    # ("upgrade to a featured service", 49,000 Toman). Closing it with ×
+    # just returns to the form WITHOUT creating the service — the modal's
+    # own "ثبت خدمت" button is the real submit. The featured upgrade is an
+    # optional radio that is OFF by default; NEVER buy it (real money, no
+    # approval). So: make sure the featured option is OFF, then click the
+    # modal's "ثبت خدمت" to complete the FREE submission.
     try:
         modal_text = await page.evaluate(
             """() => {
@@ -1700,18 +1702,59 @@ async def service_create(page, home, out_dir, args):
             }""")
         if modal_text:
             res["upsell_modal"] = True
-            closed = await page.evaluate(
+            # ensure the featured upgrade is OFF before submitting
+            feat = await page.evaluate(
                 """() => {
-                    const els = [...document.querySelectorAll('button, span, div')]
-                        .filter(e => e.offsetParent !== null &&
-                            (e.innerText || '').trim() === '×');
-                    const el = els.length ? els[els.length - 1] : null;
-                    if (el) { el.click(); return true; }
-                    return false;
+                    const out = {checked_boxes: 0, radios: []};
+                    for (const el of document.querySelectorAll('input[type="checkbox"], input[type="radio"]')) {
+                        if (el.offsetParent === null) continue;
+                        if (el.checked) out.checked_boxes += 1;
+                        out.radios.push({type: el.type, checked: !!el.checked,
+                            name: el.name || '', id: el.id || ''});
+                    }
+                    return out;
                 }""")
-            res["upsell_closed"] = bool(closed)
-            await page.wait_for_timeout(4000)
-            await page.screenshot(path=os.path.join(out_dir, "service_after_upsell_close.png"))
+            res["upsell_featured_state"] = feat
+            # if a featured checkbox/radio is checked, uncheck it first
+            try:
+                n_unchecked = await page.evaluate(
+                    """() => {
+                        let n = 0;
+                        for (const el of document.querySelectorAll('input[type="checkbox"], input[type="radio"]')) {
+                            if (el.offsetParent !== null && el.checked) {
+                                el.click(); n += 1;
+                            }
+                        }
+                        return n;
+                    }""")
+                res["upsell_unchecked"] = n_unchecked
+            except Exception:
+                pass
+            await page.wait_for_timeout(1000)
+            # click the modal's own "ثبت خدمت" (the orange button inside
+            # the overlay) — NOT the form's submit behind it
+            modal_submitted = await page.evaluate(
+                """() => {
+                    const btns = [...document.querySelectorAll('button, a, [role="button"]')]
+                        .filter(e => e.offsetParent !== null &&
+                            (e.innerText || '').trim() === 'ثبت خدمت');
+                    if (!btns.length) return false;
+                    const inOverlay = btns.find(b => {
+                        let p = b;
+                        for (let i = 0; i < 6 && p; i++) {
+                            const cs = getComputedStyle(p);
+                            if (cs.position === 'fixed') return true;
+                            p = p.parentElement;
+                        }
+                        return false;
+                    });
+                    const target = inOverlay || btns[btns.length - 1];
+                    target.click();
+                    return true;
+                }""")
+            res["upsell_submit_clicked"] = bool(modal_submitted)
+            await page.wait_for_timeout(5000)
+            await page.screenshot(path=os.path.join(out_dir, "service_after_upsell_submit.png"))
     except Exception as e:  # noqa: BLE001 - record and continue
         res["upsell_error"] = f"{type(e).__name__}: {e}"
     res["submitted"] = True
@@ -1777,6 +1820,27 @@ async def kar_ws_new_probe(page, home, out_dir):
                     id: el.getAttribute('id'), name: el.getAttribute('name'),
                     accept: el.getAttribute('accept'),
                     visible: !!(el.offsetParent !== null)}))""")
+            # Values of the identity fields (name / family name / national
+            # ID): are they pre-filled (ID already verified) or empty?
+            # NEVER log the actual values — only whether each is filled.
+            res["identity_filled"] = await page.evaluate(
+                """() => {
+                    const out = {};
+                    const byPh = (sub) => {
+                        const els = [...document.querySelectorAll('input')];
+                        const el = els.find(e => (e.placeholder || '').includes(sub));
+                        return el ? (el.value || '').trim().length > 0 : null;
+                    };
+                    out.first_name_filled = byPh('نام');
+                    out.family_name_filled = byPh('نام خانوادگی');
+                    // national ID number input: the one after the کد ملی label
+                    const labels = [...document.querySelectorAll('label, div, span, p')];
+                    out.has_national_id_label = labels.some(e => (e.innerText || '').trim() === 'کد ملی');
+                    const body = document.body.innerText || '';
+                    out.id_verified_text = /تایید شده|تأیید شده|احراز شده|تایید هویت/.test(body);
+                    out.id_section_present = body.includes('کارت ملی');
+                    return out;
+                }""")
         except Exception:
             pass
     except Exception as e:  # noqa: BLE001 - record
