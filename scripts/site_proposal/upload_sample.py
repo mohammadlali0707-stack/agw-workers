@@ -1718,6 +1718,57 @@ async def service_create(page, home, out_dir, args):
     return res
 
 
+async def kar_profile_probe(page, home, out_dir):
+    """Karlancer worksample (نمونه کار) flow probe. Submits NOTHING.
+
+    The public /worksample/<slug> pages prove KarLancer HAS work samples,
+    but the panel has no obvious نمونه کار link. This probe visits the
+    logged-in profile pages — /panel/profile and /panel/profile/edit-profile
+    (both URLs taken from links on the actual logged-in panel, never
+    guessed) — plus the own public profile, and dumps links/forms/buttons/
+    body text, hunting for the worksample add flow. Returns a result dict.
+    """
+    res = {}
+    WS_WORDS = ("نمونه کار", "نمونه‌کار", "worksample", "نمونه", "work-sample")
+    pages = [
+        ("panel_profile", home.rstrip("/") + "/panel/profile"),
+        ("edit_profile", home.rstrip("/") + "/panel/profile/edit-profile"),
+        ("own_public_profile", home.rstrip("/") + "/profile/178358"),
+    ]
+    for key, url in pages:
+        page_res = {}
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(2500)
+            await page.screenshot(path=os.path.join(out_dir, f"kar_{key}.png"))
+            page_res["url"] = page.url
+            links = await collect_links(page)
+            page_res["links"] = links[:200]
+            page_res["buttons"] = await collect_buttons(page)
+            page_res["forms"] = await dump_forms(page)
+            page_res["all_inputs"] = await dump_all_inputs(page)
+            try:
+                page_res["title"] = await page.title()
+                page_res["headings"] = await page.evaluate(
+                    "() => [...document.querySelectorAll('h1,h2,h3')].map(h => h.innerText.trim()).filter(t => t).slice(0, 20)")
+                page_res["body_text"] = (await page.inner_text("body"))[:5000]
+            except Exception:
+                pass
+            # any worksample link on this page?
+            ws_links = [l for l in links if any(
+                w.lower() in ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
+                for w in WS_WORDS)]
+            page_res["worksample_links"] = ws_links
+            # any worksample word in the body text?
+            body = page_res.get("body_text", "")
+            page_res["worksample_words_in_body"] = [w for w in WS_WORDS if w in body]
+        except Exception as e:  # noqa: BLE001 - record and continue
+            page_res["error"] = f"{type(e).__name__}: {e}"
+        res[key] = page_res
+    res["note"] = "kar-profile-probe only: structure recorded, nothing submitted"
+    return res
+
+
 async def main_async(args):
     result = {"ok": False, "mode": args.mode, "site": args.site, "submitted": False,
               "job_id": args.job_id, "sample_url": args.sample_url}
@@ -1776,6 +1827,12 @@ async def main_async(args):
                 svc = await service_create(page, home, out_dir, args)
                 result.update(svc)
                 result["ok"] = bool(svc.get("ok"))
+                return save()
+            if args.mode == "kar-profile-probe":
+                # Karlancer worksample flow discovery (profile pages).
+                kp = await kar_profile_probe(page, home, out_dir)
+                result.update(kp)
+                result["ok"] = True
                 return save()
             profile_url = args.profile_url
             info = {}
@@ -2026,7 +2083,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
