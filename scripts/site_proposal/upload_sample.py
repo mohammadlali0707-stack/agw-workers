@@ -1311,28 +1311,23 @@ async def add_skill_tag(page, skill):
         if not await el.is_visible():
             return False
         await el.click(timeout=5000)
+        await el.fill("")
         await el.fill(skill)
         # wait for a suggestion matching this skill to appear near the input
+        # (the type-ahead fetches from an API and can take a long time)
         clicked = False
-        for _ in range(10):
+        for _ in range(25):
             await page.wait_for_timeout(800)
             try:
                 ok = await page.evaluate(
                     """(skill) => {
                         const inp = document.querySelector('input[name="tag"]');
                         if (!inp) return false;
-                        // the suggestion list is rendered near the input:
-                        // look for a visible li / button / div containing
-                        // the skill text, preferring the one closest to the
-                        // input in document order after it
                         const cands = [...document.querySelectorAll('li, button, [role="option"]')]
                             .filter(e => e.offsetParent !== null &&
                                 (e.innerText || '').trim().includes(skill) &&
                                 (e.innerText || '').trim().length < 60);
                         if (!cands.length) return false;
-                        // prefer a candidate that is NOT in the "top skills"
-                        // footer (those are far below the form); the
-                        // suggestion list sits right under the input
                         const inpRect = inp.getBoundingClientRect();
                         let best = null, bestDist = 1e9;
                         for (const c of cands) {
@@ -1350,7 +1345,16 @@ async def add_skill_tag(page, skill):
                 pass
         await page.wait_for_timeout(800)
         if not clicked:
-            # no suggestion appeared; try Enter as a last resort
+            # no suggestion element appeared; try keyboard selection
+            # (ArrowDown highlights the first suggestion, Enter picks it)
+            try:
+                await el.press("ArrowDown")
+                await page.wait_for_timeout(600)
+                await el.press("Enter")
+                await page.wait_for_timeout(800)
+            except Exception:
+                pass
+            # last resort: plain Enter (free-form tag)
             try:
                 await el.press("Enter")
                 await page.wait_for_timeout(800)
