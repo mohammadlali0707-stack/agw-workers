@@ -1849,6 +1849,109 @@ async def kar_ws_new_probe(page, home, out_dir):
     return res
 
 
+async def kar_bid_diag(page, home, out_dir, project_url):
+    """Karlancer bid-form diagnostic. Submits NOTHING.
+
+    Opens the project bid form (same clicks as karlancer.py), fills
+    days/price/text with the plate-change values, then inspects why
+    submitBid does not complete the bid:
+    - is button#submitBid disabled / visible?
+    - is there a milestone/stage section that must be filled first?
+    - what happens on clicking submitBid (modal? error? still open?)
+    - does /panel/bids show the bid afterwards?
+    Fills the form but does NOT click the final submit.
+    """
+    res = {"project_url": project_url}
+    try:
+        await page.goto(project_url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(4000)
+        # open the bid form (same two clicks as karlancer.py)
+        clicked1 = await page.evaluate(
+            """() => { const e = [...document.querySelectorAll('div.pointer, button, a')].find(e => (e.innerText||'').trim() === 'ثبت پیشنهاد روی پروژه' && e.getBoundingClientRect().width > 0);
+             if (e) { e.scrollIntoView({block:'center'}); e.click(); return true } return false }""")
+        res["clicked_bid_button"] = clicked1
+        await page.wait_for_timeout(2500)
+        clicked2 = await page.evaluate(
+            """() => { const e = [...document.querySelectorAll('button')].find(e => (e.innerText||'').trim() === 'ادامه و ثبت پیشنهاد' && e.getBoundingClientRect().width > 0);
+             if (e) { e.scrollIntoView({block:'center'}); e.click(); return true } return false }""")
+        res["clicked_continue"] = clicked2
+        await page.wait_for_timeout(3000)
+        await page.screenshot(path=os.path.join(out_dir, "kar_bid_diag_form.png"))
+        res["url"] = page.url
+        # Fill days / price / text (plate-change values).
+        days = page.locator("input[placeholder='تعداد روز']").first
+        price = page.locator("input[placeholder='قیمت']").first
+        text = page.locator("textarea[placeholder*='روند انجام پروژه']").first
+        res["fields_found"] = {
+            "days": await days.count() > 0,
+            "price": await price.count() > 0,
+            "text": await text.count() > 0,
+        }
+        if await days.count():
+            await days.click(); await days.fill(""); await days.press_sequentially("5", delay=40)
+        if await price.count():
+            await price.click(); await price.fill(""); await price.press_sequentially("17000000", delay=30)
+        if await text.count():
+            await text.click(); await text.fill("تست تشخیصی — بدون ارسال")
+        await page.wait_for_timeout(800)
+        # Inspect the submit button and the milestone/stage section.
+        res["submit_btn"] = await page.evaluate(
+            """() => {
+                const b = document.querySelector('button#submitBid');
+                if (!b) return {found: false};
+                const cs = getComputedStyle(b);
+                const r = b.getBoundingClientRect();
+                return {found: true, disabled: b.disabled, visible: r.width > 0 && r.height > 0,
+                        text: (b.innerText||'').trim(), cls: (b.className||'').slice(0,120),
+                        ariaDisabled: b.getAttribute('aria-disabled')};
+            }""")
+        res["milestone"] = await page.evaluate(
+            """() => {
+                const body = document.body.innerText || '';
+                const hasAddStage = [...document.querySelectorAll('button, a, div')].some(e => (e.innerText||'').trim() === 'اضافه کردن مرحله جدید');
+                const stageInputs = [...document.querySelectorAll('input')].filter(e => {
+                    const ph = (e.placeholder||'');
+                    return /مرحله|عنوان مرحله|مبلغ مرحله/.test(ph);
+                }).map(e => ({ph: e.placeholder, name: e.name, visible: e.offsetParent !== null}));
+                // Is there any required marker near the stage section?
+                const req = /مرحله.*(الزامی|اجباری|ضروری)|ایجاد مرحله/.test(body);
+                return {has_add_stage_btn: hasAddStage, stage_inputs: stageInputs,
+                        stage_required_hint: req,
+                        body_has_stage: body.includes('مرحله')};
+            }""")
+        # Any visible validation errors after filling?
+        res["errors_after_fill"] = await page.evaluate(
+            """() => [...document.querySelectorAll('.text-danger,.error,.invalid-feedback,[class*=error],[class*=toast],[class*=alert]')]
+                .filter(e => e.offsetParent !== null).map(e => (e.innerText||'').trim()).filter(t => t && t.length < 300).slice(0, 8)""")
+        # Click submitBid ONCE and observe (diagnostic only — do not confirm
+        # any modal; we only record what appears).
+        res["clicked_submit"] = await page.evaluate(
+            """() => { const b = document.querySelector('button#submitBid');
+             if (!b) return false; b.scrollIntoView({block:'center'}); b.click(); return true }""")
+        await page.wait_for_timeout(3000)
+        await page.screenshot(path=os.path.join(out_dir, "kar_bid_diag_after_submit.png"))
+        res["after_submit"] = await page.evaluate(
+            """() => {
+                const b = document.querySelector('button#submitBid');
+                const still = !!b && b.getBoundingClientRect().width > 0;
+                const modalBtns = [...document.querySelectorAll('button, a, [role="button"]')]
+                    .filter(e => e.offsetParent !== null)
+                    .map(e => (e.innerText||'').trim()).filter(t => t && t.length < 40).slice(0, 30);
+                const body = document.body.innerText || '';
+                return {submit_still_visible: still,
+                        modal_or_overlay: !!document.querySelector('[class*=modal], [class*=Modal], [role=dialog]'),
+                        visible_buttons: modalBtns,
+                        has_success_text: /پیشنهاد شما (ثبت|ارسال) شد|با موفقیت ثبت شد/.test(body)};
+            }""")
+        res["errors_after_submit"] = await page.evaluate(
+            """() => [...document.querySelectorAll('.text-danger,.error,.invalid-feedback,[class*=error],[class*=toast],[class*=alert]')]
+                .filter(e => e.offsetParent !== null).map(e => (e.innerText||'').trim()).filter(t => t && t.length < 300).slice(0, 8)""")
+    except Exception as e:  # noqa: BLE001 - record
+        res["error"] = f"{type(e).__name__}: {e}"
+    res["note"] = "kar-bid-diag only: form filled, submit clicked once for observation, NO confirmation clicked, NO bid submitted"
+    return res
+
+
 async def kar_ws_tab_probe(page, home, out_dir):
     """Karlancer worksample tab probe. Submits NOTHING.
 
@@ -2042,6 +2145,13 @@ async def main_async(args):
             if args.mode == "kar-ws-new":
                 # Karlancer new-worksample page: dump the create form.
                 kp = await kar_ws_new_probe(page, home, out_dir)
+                result.update(kp)
+                result["ok"] = True
+                return save()
+            if args.mode == "kar-bid-diag":
+                # Karlancer bid-form diagnostic: why submitBid stays open.
+                kp = await kar_bid_diag(page, home, out_dir,
+                                        "https://www.karlancer.com/طراحی-ربات-اتوماسیون-نوبتگیری-تعویض-پلاک-2564e9r3o8n0")
                 result.update(kp)
                 result["ok"] = True
                 return save()
@@ -2294,7 +2404,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
