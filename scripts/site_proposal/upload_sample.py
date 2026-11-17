@@ -2151,7 +2151,7 @@ async def main_async(args):
             if args.mode == "kar-bid-diag":
                 # Karlancer bid-form diagnostic: why submitBid stays open.
                 kp = await kar_bid_diag(page, home, out_dir,
-                                        "https://www.karlancer.com/طراحی-ربات-اتوماسیون-نوبتگیری-تعویض-پلاک-2564e9r3o8n0")
+                                        "https://www.karlancer.com/projects/طراحی-ربات-اتوماسیون-نوبتگیری-تعویض-پلاک-2564e9r3o8n0")
                 result.update(kp)
                 result["ok"] = True
                 return save()
