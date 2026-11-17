@@ -1053,37 +1053,50 @@ async def dump_dropdown_options(page, button_text):
         return []
 
 
-async def pick_dropdown_option(page, button_text, wants, anchor_text=None):
+async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug=None):
     """Open a dropdown by clicking its button, then pick an option by text.
     VERIFIES the pick via the section's anchor heading (which stays
     constant): the section text must gain the picked value afterwards.
-    The old check searched for the button label, but the label is REPLACED
-    by the chosen value, so that check always failed. Returns the picked
-    text only when verified, else None."""
+    Fills `debug` (when given) with the stage-by-stage outcome so a failed
+    pick can be diagnosed instead of guessed at. Returns the picked text
+    only when verified, else None."""
+    dbg = debug if debug is not None else {}
     try:
         anchor = anchor_text or button_text
         before = await read_section_text(page, anchor)
-        if not await click_button_by_text(page, button_text):
+        dbg["before"] = before
+        btn = await click_button_by_text(page, button_text)
+        dbg["button_clicked"] = btn
+        if not btn:
             try:
                 loc = page.locator(f":text('{button_text}')")
                 if await loc.count() > 0:
                     await loc.first.click(timeout=5000)
+                    dbg["button_clicked_fallback"] = True
                 else:
+                    dbg["button_clicked_fallback"] = False
                     return None
-            except Exception:
+            except Exception as e:
+                dbg["button_fallback_error"] = f"{type(e).__name__}: {e}"
                 return None
         await page.wait_for_timeout(1500)
+        menu_open = await page.evaluate(
+            "() => !!document.querySelector('.dropdown-menu.show')")
+        dbg["menu_open"] = menu_open
         picked = await click_dropdown_option(page, wants)
+        dbg["option_clicked"] = picked
         if not picked:
             return None
         await page.wait_for_timeout(1000)
         after = await read_section_text(page, anchor)
-        # the section must now show the picked value (and differ from
-        # before); if the menu is still open and nothing changed, it failed
+        dbg["after"] = after
+        dbg["menu_open_after"] = await page.evaluate(
+            "() => !!document.querySelector('.dropdown-menu.show')")
         if picked in after and after != before:
             return picked
         return None
-    except Exception:
+    except Exception as e:
+        dbg["exception"] = f"{type(e).__name__}: {e}"
         return None
 
 
@@ -1222,12 +1235,15 @@ async def service_create(page, home, out_dir, args):
     # the category menu offers only design services; for a bot the right
     # category is "طراحی ربات" (bot design) — there is no programming
     # category in this menu
+    cat_dbg, sub_dbg = {}, {}
     step1["category"] = await pick_dropdown_option(
         page, "دسته‌بندی خدمت", ("طراحی ربات",),
-        anchor_text="یک دسته‌بندی انتخاب کنید")
+        anchor_text="یک دسته‌بندی انتخاب کنید", debug=cat_dbg)
+    step1["category_debug"] = cat_dbg
     step1["subcategory"] = await pick_dropdown_option(
         page, "زیردسته", ("ربات تلگرام", "تلگرام", "ربات", "اتوماسیون", "پایتون"),
-        anchor_text="یک زیر دسته انتخاب کنید")
+        anchor_text="یک زیر دسته انتخاب کنید", debug=sub_dbg)
+    step1["subcategory_debug"] = sub_dbg
     skills_added = []
     for s in [x.strip() for x in (args.skills or "").split(",") if x.strip()]:
         if await add_skill_tag(page, s):
