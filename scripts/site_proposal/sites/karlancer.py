@@ -322,6 +322,24 @@ class KarlancerAdapter:
             fv["confirm_modal_clicked"] = modal_clicked
             await page.wait_for_timeout(6000)
             fv["after_errors"] = await _errors(page)
+            # DIAGNOSTIC: capture the form state right after the submit click,
+            # before navigating away — what is visible, what blocks the submit.
+            try:
+                diag = await page.evaluate("""() => {
+                    const btns = [...document.querySelectorAll('button, a, input[type=submit]')]
+                        .filter(e => e.offsetParent !== null)
+                        .map(e => ({tag: e.tagName, id: e.id || '', text: (e.innerText || e.value || '').trim().slice(0, 60),
+                                    disabled: !!e.disabled, cls: (e.className || '').toString().slice(0, 80)}))
+                        .slice(0, 30);
+                    const sb = document.querySelector('button#submitBid');
+                    const sbInfo = sb ? {visible: !!(sb.offsetParent !== null), disabled: !!sb.disabled,
+                        text: (sb.innerText || '').trim(), cls: (sb.className || '').toString().slice(0, 120)} : null;
+                    return {url: location.href, buttons: btns, submitBid: sbInfo,
+                            body: (document.body.innerText || '').slice(0, 1500)};
+                }""")
+                fv["post_submit_diag"] = diag
+            except Exception:
+                pass
             still = await page.locator("button#submitBid").count() and await page.locator("button#submitBid").first.is_visible()
             # 2. confirm via my bids page
             await page.goto("https://www.karlancer.com/panel/bids", wait_until="domcontentloaded")
