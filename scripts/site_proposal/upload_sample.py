@@ -1083,6 +1083,16 @@ async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug
         menu_open = await page.evaluate(
             "() => !!document.querySelector('.dropdown-menu.show')")
         dbg["menu_open"] = menu_open
+        # the menu container appears before its items load (they come from
+        # an API) — wait until at least one option is actually present
+        items_ready = False
+        try:
+            await page.wait_for_selector(
+                ".dropdown-menu.show .dropdown-item", timeout=8000)
+            items_ready = True
+        except Exception:
+            items_ready = False
+        dbg["menu_items_ready"] = items_ready
         picked = await click_dropdown_option(page, wants)
         dbg["option_clicked"] = picked
         if not picked:
