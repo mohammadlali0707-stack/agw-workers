@@ -945,17 +945,25 @@ async def click_dropdown_option(page, wants):
 
 
 async def read_section_text(page, anchor_text):
-    """Read the text of the smallest visible container holding anchor_text
-    (a section heading that stays constant, e.g. 'یک دسته‌بندی انتخاب
-    کنید'). The section's text gains the chosen value after a pick."""
+    """Read the text of the section holding anchor_text (a heading that
+    stays constant, e.g. 'یک دسته‌بندی انتخاب کنید'). The section is a
+    col-md-6 div holding the heading AND the control (selected value), so
+    its text gains the chosen value after a pick. (The earlier version
+    returned the SMALLEST div, which was just the heading alone and never
+    contained the value.)"""
     try:
         return await page.evaluate(
             """(anchor) => {
+                const secs = [...document.querySelectorAll('div.col-md-6')];
+                for (const s of secs) {
+                    const t = (s.innerText || '').trim();
+                    if (t.includes(anchor) && s.offsetParent !== null) return t;
+                }
                 let best = null, bestLen = 1e9;
                 for (const e of document.querySelectorAll('div')) {
                     if (e.offsetParent === null) continue;
                     const t = (e.innerText || '').trim();
-                    if (t.includes(anchor) && t.length < bestLen && t.length < 300) {
+                    if (t.includes(anchor) && t.length > 40 && t.length < 300 && t.length < bestLen) {
                         best = e; bestLen = t.length;
                     }
                 }
