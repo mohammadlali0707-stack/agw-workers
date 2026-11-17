@@ -1935,6 +1935,12 @@ async def main_async(args):
                 result.update(kp)
                 result["ok"] = True
                 return save()
+            if args.mode == "kar-ws-new":
+                # Karlancer new-worksample page: dump the create form.
+                kp = await kar_ws_new_probe(page, home, out_dir)
+                result.update(kp)
+                result["ok"] = True
+                return save()
             profile_url = args.profile_url
             info = {}
             if not profile_url:
@@ -2184,7 +2190,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
