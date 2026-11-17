@@ -1745,6 +1745,46 @@ async def service_create(page, home, out_dir, args):
     return res
 
 
+async def kar_ws_new_probe(page, home, out_dir):
+    """Karlancer new-worksample page probe. Submits NOTHING.
+
+    Goes to /panel/profile/work-sample/new (the 'افزودن نمونه‌کار جدید'
+    link found by the kar-ws-tab probe) and dumps the create form:
+    every input/textarea/select (form or not — Karlancer is a React SPA),
+    buttons, file inputs, and body text. Answers: what fields exist
+    (title/description/image/skills/link?), is there a national-ID gate,
+    and what submits it. Returns a result dict.
+    """
+    res = {}
+    url = home.rstrip("/") + "/panel/profile/work-sample/new"
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(3000)
+        await page.screenshot(path=os.path.join(out_dir, "kar_ws_new.png"))
+        res["url"] = page.url
+        res["links"] = (await collect_links(page))[:200]
+        res["buttons"] = await collect_buttons(page)
+        res["forms"] = await dump_forms(page)
+        res["all_inputs"] = await dump_all_inputs(page)
+        res["selects"] = await dump_select_options(page)
+        try:
+            res["title"] = await page.title()
+            res["headings"] = await page.evaluate(
+                "() => [...document.querySelectorAll('h1,h2,h3')].map(h => h.innerText.trim()).filter(t => t).slice(0, 20)")
+            res["body_text"] = (await page.inner_text("body"))[:6000]
+            res["file_inputs"] = await page.evaluate(
+                """() => [...document.querySelectorAll('input[type=file]')].map(el => ({
+                    id: el.getAttribute('id'), name: el.getAttribute('name'),
+                    accept: el.getAttribute('accept'),
+                    visible: !!(el.offsetParent !== null)}))""")
+        except Exception:
+            pass
+    except Exception as e:  # noqa: BLE001 - record
+        res["error"] = f"{type(e).__name__}: {e}"
+    res["note"] = "kar-ws-new-probe only: structure recorded, nothing submitted"
+    return res
+
+
 async def kar_ws_tab_probe(page, home, out_dir):
     """Karlancer worksample tab probe. Submits NOTHING.
 
