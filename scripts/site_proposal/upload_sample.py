@@ -1382,6 +1382,41 @@ async def add_skill_tag(page, skill):
         return False
 
 
+async def click_by_text_js(page, text):
+    """JS click on the first visible element whose text contains `text`.
+    Works when the control is a div (not a <button>) or is covered by a
+    spinner/toast so Playwright's click times out. Returns True if an
+    element was clicked."""
+    try:
+        return await page.evaluate(
+            """(text) => {
+                const els = [...document.querySelectorAll('button, a, div, span')]
+                    .filter(e => e.offsetParent !== null &&
+                        (e.innerText || '').trim().includes(text) &&
+                        (e.innerText || '').trim().length < 60);
+                if (!els.length) return false;
+                let best = els.find(e => e.tagName === 'BUTTON') || els[0];
+                let bestLen = (best.innerText || '').trim().length;
+                for (const e of els) {
+                    const l = (e.innerText || '').trim().length;
+                    if (l < bestLen) { best = e; bestLen = l; }
+                }
+                best.click();
+                return true;
+            }""", text)
+    except Exception:
+        return False
+
+
+async def click_next(page):
+    """Click the wizard's Next ('مرحله بعد') button, trying Playwright's
+    button click first, then a JS click (works on divs and covered
+    buttons). Returns True if a click was performed."""
+    if await click_button_by_text(page, "مرحله بعد"):
+        return True
+    return await click_by_text_js(page, "مرحله بعد")
+
+
 async def service_create(page, home, out_dir, args):
     """Karlancer service creation (the fix for the portfolio-form blocker).
 
@@ -1515,7 +1550,7 @@ async def service_create(page, home, out_dir, args):
         res["error"] = (f"step 1: only {tag_count} skill tag(s) on the form "
                         f"({skills_added}) — the form needs at least 3")
         return res
-    if not await click_button_by_text(page, "مرحله بعد"):
+    if not await click_next(page):
         res["error"] = "step 1: could not click Next"
         return res
     await page.wait_for_timeout(3000)
@@ -1548,9 +1583,9 @@ async def service_create(page, home, out_dir, args):
         step2["image_note"] = "no screenshot file supplied; images are optional"
     res["step2"] = step2
     await page.screenshot(path=os.path.join(out_dir, "service_step2.png"))
-    if not await click_button_by_text(page, "مرحله بعد"):
+    if not await click_next(page):
         # the images step may use a different next control; try a generic next
-        if not await click_button_by_text(page, "بعد"):
+        if not await click_by_text_js(page, "بعد"):
             res["error"] = "step 2: could not click Next"
             return res
     await page.wait_for_timeout(3000)
@@ -1580,8 +1615,8 @@ async def service_create(page, home, out_dir, args):
     if not step3.get("description"):
         res["error"] = "step 3: could not fill the description"
         return res
-    if not await click_button_by_text(page, "مرحله بعد"):
-        if not await click_button_by_text(page, "بعد"):
+    if not await click_next(page):
+        if not await click_by_text_js(page, "بعد"):
             res["error"] = "step 3: could not click Next"
             return res
     await page.wait_for_timeout(3000)
