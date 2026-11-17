@@ -911,22 +911,28 @@ async def click_button_by_text(page, text):
 
 
 async def click_dropdown_option(page, wants):
-    """Click the first visible option-like element (li / [role=option] /
-    [role=menuitem] / button / a) whose text contains one of the wanted
-    substrings, in order. Returns the matched text or None. Uses a JS click
-    (React handles it) so it works on div-based dropdowns too."""
+    """Click the first visible option-like element whose text contains one of
+    the wanted substrings, in order. SCOPED to real dropdown options only
+    (li / [role=option] / [role=menuitem]) — the page's "top skills" chips
+    and other buttons contain the same words and must NOT be clicked.
+    Prefers the SHORTEST matching text (the real option) and returns the
+    matched text, or None."""
     try:
         return await page.evaluate(
             """(wants) => {
-                const sels = ['li', '[role="option"]', '[role="menuitem"]', 'button', 'a'];
+                const sels = ['li', '[role="option"]', '[role="menuitem"]'];
                 for (const w of wants) {
+                    let best = null, bestLen = 1e9;
                     for (const sel of sels) {
                         for (const e of document.querySelectorAll(sel)) {
                             if (e.offsetParent === null) continue;
                             const t = (e.innerText || '').trim();
-                            if (t && t.includes(w) && t.length < 80) { e.click(); return t; }
+                            if (t && t.includes(w) && t.length < 80 && t.length < bestLen) {
+                                best = e; bestLen = t.length;
+                            }
                         }
                     }
+                    if (best) { best.click(); return best.innerText.trim(); }
                 }
                 return null;
             }""", list(wants))
@@ -934,11 +940,94 @@ async def click_dropdown_option(page, wants):
         return None
 
 
-async def pick_dropdown_option(page, button_text, wants):
-    """Open a dropdown by clicking its button, then pick an option by text."""
+async def read_dropdown_value(page, button_text):
+    """Read the text of the dropdown control that contains button_text.
+    Returns the SMALLEST visible element containing the label (the control
+    itself, whose text becomes label + chosen value after a pick), or ''."""
     try:
+        return await page.evaluate(
+            """(bt) => {
+                let best = null, bestLen = 1e9;
+                for (const e of document.querySelectorAll('div, button, span')) {
+                    if (e.offsetParent === null) continue;
+                    const t = (e.innerText || '').trim();
+                    if (t.includes(bt) && t.length < bestLen && t.length < 120) {
+                        best = e; bestLen = t.length;
+                    }
+                }
+                return best ? best.innerText.trim() : '';
+            }""", button_text)
+    except Exception:
+        return ""
+
+
+async def wait_skills_ready(page, timeout_ms=12000):
+    """The skill suggestions load asynchronously (the page shows a spinner
+    and 'please wait for the suggested skills to load' toasts). Wait until
+    the loading indicator is gone, up to timeout_ms. Returns True if the
+    spinner is gone."""
+    try:
+        await page.wait_for_timeout(2000)
+        # the loader is a small box with three dots; wait for it to vanish
+        await page.wait_for_function(
+            """() => {
+                const txt = document.body.innerText || '';
+                return !txt.includes('لطفا صبر کنید تا مهارت های پیشنهادی بارگذاری شوند');
+            }""", timeout=timeout_ms)
+        return True
+    except Exception:
+        return False
+
+
+async def read_error_toast(page):
+    """Grab the validation-error toast text (the red box listing what is
+    missing), if one is visible. Returns the text or ''."""
+    try:
+        return await page.evaluate(
+            """() => {
+                const els = [...document.querySelectorAll('div, p, span, li')];
+                const hits = [];
+                for (const e of els) {
+                    if (e.offsetParent === null) continue;
+                    const t = (e.innerText || '').trim();
+                    if (t.length > 5 && t.length < 400 &&
+                        (t.includes('حداقل') || t.includes('لطفا یکی از') ||
+                         t.includes('نباید کمتر') || t.includes('نباید بیشتر')) &&
+                        !t.includes('چه مهارت')) {
+                        hits.push(t);
+                    }
+                }
+                return hits.length ? hits[hits.length - 1] : '';
+            }""")
+    except Exception:
+        return ""
+
+
+async def title_input_visible(page):
+    try:
+        loc = page.locator("input[placeholder*='خدمت خود را شرح دهید']")
+        return await loc.count() > 0 and await loc.first.is_visible()
+    except Exception:
+        return False
+
+
+async def price_input_visible(page):
+    try:
+        loc = page.locator("input[placeholder*='هزینه']")
+        return await loc.count() > 0 and await loc.first.is_visible()
+    except Exception:
+        return False
+
+
+async def pick_dropdown_option(page, button_text, wants):
+    """Open a dropdown by clicking its button, then pick an option by text.
+    VERIFIES the pick: the button must show the chosen value afterwards
+    (a click on a look-alike element elsewhere on the page is a false
+    positive and must be reported, not trusted). Returns the picked text
+    only when verified, else None."""
+    try:
+        before = await read_dropdown_value(page, button_text)
         if not await click_button_by_text(page, button_text):
-            # the control may not be a <button>; try any element with the text
             try:
                 loc = page.locator(f":text('{button_text}')")
                 if await loc.count() > 0:
@@ -948,14 +1037,27 @@ async def pick_dropdown_option(page, button_text, wants):
             except Exception:
                 return None
         await page.wait_for_timeout(1500)
-        return await click_dropdown_option(page, wants)
+        picked = await click_dropdown_option(page, wants)
+        if not picked:
+            return None
+        await page.wait_for_timeout(1000)
+        after = await read_dropdown_value(page, button_text)
+        # the control's text must now contain the picked value (beyond the
+        # label/placeholder it had before); if it only still shows the
+        # placeholder, the pick did not stick
+        if picked in after and after != before:
+            return picked
+        return None
     except Exception:
         return None
 
 
 async def add_skill_tag(page, skill):
-    """Type a skill into the tag input (name=tag) and confirm with Enter.
-    Returns True when the input clears (tag accepted) afterwards."""
+    """Add one skill tag: type it into the tag input, wait for the suggestion
+    dropdown, click the matching suggestion, and VERIFY a tag chip appeared.
+    The suggestions load asynchronously — typing too early (before they are
+    ready) means Enter does nothing, so we wait for a suggestion first.
+    Returns True only when a chip with the skill text is present."""
     try:
         loc = page.locator('input[name="tag"]')
         if await loc.count() == 0:
@@ -965,21 +1067,68 @@ async def add_skill_tag(page, skill):
             return False
         await el.click(timeout=5000)
         await el.fill(skill)
+        # wait for a suggestion matching this skill to appear near the input
+        clicked = False
+        for _ in range(10):
+            await page.wait_for_timeout(800)
+            try:
+                ok = await page.evaluate(
+                    """(skill) => {
+                        const inp = document.querySelector('input[name="tag"]');
+                        if (!inp) return false;
+                        // the suggestion list is rendered near the input:
+                        // look for a visible li / button / div containing
+                        // the skill text, preferring the one closest to the
+                        // input in document order after it
+                        const cands = [...document.querySelectorAll('li, button, [role="option"]')]
+                            .filter(e => e.offsetParent !== null &&
+                                (e.innerText || '').trim().includes(skill) &&
+                                (e.innerText || '').trim().length < 60);
+                        if (!cands.length) return false;
+                        // prefer a candidate that is NOT in the "top skills"
+                        // footer (those are far below the form); the
+                        // suggestion list sits right under the input
+                        const inpRect = inp.getBoundingClientRect();
+                        let best = null, bestDist = 1e9;
+                        for (const c of cands) {
+                            const r = c.getBoundingClientRect();
+                            const d = Math.abs(r.top - inpRect.bottom);
+                            if (d < bestDist) { best = c; bestDist = d; }
+                        }
+                        if (best && bestDist < 400) { best.click(); return true; }
+                        return false;
+                    }""", skill)
+                if ok:
+                    clicked = True
+                    break
+            except Exception:
+                pass
         await page.wait_for_timeout(800)
-        # a suggestion may appear; prefer clicking it
+        if not clicked:
+            # no suggestion appeared; try Enter as a last resort
+            try:
+                await el.press("Enter")
+                await page.wait_for_timeout(800)
+            except Exception:
+                pass
+        # verify: a tag chip with this skill must now be present (and the
+        # input cleared). Chips are rendered as small pills near the input.
         try:
-            sug = page.locator(f"li:has-text('{skill}')")
-            if await sug.count() > 0:
-                await sug.first.click(timeout=3000)
-                await page.wait_for_timeout(500)
+            present = await page.evaluate(
+                """(skill) => {
+                    const els = [...document.querySelectorAll('div, span, button, li')]
+                        .filter(e => e.offsetParent !== null &&
+                            (e.innerText || '').trim() === skill);
+                    return els.length > 0;
+                }""", skill)
+            if present:
+                return True
+            try:
+                return (await el.input_value()) == ""
+            except Exception:
+                return False
         except Exception:
-            pass
-        await el.press("Enter")
-        await page.wait_for_timeout(800)
-        try:
-            return (await el.input_value()) == ""
-        except Exception:
-            return True
+            return False
     except Exception:
         return False
 
@@ -1031,8 +1180,10 @@ async def service_create(page, home, out_dir, args):
         return res
     await page.wait_for_timeout(3000)
     # --- STEP 1: subject ---
+    # the skill suggestions load async; wait for them BEFORE touching the
+    # form, or the tag input ignores Enter and the dropdown picks race
     step1 = {}
-    step1["title"] = await fill_by_placeholder(page, "خدمت خود را شرح دهید", svc_title)
+    step1["skills_ready"] = await wait_skills_ready(page)
     step1["category"] = await pick_dropdown_option(
         page, "دسته‌بندی خدمت", ("برنامه نویسی", "پایتون", "برنامه‌نویسی"))
     step1["subcategory"] = await pick_dropdown_option(
@@ -1042,18 +1193,59 @@ async def service_create(page, home, out_dir, args):
         if await add_skill_tag(page, s):
             skills_added.append(s)
     step1["skills_added"] = skills_added
+    # title LAST (the suggestions loading re-renders the form and can clear
+    # an earlier fill); read it back and re-type if it did not stick
+    step1["title"] = await fill_by_placeholder(page, "خدمت خود را شرح دهید", svc_title)
+    try:
+        title_val = await page.evaluate(
+            """() => { const els = [...document.querySelectorAll('input')];
+                const t = els.find(e => (e.placeholder || '').includes('خدمت خود را شرح دهید'));
+                return t ? t.value : ''; }""")
+        step1["title_value"] = title_val
+        if title_val != svc_title:
+            # fill() did not stick (React re-render); type it by keyboard
+            try:
+                loc = page.locator("input[placeholder*='خدمت خود را شرح دهید']")
+                await loc.first.click(timeout=5000)
+                await loc.first.fill("")
+                await page.keyboard.type(svc_title, delay=30)
+                await page.wait_for_timeout(800)
+                title_val = await page.evaluate(
+                    """() => { const els = [...document.querySelectorAll('input')];
+                        const t = els.find(e => (e.placeholder || '').includes('خدمت خود را شرح دهید'));
+                        return t ? t.value : ''; }""")
+                step1["title_value"] = title_val
+                step1["title"] = (title_val == svc_title)
+            except Exception:
+                step1["title"] = False
+    except Exception:
+        step1["title_value"] = ""
     res["step1"] = step1
     await page.screenshot(path=os.path.join(out_dir, "service_step1.png"))
     if not step1.get("title"):
         res["error"] = "step 1: could not fill the service title"
         return res
     if not step1.get("category"):
-        res["error"] = "step 1: could not pick a category"
+        res["error"] = "step 1: could not pick a category (verified pick failed)"
+        return res
+    if not step1.get("subcategory"):
+        res["error"] = "step 1: could not pick a subcategory (verified pick failed)"
+        return res
+    if len(skills_added) < 3:
+        res["error"] = (f"step 1: only {len(skills_added)} skill(s) added "
+                        f"({skills_added}) — the form needs at least 3")
         return res
     if not await click_button_by_text(page, "مرحله بعد"):
         res["error"] = "step 1: could not click Next"
         return res
     await page.wait_for_timeout(3000)
+    # ADVANCEMENT GUARD: a Next click is not an advance — validation may
+    # have failed and left us on step 1. Only proceed if the title input
+    # is gone; otherwise stop with the form's own error message.
+    if await title_input_visible(page):
+        res["error"] = "step 1: wizard did not advance — " + (await read_error_toast(page) or "validation failed (no error text captured)")
+        res["validation_error"] = await read_error_toast(page)
+        return res
     # --- STEP 2: images (optional) ---
     step2 = {}
     shot = args.screenshot or ""
@@ -1082,6 +1274,10 @@ async def service_create(page, home, out_dir, args):
             res["error"] = "step 2: could not click Next"
             return res
     await page.wait_for_timeout(3000)
+    # ADVANCEMENT GUARD: step 3's price input must now be visible
+    if not await price_input_visible(page):
+        res["error"] = "step 2: wizard did not advance to cost/deliverables — " + (await read_error_toast(page) or "no error text captured")
+        return res
     # --- STEP 3: cost & deliverables ---
     step3 = {}
     step3["price"] = await fill_by_placeholder(page, "هزینه", args.price)
@@ -1109,6 +1305,10 @@ async def service_create(page, home, out_dir, args):
             res["error"] = "step 3: could not click Next"
             return res
     await page.wait_for_timeout(3000)
+    # ADVANCEMENT GUARD: the price input must be gone (we left step 3)
+    if await price_input_visible(page):
+        res["error"] = "step 3: wizard did not advance to FAQ — " + (await read_error_toast(page) or "no error text captured")
+        return res
     # --- STEP 4: FAQ (optional) — add one, but never block on it ---
     step4 = {}
     try:
