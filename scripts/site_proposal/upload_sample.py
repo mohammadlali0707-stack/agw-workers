@@ -1718,6 +1718,74 @@ async def service_create(page, home, out_dir, args):
     return res
 
 
+async def kar_ws_tab_probe(page, home, out_dir):
+    """Karlancer worksample tab probe. Submits NOTHING.
+
+    The profile page (/panel/profile/information) has a 'نمونه کارها'
+    (work samples) tab in its menu — a tab, not a link, so the earlier
+    link-based probes never saw it. This probe clicks that tab and dumps
+    what appears: the samples list, any add-sample button/form, and the
+    URL it lands on. Returns a result dict.
+    """
+    res = {}
+    url = home.rstrip("/") + "/panel/profile/information"
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(3000)
+        await page.screenshot(path=os.path.join(out_dir, "kar_ws_before.png"))
+        res["start_url"] = page.url
+        # find and click the نمونه کارها tab (any clickable element whose
+        # own text is exactly/nearly that label)
+        clicked = await page.evaluate(
+            """() => {
+                const cands = [...document.querySelectorAll('a, button, li, div, span, [role="tab"]')]
+                    .filter(e => e.offsetParent !== null &&
+                        (e.innerText || '').trim() === 'نمونه کارها');
+                // prefer the smallest (the label itself, not a big container)
+                cands.sort((a, b) => (a.innerText.length - b.innerText.length));
+                if (!cands.length) return null;
+                const el = cands[0];
+                el.click();
+                return {tag: el.tagName, cls: (el.className || '').toString().slice(0, 120),
+                        href: el.getAttribute('href') || ''};
+            }""")
+        res["tab_clicked"] = clicked
+        await page.wait_for_timeout(3000)
+        await page.screenshot(path=os.path.join(out_dir, "kar_ws_after.png"))
+        res["after_url"] = page.url
+        links = await collect_links(page)
+        res["links"] = links[:200]
+        res["buttons"] = await collect_buttons(page)
+        res["forms"] = await dump_forms(page)
+        res["all_inputs"] = await dump_all_inputs(page)
+        try:
+            res["headings"] = await page.evaluate(
+                "() => [...document.querySelectorAll('h1,h2,h3')].map(h => h.innerText.trim()).filter(t => t).slice(0, 20)")
+            res["body_text"] = (await page.inner_text("body"))[:6000]
+        except Exception:
+            pass
+        # any add-sample control?
+        ws_add = []
+        for l in links:
+            hay = ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
+            if ("نمونه" in hay and any(w in hay for w in ("افزودن", "ایجاد", "جدید", "اضافه", "add", "create", "new"))):
+                ws_add.append(l)
+        res["worksample_add_links"] = ws_add
+        try:
+            res["add_buttons"] = await page.evaluate(
+                """() => [...document.querySelectorAll('button, a, [role="button"]')]
+                    .filter(e => e.offsetParent !== null &&
+                        (e.innerText || '').includes('نمونه'))
+                    .map(e => ({tag: e.tagName, text: (e.innerText || '').trim().slice(0, 80),
+                        href: e.getAttribute('href') || ''}))""")
+        except Exception:
+            res["add_buttons"] = []
+    except Exception as e:  # noqa: BLE001 - record
+        res["error"] = f"{type(e).__name__}: {e}"
+    res["note"] = "kar-ws-tab-probe only: structure recorded, nothing submitted"
+    return res
+
+
 async def kar_profile_probe(page, home, out_dir):
     """Karlancer worksample (نمونه کار) flow probe. Submits NOTHING.
 
@@ -1831,6 +1899,12 @@ async def main_async(args):
             if args.mode == "kar-profile-probe":
                 # Karlancer worksample flow discovery (profile pages).
                 kp = await kar_profile_probe(page, home, out_dir)
+                result.update(kp)
+                result["ok"] = True
+                return save()
+            if args.mode == "kar-ws-tab":
+                # Karlancer worksample tab: click نمونه کارها, dump the section.
+                kp = await kar_ws_tab_probe(page, home, out_dir)
                 result.update(kp)
                 result["ok"] = True
                 return save()
@@ -2083,7 +2157,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
