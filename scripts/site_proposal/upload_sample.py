@@ -1687,6 +1687,33 @@ async def service_create(page, home, out_dir, args):
         return res
     await page.wait_for_timeout(5000)
     await page.screenshot(path=os.path.join(out_dir, "service_after_submit.png"))
+    # UPSELL MODAL: after the form submit, Karlancer shows an upsell modal
+    # ("upgrade to a featured service", 49,000 Toman). The service is NOT
+    # created yet — the modal must be dealt with first. NEVER buy the
+    # featured upgrade (real money, no approval): close the modal with its
+    # × button, which completes the FREE submission.
+    try:
+        modal_text = await page.evaluate(
+            """() => {
+                const t = document.body.innerText || '';
+                return (t.includes('ارتقا دهید') || t.includes('خدمت ویژه')) ? t.slice(0, 500) : '';
+            }""")
+        if modal_text:
+            res["upsell_modal"] = True
+            closed = await page.evaluate(
+                """() => {
+                    const els = [...document.querySelectorAll('button, span, div')]
+                        .filter(e => e.offsetParent !== null &&
+                            (e.innerText || '').trim() === '×');
+                    const el = els.length ? els[els.length - 1] : null;
+                    if (el) { el.click(); return true; }
+                    return false;
+                }""")
+            res["upsell_closed"] = bool(closed)
+            await page.wait_for_timeout(4000)
+            await page.screenshot(path=os.path.join(out_dir, "service_after_upsell_close.png"))
+    except Exception as e:  # noqa: BLE001 - record and continue
+        res["upsell_error"] = f"{type(e).__name__}: {e}"
     res["submitted"] = True
     try:
         res["after_submit_url"] = page.url
@@ -1695,7 +1722,7 @@ async def service_create(page, home, out_dir, args):
         pass
     # --- verify: the service must appear in /panel/services ---
     await page.goto(SERVICES_URL, wait_until="domcontentloaded", timeout=60000)
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(8000)
     await page.screenshot(path=os.path.join(out_dir, "services_after.png"))
     try:
         body = await page.inner_text("body")
