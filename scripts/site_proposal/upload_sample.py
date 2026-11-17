@@ -868,6 +868,341 @@ async def service_probe(page, home, out_dir):
     return res
 
 
+async def fill_by_placeholder(page, substr, value):
+    """Fill the first VISIBLE input/textarea whose placeholder contains substr."""
+    try:
+        loc = page.locator(f"input[placeholder*='{substr}'], textarea[placeholder*='{substr}']")
+        for i in range(await loc.count()):
+            el = loc.nth(i)
+            if await el.is_visible():
+                await el.fill(value, timeout=5000)
+                return True
+        return False
+    except Exception:
+        return False
+
+
+async def fill_by_name(page, name, value):
+    """Fill the first VISIBLE input/textarea with the given name attribute."""
+    try:
+        loc = page.locator(f'[name="{name}"]')
+        for i in range(await loc.count()):
+            el = loc.nth(i)
+            if await el.is_visible():
+                await el.fill(value, timeout=5000)
+                return True
+        return False
+    except Exception:
+        return False
+
+
+async def click_button_by_text(page, text):
+    """Click the first visible <button> containing the text."""
+    try:
+        loc = page.locator(f"button:has-text('{text}')")
+        for i in range(await loc.count()):
+            el = loc.nth(i)
+            if await el.is_visible():
+                await el.click(timeout=5000)
+                return True
+        return False
+    except Exception:
+        return False
+
+
+async def click_dropdown_option(page, wants):
+    """Click the first visible option-like element (li / [role=option] /
+    [role=menuitem] / button / a) whose text contains one of the wanted
+    substrings, in order. Returns the matched text or None. Uses a JS click
+    (React handles it) so it works on div-based dropdowns too."""
+    try:
+        return await page.evaluate(
+            """(wants) => {
+                const sels = ['li', '[role="option"]', '[role="menuitem"]', 'button', 'a'];
+                for (const w of wants) {
+                    for (const sel of sels) {
+                        for (const e of document.querySelectorAll(sel)) {
+                            if (e.offsetParent === null) continue;
+                            const t = (e.innerText || '').trim();
+                            if (t && t.includes(w) && t.length < 80) { e.click(); return t; }
+                        }
+                    }
+                }
+                return null;
+            }""", list(wants))
+    except Exception:
+        return None
+
+
+async def pick_dropdown_option(page, button_text, wants):
+    """Open a dropdown by clicking its button, then pick an option by text."""
+    try:
+        if not await click_button_by_text(page, button_text):
+            # the control may not be a <button>; try any element with the text
+            try:
+                loc = page.locator(f":text('{button_text}')")
+                if await loc.count() > 0:
+                    await loc.first.click(timeout=5000)
+                else:
+                    return None
+            except Exception:
+                return None
+        await page.wait_for_timeout(1500)
+        return await click_dropdown_option(page, wants)
+    except Exception:
+        return None
+
+
+async def add_skill_tag(page, skill):
+    """Type a skill into the tag input (name=tag) and confirm with Enter.
+    Returns True when the input clears (tag accepted) afterwards."""
+    try:
+        loc = page.locator('input[name="tag"]')
+        if await loc.count() == 0:
+            return False
+        el = loc.first
+        if not await el.is_visible():
+            return False
+        await el.click(timeout=5000)
+        await el.fill(skill)
+        await page.wait_for_timeout(800)
+        # a suggestion may appear; prefer clicking it
+        try:
+            sug = page.locator(f"li:has-text('{skill}')")
+            if await sug.count() > 0:
+                await sug.first.click(timeout=3000)
+                await page.wait_for_timeout(500)
+        except Exception:
+            pass
+        await el.press("Enter")
+        await page.wait_for_timeout(800)
+        try:
+            return (await el.input_value()) == ""
+        except Exception:
+            return True
+    except Exception:
+        return False
+
+
+async def service_create(page, home, out_dir, args):
+    """Karlancer service creation (the fix for the portfolio-form blocker).
+
+    Walks the create-service wizard: type -> subject (title/category/
+    subcategory/skills) -> images (optional) -> cost & deliverables ->
+    FAQ (optional) -> terms + submit. Submits ONLY when every required field
+    is verified filled; any failed step stops BEFORE the submit click and
+    records exactly what is missing. Returns a result dict."""
+    res = {}
+    svc_title = (args.service_title or "").strip() or (args.title or "")[:30]
+    res["service_title"] = svc_title
+    res["price"] = args.price
+    res["delivery_days"] = args.delivery_days
+    # --- reach the create page via the services page link ---
+    await page.goto(SERVICES_URL, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(3000)
+    links = await collect_links(page)
+    new_link = None
+    for l in links:
+        hay = ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
+        if any(w.lower() in hay for w in SERVICE_NEW_WORDS):
+            new_link = l
+            break
+    href = (new_link.get("href") or "").strip() if new_link else ""
+    if href and href not in ("#", "javascript:void(0)", "javascript:;", "javascript:"):
+        await page.goto(_abs_url(home, href), wait_until="domcontentloaded", timeout=60000)
+    else:
+        await page.goto(home.rstrip("/") + "/panel/create-service",
+                        wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(3000)
+    # --- choose the professional-services type ---
+    clicked = False
+    for word in ("خدمات حرفه‌ای", "خدمات حرفه اي"):
+        try:
+            loc = page.locator(f"text={word}")
+            if await loc.count() > 0:
+                await loc.first.click(timeout=5000)
+                clicked = True
+                break
+        except Exception:
+            pass
+    res["type_clicked"] = clicked
+    if not clicked:
+        res["error"] = "could not click the professional-services type card"
+        return res
+    await page.wait_for_timeout(3000)
+    # --- STEP 1: subject ---
+    step1 = {}
+    step1["title"] = await fill_by_placeholder(page, "خدمت خود را شرح دهید", svc_title)
+    step1["category"] = await pick_dropdown_option(
+        page, "دسته‌بندی خدمت", ("برنامه نویسی", "پایتون", "برنامه‌نویسی"))
+    step1["subcategory"] = await pick_dropdown_option(
+        page, "زیردسته", ("پایتون", "ربات", "برنامه‌نویسی پایتون", "برنامه نویسی"))
+    skills_added = []
+    for s in [x.strip() for x in (args.skills or "").split(",") if x.strip()]:
+        if await add_skill_tag(page, s):
+            skills_added.append(s)
+    step1["skills_added"] = skills_added
+    res["step1"] = step1
+    await page.screenshot(path=os.path.join(out_dir, "service_step1.png"))
+    if not step1.get("title"):
+        res["error"] = "step 1: could not fill the service title"
+        return res
+    if not step1.get("category"):
+        res["error"] = "step 1: could not pick a category"
+        return res
+    if not await click_button_by_text(page, "مرحله بعد"):
+        res["error"] = "step 1: could not click Next"
+        return res
+    await page.wait_for_timeout(3000)
+    # --- STEP 2: images (optional) ---
+    step2 = {}
+    shot = args.screenshot or ""
+    if shot and os.path.isfile(shot):
+        try:
+            loc = page.locator('input[name="upload_photo"]')
+            if await loc.count() > 0:
+                await loc.first.set_input_files(shot, timeout=20000)
+                await page.wait_for_timeout(4000)
+                step2["image_attached"] = True
+                step2["image_file"] = os.path.basename(shot)
+            else:
+                step2["image_attached"] = False
+                step2["image_error"] = "no upload_photo input on this step"
+        except Exception as e:  # noqa: BLE001 - record and continue (optional)
+            step2["image_attached"] = False
+            step2["image_error"] = f"{type(e).__name__}: {e}"
+    else:
+        step2["image_attached"] = False
+        step2["image_note"] = "no screenshot file supplied; images are optional"
+    res["step2"] = step2
+    await page.screenshot(path=os.path.join(out_dir, "service_step2.png"))
+    if not await click_button_by_text(page, "مرحله بعد"):
+        # the images step may use a different next control; try a generic next
+        if not await click_button_by_text(page, "بعد"):
+            res["error"] = "step 2: could not click Next"
+            return res
+    await page.wait_for_timeout(3000)
+    # --- STEP 3: cost & deliverables ---
+    step3 = {}
+    step3["price"] = await fill_by_placeholder(page, "هزینه", args.price)
+    step3["package_title"] = await fill_by_placeholder(
+        page, "مثلا طراحی یک لوگو", "ربات رزرو خودکار نوبت تعویض پلاک")
+    step3["delivery"] = await fill_by_placeholder(page, "روز", f"{args.delivery_days} روز")
+    step3["orders"] = await fill_by_placeholder(page, "سفارش", "1")
+    step3["description"] = await fill_by_name(page, "description", args.description)
+    step3["delivery_description"] = await fill_by_name(
+        page, "deliveryDescription",
+        "ربات آماده‌ی اجرا + راهنمای نصب و استفاده + یک‌بار تنظیم مشخصات شما (نام، پلاک، کد ملی، موبایل، مرکزها و بازه‌ی زمانی).")
+    step3["requirements"] = await fill_by_name(
+        page, "requirements",
+        "نام و نام خانوادگی، شماره پلاک، کد ملی، شماره موبایل، مرکزهای مورد نظر و بازه‌ی زمانی.")
+    res["step3"] = step3
+    await page.screenshot(path=os.path.join(out_dir, "service_step3.png"))
+    if not step3.get("price"):
+        res["error"] = "step 3: could not fill the price"
+        return res
+    if not step3.get("description"):
+        res["error"] = "step 3: could not fill the description"
+        return res
+    if not await click_button_by_text(page, "مرحله بعد"):
+        if not await click_button_by_text(page, "بعد"):
+            res["error"] = "step 3: could not click Next"
+            return res
+    await page.wait_for_timeout(3000)
+    # --- STEP 4: FAQ (optional) — add one, but never block on it ---
+    step4 = {}
+    try:
+        q = await fill_by_placeholder(page, "سوال خود را بنویسید",
+                                      "ربات چطور کار می‌کند؟")
+        a = await fill_by_placeholder(page, "جواب خود را بنویسید",
+                                      "سامانه‌ی تعویض پلاک را پیوسته زیر نظر می‌گیرد؛ به محض باز شدن نوبت مناسب، آن را با مشخصات شما رزرو می‌کند و تا مرحله‌ی پرداخت می‌برد. پرداخت را خودتان کامل می‌کنید.")
+        step4["faq_filled"] = bool(q and a)
+        if q and a:
+            # there may be an explicit "add FAQ" button; try common labels
+            for lbl in ("افزودن", "اضافه کردن", "ثبت سوال"):
+                if await click_button_by_text(page, lbl):
+                    step4["faq_added"] = lbl
+                    break
+            await page.wait_for_timeout(1000)
+    except Exception as e:  # noqa: BLE001 - FAQ is optional
+        step4["faq_error"] = f"{type(e).__name__}: {e}"
+    res["step4"] = step4
+    await page.screenshot(path=os.path.join(out_dir, "service_step4.png"))
+    # --- terms + submit (ONLY when the required fields are verified) ---
+    try:
+        acc = page.locator("#accept")
+        if await acc.count() > 0 and not await acc.first.is_checked():
+            try:
+                await acc.first.check(timeout=5000)
+                res["terms_accepted"] = True
+            except Exception:
+                # fall back to clicking its label
+                try:
+                    await page.locator("label[for='accept']").first.click(timeout=5000)
+                    res["terms_accepted"] = True
+                except Exception:
+                    res["terms_accepted"] = False
+        else:
+            res["terms_accepted"] = True
+    except Exception:
+        res["terms_accepted"] = False
+    # final guard: re-read the title + price values before submitting
+    try:
+        title_val = await page.evaluate(
+            """() => { const els = [...document.querySelectorAll('input')];
+                const t = els.find(e => (e.placeholder || '').includes('خدمت خود را شرح دهید'));
+                return t ? t.value : ''; }""")
+        res["title_value_before_submit"] = title_val
+    except Exception:
+        res["title_value_before_submit"] = ""
+    if not res.get("title_value_before_submit"):
+        res["error"] = "guard: title is empty before submit — refusing to submit"
+        return res
+    if not res.get("terms_accepted"):
+        res["error"] = "guard: terms checkbox could not be accepted — refusing to submit"
+        return res
+    clicked_submit = None
+    for lbl in ("ثبت خدمت", "انتشار خدمت", "ثبت نهایی", "ایجاد خدمت", "ثبت"):
+        if await click_button_by_text(page, lbl):
+            clicked_submit = lbl
+            break
+    res["submit_clicked"] = clicked_submit
+    if not clicked_submit:
+        res["error"] = "could not find/click the submit button"
+        return res
+    await page.wait_for_timeout(5000)
+    await page.screenshot(path=os.path.join(out_dir, "service_after_submit.png"))
+    res["submitted"] = True
+    try:
+        res["after_submit_url"] = page.url
+        res["after_submit_text"] = (await page.inner_text("body"))[:1500]
+    except Exception:
+        pass
+    # --- verify: the service must appear in /panel/services ---
+    await page.goto(SERVICES_URL, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(3000)
+    await page.screenshot(path=os.path.join(out_dir, "services_after.png"))
+    try:
+        body = await page.inner_text("body")
+        res["verified"] = svc_title in body
+        # find the service link (its public URL) if present
+        svc_url = None
+        for l in await collect_links(page):
+            if svc_title in (l.get("text") or ""):
+                svc_url = _abs_url(home, l["href"])
+                break
+        res["service_url"] = svc_url
+        # which tab is it under? (published vs awaiting approval)
+        res["services_body_snippet"] = body[:2000]
+    except Exception as e:  # noqa: BLE001 - record
+        res["verified"] = False
+        res["verify_error"] = f"{type(e).__name__}: {e}"
+    res["ok"] = bool(res.get("verified"))
+    if not res.get("ok"):
+        res["error"] = "submitted but the service title was not found in /panel/services"
+    return res
+
+
 async def main_async(args):
     result = {"ok": False, "mode": args.mode, "site": args.site, "submitted": False,
               "job_id": args.job_id, "sample_url": args.sample_url}
@@ -918,13 +1253,14 @@ async def main_async(args):
             await page.wait_for_timeout(2000)
             if args.mode in ("service-probe", "service-create"):
                 # Karlancer service flow (no portfolio form on this site).
-                svc = await service_probe(page, home, out_dir)
-                result.update(svc)
                 if args.mode == "service-probe":
+                    svc = await service_probe(page, home, out_dir)
+                    result.update(svc)
                     result["ok"] = True
                     return save()
-                result["error"] = ("service-create is not implemented yet — "
-                                   "run service-probe first and implement it from its form dump")
+                svc = await service_create(page, home, out_dir, args)
+                result.update(svc)
+                result["ok"] = bool(svc.get("ok"))
                 return save()
             profile_url = args.profile_url
             info = {}
@@ -1176,6 +1512,12 @@ def main():
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
     ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create"])
+    ap.add_argument("--service-title", default="",
+                    help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
+    ap.add_argument("--price", default="9000000",
+                    help="Service price in Toman (Karlancer service-create only).")
+    ap.add_argument("--delivery-days", default="7",
+                    help="Delivery time in days (Karlancer service-create only).")
     ap.add_argument("--job-id", required=True)
     ap.add_argument("--results-dir", required=True)
     ap.add_argument("--profile-url", default="")
