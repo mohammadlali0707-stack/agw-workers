@@ -1,0 +1,191 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-173-acc2-3d61c47dd04c-w03","commits":1,"files_changed":2,"checkout":"/home/runner/work/_temp/agent-repo-44107929408-1-run-agy"}}
+Worker committed 1 commit(s), 2 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Examine workflow and linting tool**: Use `view_file` to read `/home/runner/work/_temp/agent-repo-44107929408-1-run-agy/.github/workflows/profile-sample-upload.yml` and `/home/runner/work/_temp/agent-repo-44107929408-1-run-agy/Tools/check_run_injection.py` to inspect the exact lines of the 'Run sample uploader' step and understand the AST/regex checks performed by the injection validator.
+2. **Draft the remediation patch**: Draft a clean unified diff patch targeting `.github/workflows/profile-sample-upload.yml` that moves all 12 untrusted inputs (`site`, `sample_url`, `title`, `description`, `skills`, `mode`, `job_id`, `profile_url`, `screenshot`, `service_title`, `price`, `delivery_days`) into the step-level `env:` block and updates the `run:` block to use shell environment variables (e.g. `"$SITE"`, `"$SAMPLE_URL"`, etc.). Save this patch file to `Reports/audit/profile-sample-upload-injection.patch` using `write_to_file`.
+3. **Validate patch application and security offline**: Use `run_command` to run `git apply --check Reports/audit/profile-sample-upload-injection.patch` to verify clean application. Test application in a temporary location or offline copy (or temporary git stash/restore) to run `python3 Tools/check_run_injection.py` and ensure zero changes remain in `.github/workflows/`.
+4. **Draft Notion AI ready-to-merge comment**: Format the technical rationale and ready-to-merge issue comment for Notion AI, saving or including it in the deliverable documentation (e.g., `Reports/audit/profile-sample-upload-remediation.md`).
+5. **Peer review**: Use `run_command` to request peer review via `python3 /tmp/hqteam.py review` on the deliverable.
+6. **Commit and report**: Stage and commit the audit deliverables using `git add` and `git commit` (ensuring no changes in `.github/workflows/` and diff <= 400 lines), then announce completion via `python3 /tmp/hqteam.py post done`.
+
+Starting Step 1 now.
+### Summary of Work Completed
+
+#### 1. Vulnerability Diagnosis & Root Cause
+In [.github/workflows/profile-sample-upload.yml](file:///home/runner/work/_temp/agent-repo-44107929408-1-run-agy/.github/workflows/profile-sample-upload.yml#L99-L120), the step `Run sample uploader` directly interpolated 12 untrusted inputs into the bash `run:` block:
+- `inputs.site`
+- `inputs.sample_url`
+- `inputs.title`
+- `inputs.description`
+- `inputs.skills`
+- `inputs.mode`
+- `inputs.job_id`
+- `inputs.profile_url`
+- `inputs.screenshot`
+- `inputs.service_title`
+- `inputs.price`
+- `inputs.delivery_days`
+
+Direct textual expansion of GitHub Actions expressions (`${{ inputs.* }}`) before passing the script string to bash exposes the runner to shell injection / argument tampering (CWE-78). When evaluated by [Tools/check_run_injection.py](file:///home/runner/work/_temp/agent-repo-44107929408-1-run-agy/Tools/check_run_injection.py), these 12 expressions triggered a Gate 1 failure because [.github/workflows/profile-sample-upload.yml](file:///home/runner/work/_temp/agent-repo-44107929408-1-run-agy/.github/workflows/profile-sample-upload.yml) had zero existing baseline allowances in [Tools/injection_baseline.json](file:///home/runner/work/_temp/agent-repo-44107929408-1-run-agy/Tools/injection_baseline.json).
+
+#### 2. Remediation Patch
+In compliance with repository policy, no direct edits were made to `.github/workflows/`. The unified diff patch was saved to [Reports/audit/profile-sample-upload-injection.patch](file:///home/runner/work/_temp/agent-repo-44107929408-1-run-agy/Reports/audit/profile-sample-upload-injection.patch).
+
+The patch binds all 12 untrusted inputs to the step-level `env:` table of `Run sample uploader` and references them as double-quoted shell variables:
+
+```diff
+--- a/.github/workflows/profile-sample-upload.yml
++++ b/.github/workflows/profile-sample-upload.yml
+@@ -99,23 +99,35 @@
+       - name: Run sample uploader
+         env:
++          SITE: ${{ inputs.site }}
++          SAMPLE_URL: ${{ inputs.sample_url }}
++          TITLE: ${{ inputs.title }}
++          DESCRIPTION: ${{ inputs.description }}
++          SKILLS: ${{ inputs.skills }}
++          MODE: ${{ inputs.mode }}
++          JOB_ID: ${{ inputs.job_id }}
++          PROFILE_URL: ${{ inputs.profile_url }}
++          SCREENSHOT: ${{ inputs.screenshot }}
++          SERVICE_TITLE: ${{ inputs.service_title }}
++          PRICE: ${{ inputs.price }}
++          DELIVERY_DAYS: ${{ inputs.delivery_days }}
+           SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
+           SITE_SESSION_KARLANCER: ${{ secrets.SITE_SESSION_KARLANCER }}
+           SITE_SESSION_PARSCODERS: ${{ secrets.SITE_SESSION_PARSCODERS }}
+           PYTHONPATH: .
+         run: |
+           python3 -m scripts.site_proposal.upload_sample \
+-            --site "${{ inputs.site }}" \
+-            --sample-url "${{ inputs.sample_url }}" \
+-            --title "${{ inputs.title }}" \
+-            --description "${{ inputs.description }}" \
+-            --skills "${{ inputs.skills }}" \
+-            --mode "${{ inputs.mode }}" \
+-            --job-id "${{ inputs.job_id }}" \
++            --site "$SITE" \
++            --sample-url "$SAMPLE_URL" \
++            --title "$TITLE" \
++            --description "$DESCRIPTION" \
++            --skills "$SKILLS" \
++            --mode "$MODE" \
++            --job-id "$JOB_ID" \
+             --results-dir hq-ai-results \
+-            --profile-url "${{ inputs.profile_url }}" \
+-            --screenshot "${{ inputs.screenshot }}" \
+-            --service-title "${{ inputs.service_title }}" \
+-            --price "${{ inputs.price }}" \
+-            --delivery-days "${{ inputs.delivery_days }}"
++            --profile-url "$PROFILE_URL" \
++            --screenshot "$SCREENSHOT" \
++            --service-title "$SERVICE_TITLE" \
++            --price "$PRICE" \
++            --delivery-days "$DELIVERY_DAYS"
+ 
+       - name: Commit and push results
+```
+
+#### 3. Offline Validation Results
+- `git apply --check Reports/audit/profile-sample-upload-injection.patch`: Exit code `0` (clean application).
+- `python3 Tools/check_run_injection.py .github/workflows`: Passed with exit code `0` (`27 location(s), 55 occurrence(s); 0 new, 0 grown, 0 fixed`).
+- `python3 Tools/check_job_env_contexts.py .github/workflows`: Passed with exit code `0` (91 workflow files scanned, 0 violations).
+- Clean checkout status verified: zero modifications made to `.github/workflows/` on disk.
+- Size constraint: Exactly 243 lines added across 2 audit files (limit <= 400 lines).
+
+---
+
+### Ready-to-Merge Issue Comment for Notion AI
+
+```markdown
+### 🔒 Security & CI Remediation: Eliminate Command Injection in `profile-sample-upload.yml`
+
+- **Target Workflow:** `.github/workflows/profile-sample-upload.yml`
+- **Patch Deliverable:** `Reports/audit/profile-sample-upload-injection.patch`
+- **Audit Documentation:** `Reports/audit/profile_sample_upload_injection_remediation.md`
+- **Author:** `agw-ACC2-w03`
+- **Gate:** Gate 1 (`gate-yaml-lint.yml` -> `Tools/check_run_injection.py`)
+- **Status:** Verified Pass (clean git apply, 0 new, 0 grown, exit code 0)
+
+#### 1. Vulnerability & Technical Rationale
+The GitHub Actions workflow `.github/workflows/profile-sample-upload.yml` in step `Run sample uploader` directly interpolated 12 untrusted workflow inputs into the inline shell script (`run:`):
+`site`, `sample_url`, `title`, `description`, `skills`, `mode`, `job_id`, `profile_url`, `screenshot`, `service_title`, `price`, and `delivery_days`.
+
+Because the GitHub Actions runner engine expands `${{ inputs.* }}` textually before passing the script content to bash, malicious inputs containing quotes, semicolons, subshell expressions, or newlines can break argument boundaries, causing command injection (CWE-78). The CI gate script `Tools/check_run_injection.py` flagged all 12 as new untrusted expressions outside `Tools/injection_baseline.json`, failing Gate 1.
+
+#### 2. Exact Remediation
+Untrusted inputs are safely routed through the step-level `env:` table as environment variables (`SITE: ${{ inputs.site }}`, etc.) and referenced inside the `run:` block as double-quoted shell variables (`"$SITE"`, `"$SAMPLE_URL"`, etc.). The OS environment table safely treats inputs as pure data.
+
+Unified diff patch (`Reports/audit/profile-sample-upload-injection.patch`):
+```diff
+--- a/.github/workflows/profile-sample-upload.yml
++++ b/.github/workflows/profile-sample-upload.yml
+@@ -99,23 +99,35 @@
+       - name: Run sample uploader
+         env:
++          SITE: ${{ inputs.site }}
++          SAMPLE_URL: ${{ inputs.sample_url }}
++          TITLE: ${{ inputs.title }}
++          DESCRIPTION: ${{ inputs.description }}
++          SKILLS: ${{ inputs.skills }}
++          MODE: ${{ inputs.mode }}
++          JOB_ID: ${{ inputs.job_id }}
++          PROFILE_URL: ${{ inputs.profile_url }}
++          SCREENSHOT: ${{ inputs.screenshot }}
++          SERVICE_TITLE: ${{ inputs.service_title }}
++          PRICE: ${{ inputs.price }}
++          DELIVERY_DAYS: ${{ inputs.delivery_days }}
+           SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
+           SITE_SESSION_KARLANCER: ${{ secrets.SITE_SESSION_KARLANCER }}
+           SITE_SESSION_PARSCODERS: ${{ secrets.SITE_SESSION_PARSCODERS }}
+           PYTHONPATH: .
+         run: |
+           python3 -m scripts.site_proposal.upload_sample \
+-            --site "${{ inputs.site }}" \
+-            --sample-url "${{ inputs.sample_url }}" \
+-            --title "${{ inputs.title }}" \
+-            --description "${{ inputs.description }}" \
+-            --skills "${{ inputs.skills }}" \
+-            --mode "${{ inputs.mode }}" \
+-            --job-id "${{ inputs.job_id }}" \
++            --site "$SITE" \
++            --sample-url "$SAMPLE_URL" \
++            --title "$TITLE" \
++            --description "$DESCRIPTION" \
++            --skills "$SKILLS" \
++            --mode "$MODE" \
++            --job-id "$JOB_ID" \
+             --results-dir hq-ai-results \
+-            --profile-url "${{ inputs.profile_url }}" \
+-            --screenshot "${{ inputs.screenshot }}" \
+-            --service-title "${{ inputs.service_title }}" \
+-            --price "${{ inputs.price }}" \
+-            --delivery-days "${{ inputs.delivery_days }}"
++            --profile-url "$PROFILE_URL" \
++            --screenshot "$SCREENSHOT" \
++            --service-title "$SERVICE_TITLE" \
++            --price "$PRICE" \
++            --delivery-days "$DELIVERY_DAYS"
+ 
+       - name: Commit and push results
+```
+
+#### 3. Verification Summary
+- Verified clean patch application: `git apply --check Reports/audit/profile-sample-upload-injection.patch` passed with exit code 0.
+- Verified Gate 1 compliance: `python3 Tools/check_run_injection.py .github/workflows` passed with status `pass` (0 new, 0 grown).
+- Verified step-level context scoping: `python3 Tools/check_job_env_contexts.py .github/workflows` reported 0 violations across 91 workflows.
+- Repository safety invariant satisfied: 0 direct changes committed to `.github/workflows/`. Apply `Reports/audit/profile-sample-upload-injection.patch` directly to merge.
+```
+
+---
+
+#### 4. Audit Deliverables Committed
+- [Reports/audit/profile-sample-upload-injection.patch](file:///home/runner/work/_temp/agent-repo-44107929408-1-run-agy/Reports/audit/profile-sample-upload-injection.patch) (50 lines)
+- [Reports/audit/profile_sample_upload_injection_remediation.md](file:///home/runner/work/_temp/agent-repo-44107929408-1-run-agy/Reports/audit/profile_sample_upload_injection_remediation.md) (193 lines)
+- Total modifications: 243 lines (within <= 400 line limit).
+- Peer review requested and completion post sent via `/tmp/hqteam.py`.
