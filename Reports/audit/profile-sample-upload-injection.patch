@@ -1,0 +1,50 @@
+--- a/.github/workflows/profile-sample-upload.yml
++++ b/.github/workflows/profile-sample-upload.yml
+@@ -99,23 +99,35 @@
+       - name: Run sample uploader
+         env:
++          SITE: ${{ inputs.site }}
++          SAMPLE_URL: ${{ inputs.sample_url }}
++          TITLE: ${{ inputs.title }}
++          DESCRIPTION: ${{ inputs.description }}
++          SKILLS: ${{ inputs.skills }}
++          MODE: ${{ inputs.mode }}
++          JOB_ID: ${{ inputs.job_id }}
++          PROFILE_URL: ${{ inputs.profile_url }}
++          SCREENSHOT: ${{ inputs.screenshot }}
++          SERVICE_TITLE: ${{ inputs.service_title }}
++          PRICE: ${{ inputs.price }}
++          DELIVERY_DAYS: ${{ inputs.delivery_days }}
+           SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
+           SITE_SESSION_KARLANCER: ${{ secrets.SITE_SESSION_KARLANCER }}
+           SITE_SESSION_PARSCODERS: ${{ secrets.SITE_SESSION_PARSCODERS }}
+           PYTHONPATH: .
+         run: |
+           python3 -m scripts.site_proposal.upload_sample \
+-            --site "${{ inputs.site }}" \
+-            --sample-url "${{ inputs.sample_url }}" \
+-            --title "${{ inputs.title }}" \
+-            --description "${{ inputs.description }}" \
+-            --skills "${{ inputs.skills }}" \
+-            --mode "${{ inputs.mode }}" \
+-            --job-id "${{ inputs.job_id }}" \
++            --site "$SITE" \
++            --sample-url "$SAMPLE_URL" \
++            --title "$TITLE" \
++            --description "$DESCRIPTION" \
++            --skills "$SKILLS" \
++            --mode "$MODE" \
++            --job-id "$JOB_ID" \
+             --results-dir hq-ai-results \
+-            --profile-url "${{ inputs.profile_url }}" \
+-            --screenshot "${{ inputs.screenshot }}" \
+-            --service-title "${{ inputs.service_title }}" \
+-            --price "${{ inputs.price }}" \
+-            --delivery-days "${{ inputs.delivery_days }}"
++            --profile-url "$PROFILE_URL" \
++            --screenshot "$SCREENSHOT" \
++            --service-title "$SERVICE_TITLE" \
++            --price "$PRICE" \
++            --delivery-days "$DELIVERY_DAYS"
+ 
+       - name: Commit and push results
