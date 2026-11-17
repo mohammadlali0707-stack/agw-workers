@@ -1161,6 +1161,31 @@ async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug
         return None
 
 
+async def count_skill_tags(page):
+    """Count the tag chips currently on the form. Tags render as chips
+    with a × (remove) button inside the tag input's container."""
+    try:
+        return await page.evaluate(
+            """() => {
+                const inp = document.querySelector('input[name="tag"]');
+                if (!inp) return 0;
+                let container = inp.closest('div');
+                for (let i = 0; i < 4 && container; i++) {
+                    if (container.querySelectorAll('*').length > 3) break;
+                    container = container.parentElement;
+                }
+                if (!container) return 0;
+                const chips = [...container.querySelectorAll('div, span, button')]
+                    .filter(e => e.offsetParent !== null &&
+                        (e.innerText || '').includes('×') &&
+                        (e.innerText || '').trim().length < 60);
+                const texts = new Set(chips.map(e => (e.innerText || '').trim()));
+                return texts.size;
+            }""")
+    except Exception:
+        return 0
+
+
 async def click_suggested_skill(page, skill):
     """Click a suggested-skill chip whose text exactly equals the skill.
     The 'مهارت‌های پیشنهادی' (suggested skills) chips are the reliable way
@@ -1353,13 +1378,22 @@ async def service_create(page, home, out_dir, args):
     step1["subcategory_debug"] = sub_dbg
     skills_added = []
     for s in [x.strip() for x in (args.skills or "").split(",") if x.strip()]:
-        # prefer clicking the suggested-skill chip (direct, reliable);
-        # fall back to typing it into the tag input
-        if await click_suggested_skill(page, s):
+        # verify by TAG COUNT, not by name: a tag chip's text carries a ×
+        # so exact-name matching misses real tags. Count chips before and
+        # after; an increase means the skill was added.
+        before_n = await count_skill_tags(page)
+        ok = await click_suggested_skill(page, s)
+        if not ok:
+            ok = await add_skill_tag(page, s)
+        after_n = await count_skill_tags(page)
+        if after_n > before_n:
             skills_added.append(s)
-        elif await add_skill_tag(page, s):
-            skills_added.append(s)
+        elif ok:
+            # the helper thought it worked but the count did not move;
+            # trust the count (the chip may have been a suggestion, not a tag)
+            pass
     step1["skills_added"] = skills_added
+    step1["skill_tags_count"] = await count_skill_tags(page)
     # title LAST (the suggestions loading re-renders the form and can clear
     # an earlier fill); read it back and re-type if it did not stick
     step1["title"] = await fill_by_placeholder(page, "خدمت خود را شرح دهید", svc_title)
@@ -1402,8 +1436,9 @@ async def service_create(page, home, out_dir, args):
         res["subcategory_dropdown_dump"] = await dump_dropdown_options(page, "زیردسته")
         await page.screenshot(path=os.path.join(out_dir, "service_subcategory_debug.png"))
         return res
-    if len(skills_added) < 3:
-        res["error"] = (f"step 1: only {len(skills_added)} skill(s) added "
+    tag_count = step1.get("skill_tags_count", len(skills_added))
+    if tag_count < 3:
+        res["error"] = (f"step 1: only {tag_count} skill tag(s) on the form "
                         f"({skills_added}) — the form needs at least 3")
         return res
     if not await click_button_by_text(page, "مرحله بعد"):
