@@ -1019,6 +1019,33 @@ async def price_input_visible(page):
         return False
 
 
+async def dump_dropdown_options(page, button_text):
+    """Debug: open a dropdown and list every visible short-text element
+    that could be an option, with tag/class/text, so the real option
+    elements can be identified. Returns a list of dicts (max 80)."""
+    try:
+        await click_button_by_text(page, button_text)
+        await page.wait_for_timeout(1500)
+        return await page.evaluate(
+            """() => {
+                const out = [];
+                const seen = new Set();
+                for (const e of document.querySelectorAll('li, [role="option"], [role="menuitem"], div, span, button, a')) {
+                    if (e.offsetParent === null) continue;
+                    const t = (e.innerText || '').trim();
+                    if (!t || t.length > 60) continue;
+                    const key = e.tagName + '|' + (e.className || '').toString().slice(0, 60) + '|' + t;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    out.push({tag: e.tagName, cls: (e.className || '').toString().slice(0, 80), text: t});
+                    if (out.length >= 80) break;
+                }
+                return out;
+            }""")
+    except Exception:
+        return []
+
+
 async def pick_dropdown_option(page, button_text, wants):
     """Open a dropdown by clicking its button, then pick an option by text.
     VERIFIES the pick: the button must show the chosen value afterwards
@@ -1227,6 +1254,8 @@ async def service_create(page, home, out_dir, args):
         return res
     if not step1.get("category"):
         res["error"] = "step 1: could not pick a category (verified pick failed)"
+        res["category_dropdown_dump"] = await dump_dropdown_options(page, "دسته‌بندی خدمت")
+        await page.screenshot(path=os.path.join(out_dir, "service_dropdown_debug.png"))
         return res
     if not step1.get("subcategory"):
         res["error"] = "step 1: could not pick a subcategory (verified pick failed)"
