@@ -1207,6 +1207,26 @@ async def add_suggested_skills(page, target=3):
         return await count_skill_tags(page)
 
 
+async def wait_for_skill_chips(page, timeout_ms=20000):
+    """After the category/subcategory change, the suggested-skills row
+    reloads (a spinner shows while it loads). Wait until at least one
+    .skill-item chip is visible, up to timeout_ms. Returns True if chips
+    appeared."""
+    import time as _time
+    deadline = _time.time() + timeout_ms / 1000.0
+    while _time.time() < deadline:
+        try:
+            n = await page.evaluate(
+                """() => [...document.querySelectorAll('.skill-item')]
+                    .filter(e => e.offsetParent !== null).length""")
+            if n > 0:
+                return True
+        except Exception:
+            pass
+        await page.wait_for_timeout(1500)
+    return False
+
+
 async def count_skill_tags(page):
     """Count the tag chips currently on the form. Tags render as chips
     with a × (remove) button inside the tag input's container."""
@@ -1422,6 +1442,9 @@ async def service_create(page, home, out_dir, args):
         page, "زیردسته", ("ربات تلگرام", "تلگرام", "ربات", "اتوماسیون", "پایتون"),
         anchor_text="یک زیر دسته انتخاب کنید", debug=sub_dbg)
     step1["subcategory_debug"] = sub_dbg
+    # the suggested-skills row reloads for the new category/subcategory;
+    # wait for its chips before touching skills (a spinner shows meanwhile)
+    step1["skill_chips_ready"] = await wait_for_skill_chips(page)
     skills_added = []
     for s in [x.strip() for x in (args.skills or "").split(",") if x.strip()]:
         # verify by TAG COUNT, not by name: a tag chip's text carries a ×
