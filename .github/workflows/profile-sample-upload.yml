@@ -50,6 +50,21 @@ on:
         required: false
         type: string
         default: ''
+      service_title:
+        description: 'Karlancer service-create only: short service title (max 30 chars); defaults to title truncated to 30 chars'
+        required: false
+        type: string
+        default: ''
+      price:
+        description: 'Karlancer service-create only: service price in Toman'
+        required: false
+        type: string
+        default: '9000000'
+      delivery_days:
+        description: 'Karlancer service-create only: delivery time in days'
+        required: false
+        type: string
+        default: '7'
 
 permissions:
   contents: read
@@ -98,7 +113,10 @@ jobs:
             --job-id "${{ inputs.job_id }}" \
             --results-dir hq-ai-results \
             --profile-url "${{ inputs.profile_url }}" \
-            --screenshot "${{ inputs.screenshot }}"
+            --screenshot "${{ inputs.screenshot }}" \
+            --service-title "${{ inputs.service_title }}" \
+            --price "${{ inputs.price }}" \
+            --delivery-days "${{ inputs.delivery_days }}"
 
       - name: Commit and push results
         if: always()
