@@ -1161,6 +1161,52 @@ async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug
         return None
 
 
+async def add_suggested_skills(page, target=3):
+    """Click suggested-skill chips (class 'skill-item' in the
+    'مهارت‌های پیشنهادی' row) until `target` tags are on the form.
+    The suggestions are the platform's own skills, so they are always
+    addable — unlike typed names, which must match a suggestion exactly.
+    Returns the final tag count."""
+    try:
+        for _ in range(6):
+            n = await count_skill_tags(page)
+            if n >= target:
+                return n
+            clicked = await page.evaluate(
+                """() => {
+                    const chips = [...document.querySelectorAll('.skill-item')]
+                        .filter(e => e.offsetParent !== null &&
+                            (e.innerText || '').trim().length > 0 &&
+                            (e.innerText || '').trim().length < 40);
+                    if (!chips.length) return null;
+                    const inp = document.querySelector('input[name="tag"]');
+                    const tagTexts = new Set();
+                    if (inp) {
+                        let c = inp.closest('div');
+                        for (let i = 0; i < 4 && c; i++) {
+                            if (c.querySelectorAll('*').length > 3) break;
+                            c = c.parentElement;
+                        }
+                        if (c) {
+                            [...c.querySelectorAll('div, span, button')]
+                                .filter(e => (e.innerText || '').includes('×'))
+                                .forEach(e => tagTexts.add((e.innerText || '').replace('×', '').trim()));
+                        }
+                    }
+                    for (const ch of chips) {
+                        const t = (ch.innerText || '').trim();
+                        if (!tagTexts.has(t)) { ch.click(); return t; }
+                    }
+                    return null;
+                }""")
+            if not clicked:
+                return await count_skill_tags(page)
+            await page.wait_for_timeout(1200)
+        return await count_skill_tags(page)
+    except Exception:
+        return await count_skill_tags(page)
+
+
 async def count_skill_tags(page):
     """Count the tag chips currently on the form. Tags render as chips
     with a × (remove) button inside the tag input's container."""
@@ -1388,12 +1434,13 @@ async def service_create(page, home, out_dir, args):
         after_n = await count_skill_tags(page)
         if after_n > before_n:
             skills_added.append(s)
-        elif ok:
-            # the helper thought it worked but the count did not move;
-            # trust the count (the chip may have been a suggestion, not a tag)
-            pass
+    # top up with the platform's own suggested-skill chips until 3 tags
+    # are on the form (the form needs at least 3)
     step1["skills_added"] = skills_added
     step1["skill_tags_count"] = await count_skill_tags(page)
+    if step1["skill_tags_count"] < 3:
+        step1["skill_tags_count"] = await add_suggested_skills(page, target=3)
+        step1["skills_topped_up"] = True
     # title LAST (the suggestions loading re-renders the form and can clear
     # an earlier fill); read it back and re-type if it did not stick
     step1["title"] = await fill_by_placeholder(page, "خدمت خود را شرح دهید", svc_title)
