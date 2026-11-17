@@ -1020,25 +1020,47 @@ async def price_input_visible(page):
 
 
 async def dump_dropdown_options(page, button_text):
-    """Debug: open a dropdown and list every visible short-text element
-    that could be an option, with tag/class/text, so the real option
-    elements can be identified. Returns a list of dicts (max 80)."""
+    """Debug: open a dropdown and find every visible element containing the
+    wanted option words, with tag/class/parent, so the real option element
+    can be identified. Returns a list of dicts."""
     try:
-        await click_button_by_text(page, button_text)
-        await page.wait_for_timeout(1500)
+        # the menu may already be open (from the failed pick) or closed;
+        # click once, and if no option appears, click again to re-open it
+        for _ in range(2):
+            await click_button_by_text(page, button_text)
+            await page.wait_for_timeout(1500)
+            found = await page.evaluate(
+                """() => {
+                    const wants = ['برنامه نویسی', 'پایتون', 'طراحی'];
+                    for (const e of document.querySelectorAll('*')) {
+                        if (e.offsetParent === null) continue;
+                        const t = (e.innerText || '').trim();
+                        if (t && t.length <= 80 && wants.some(w => t.includes(w))) return true;
+                    }
+                    return false;
+                }""")
+            if found:
+                break
         return await page.evaluate(
             """() => {
                 const out = [];
                 const seen = new Set();
-                for (const e of document.querySelectorAll('li, [role="option"], [role="menuitem"], div, span, button, a')) {
+                const wants = ['برنامه نویسی', 'پایتون', 'طراحی'];
+                for (const e of document.querySelectorAll('*')) {
                     if (e.offsetParent === null) continue;
                     const t = (e.innerText || '').trim();
-                    if (!t || t.length > 60) continue;
+                    if (!t || t.length > 80) continue;
+                    if (!wants.some(w => t.includes(w))) continue;
                     const key = e.tagName + '|' + (e.className || '').toString().slice(0, 60) + '|' + t;
                     if (seen.has(key)) continue;
                     seen.add(key);
-                    out.push({tag: e.tagName, cls: (e.className || '').toString().slice(0, 80), text: t});
-                    if (out.length >= 80) break;
+                    const p = e.parentElement;
+                    out.push({tag: e.tagName,
+                              cls: (e.className || '').toString().slice(0, 100),
+                              text: t,
+                              parent_tag: p ? p.tagName : '',
+                              parent_cls: p ? (p.className || '').toString().slice(0, 100) : ''});
+                    if (out.length >= 40) break;
                 }
                 return out;
             }""")
