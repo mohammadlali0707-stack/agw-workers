@@ -1053,6 +1053,45 @@ async def dump_dropdown_options(page, button_text):
         return []
 
 
+async def wait_and_click_option(page, wants, timeout_ms=30000):
+    """Poll the open dropdown menu for a wanted option and click it when it
+    appears. The menu items load from an API and can take many seconds to
+    render, so a single immediate lookup misses them. Returns the clicked
+    option text, or None on timeout."""
+    import time as _time
+    deadline = _time.time() + timeout_ms / 1000.0
+    while _time.time() < deadline:
+        try:
+            hit = await page.evaluate(
+                """(wants) => {
+                    const menu = document.querySelector('.dropdown-menu.show');
+                    const scopes = menu ? [menu, document] : [document];
+                    for (const w of wants) {
+                        for (const scope of scopes) {
+                            let best = null, bestLen = 1e9;
+                            const sels = ['.dropdown-item', 'li', '[role="option"]', '[role="menuitem"]'];
+                            for (const sel of sels) {
+                                for (const e of scope.querySelectorAll(sel)) {
+                                    if (e.offsetParent === null) continue;
+                                    const t = (e.innerText || '').trim();
+                                    if (t && t.includes(w) && t.length < 80 && t.length < bestLen) {
+                                        best = e; bestLen = t.length;
+                                    }
+                                }
+                            }
+                            if (best) { best.click(); return best.innerText.trim(); }
+                        }
+                    }
+                    return null;
+                }""", list(wants))
+            if hit:
+                return hit
+        except Exception:
+            pass
+        await page.wait_for_timeout(1500)
+    return None
+
+
 async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug=None):
     """Open a dropdown by clicking its button, then pick an option by text.
     VERIFIES the pick via the section's anchor heading (which stays
@@ -1084,16 +1123,9 @@ async def pick_dropdown_option(page, button_text, wants, anchor_text=None, debug
             "() => !!document.querySelector('.dropdown-menu.show')")
         dbg["menu_open"] = menu_open
         # the menu container appears before its items load (they come from
-        # an API) — wait until at least one option is actually present
-        items_ready = False
-        try:
-            await page.wait_for_selector(
-                ".dropdown-menu.show .dropdown-item", timeout=8000)
-            items_ready = True
-        except Exception:
-            items_ready = False
-        dbg["menu_items_ready"] = items_ready
-        picked = await click_dropdown_option(page, wants)
+        # an API and can take many seconds) — poll until the wanted option
+        # actually appears, then click it
+        picked = await wait_and_click_option(page, wants, timeout_ms=30000)
         dbg["option_clicked"] = picked
         if not picked:
             return None
