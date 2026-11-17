@@ -294,6 +294,32 @@ class KarlancerAdapter:
             if not await btn.count():
                 return {"status": "form_error", "filled_values": fv, "error_message": "submitBid button not found"}
             await btn.scroll_into_view_if_needed(); await btn.click()
+            await page.wait_for_timeout(2500)
+            # A confirmation modal may appear after submitBid (confirm
+            # spending the tokens). If a modal overlay is open with a
+            # confirm button, click it — the bid itself costs tokens
+            # (6 here), which is the normal cost of bidding, not a purchase.
+            modal_clicked = await page.evaluate("""() => {
+                const CONFIRM = ["تایید و ثبت", "تایید نهایی", "ثبت نهایی", "تایید", "بله", "ادامه", "ثبت پیشنهاد"];
+                const btns = [...document.querySelectorAll('button, a, [role="button"]')]
+                    .filter(e => e.offsetParent !== null && CONFIRM.includes((e.innerText||'').trim()));
+                if (!btns.length) return null;
+                const inOverlay = btns.find(b => {
+                    let p = b;
+                    for (let i = 0; i < 6 && p; i++) {
+                        const cs = getComputedStyle(p);
+                        if (cs.position === 'fixed') return true;
+                        p = p.parentElement;
+                    }
+                    return false;
+                });
+                const target = inOverlay || btns[btns.length - 1];
+                if (target.id === 'submitBid') return null;
+                const label = (target.innerText||'').trim();
+                target.click();
+                return label;
+            }""")
+            fv["confirm_modal_clicked"] = modal_clicked
             await page.wait_for_timeout(6000)
             fv["after_errors"] = await _errors(page)
             still = await page.locator("button#submitBid").count() and await page.locator("button#submitBid").first.is_visible()
