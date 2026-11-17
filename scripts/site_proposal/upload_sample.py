@@ -22,6 +22,14 @@ Modes:
            real image, verify the form reveals and the publish button
            enables, then exit. Submits NOTHING. Tests the one chain a probe
            cannot: attach -> form reveal -> publish enabled.
+  service-probe — Karlancer ONLY: probe the SERVICE flow (خدمت). The profile
+           has NO portfolio form (probe 2026-11-17: public profile page has
+           no forms at all); a freelancer's work is published as a service
+           via the panel /panel/services -> "ثبت خدمت جدید". Dumps the
+           services page and the new-service form structure. Submits NOTHING.
+  service-create — Karlancer ONLY: create the service (title, description,
+           category, price, delivery, demo screenshot) and verify it appears
+           in /panel/services. Implemented from the service-probe form dump.
 
 Usage (on the runner):
     python3 -m scripts.site_proposal.upload_sample \
@@ -38,6 +46,12 @@ import os
 import sys
 
 SITE_HOME = {"parscoders": "https://parscoders.com", "karlancer": "https://karlancer.com"}
+# Karlancer services (خدمت): the profile has NO portfolio form. A freelancer's
+# work is published as a SERVICE via the panel: /panel/services ("خدمت‌های من")
+# -> "ثبت خدمت جدید" (register a new service). Probe 2026-11-17 confirmed the
+# public profile page has no forms at all and the panel links to /panel/services.
+SERVICES_URL = "https://karlancer.com/panel/services"
+SERVICE_NEW_WORDS = ("خدمت جدید", "ثبت خدمت", "ایجاد خدمت", "افزودن خدمت", "خدمت تازه")
 PROFILE_WORDS = ("پروفایل", "نمونه کار", "نمونه‌کار", "portfolio", "پروفایل من", "سوابق")
 # Words that mark a portfolio ADD/MANAGE link (as opposed to a sample display page).
 # Probe 2026-11-16 found the old logic returning a /resume/portfolio/show/<id>/ display
@@ -709,6 +723,96 @@ async def fill_field(page, field, value):
         return False
 
 
+async def dump_select_options(page):
+    """For every <select> on the page: name/id + its options (value + text).
+    dump_forms() does not include options; a service form's category/price
+    selects are only understandable with them."""
+    try:
+        return await page.evaluate(
+            """() => [...document.querySelectorAll('select')].map(s => ({
+                name: s.getAttribute('name') || '',
+                id: s.id || '',
+                options: [...s.options].map(o => ({value: o.value,
+                    text: (o.text || '').trim().slice(0, 80)}))
+            }))""")
+    except Exception:
+        return []
+
+
+async def service_probe(page, home, out_dir):
+    """Karlancer service flow probe. Submits NOTHING.
+
+    Goes to /panel/services ("خدمت‌های من"), dumps its links/buttons/forms,
+    then follows/clicks the "new service" control ("ثبت خدمت جدید" and
+    siblings) and dumps the service-creation form. Returns a result dict.
+    Every URL comes from a link on the actual logged-in page — nothing guessed
+    except the /panel/services entry point, which the 2026-11-17 probe already
+    saw linked from the panel."""
+    res = {}
+    await page.goto(SERVICES_URL, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    await page.screenshot(path=os.path.join(out_dir, "services.png"))
+    links = await collect_links(page)
+    res["services_url"] = page.url
+    res["logged_in"] = await detect_logged_in(page, links)
+    res["links"] = links[:200]
+    res["buttons"] = await collect_buttons(page)
+    res["forms"] = await dump_forms(page)
+    try:
+        res["page_title"] = await page.title()
+    except Exception:
+        pass
+    # Find the new-service control: a link first, then a button.
+    new_link = None
+    for l in links:
+        hay = ((l.get("href") or "") + " " + (l.get("text") or "")).lower()
+        if any(w.lower() in hay for w in SERVICE_NEW_WORDS):
+            new_link = l
+            break
+    res["new_service_link"] = new_link
+    href = (new_link.get("href") or "").strip() if new_link else ""
+    if href and href not in ("#", "javascript:void(0)", "javascript:;", "javascript:"):
+        create_url = _abs_url(home, href)
+        res["create_url"] = create_url
+        await page.goto(create_url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(2500)
+        await page.screenshot(path=os.path.join(out_dir, "service_create.png"))
+        res["create_page_url"] = page.url
+        try:
+            res["create_page_title"] = await page.title()
+            res["create_headings"] = await page.evaluate(
+                "() => [...document.querySelectorAll('h1,h2,h3')].map(h => h.innerText.trim()).filter(t => t).slice(0, 20)")
+        except Exception:
+            pass
+        res["create_links"] = (await collect_links(page))[:200]
+        res["create_buttons"] = await collect_buttons(page)
+        res["create_forms"] = await dump_forms(page)
+        res["create_selects"] = await dump_select_options(page)
+    else:
+        # Maybe a <button> (not a link) opens the create form/modal.
+        clicked = None
+        for word in SERVICE_NEW_WORDS:
+            try:
+                loc = page.locator(f"button:has-text('{word}')")
+                if await loc.count() > 0:
+                    await loc.first.click(timeout=5000)
+                    clicked = word
+                    break
+            except Exception as e:  # noqa: BLE001 - record and continue
+                res.setdefault("button_errors", []).append(f"{word}: {type(e).__name__}: {e}")
+        res["new_service_button"] = clicked
+        if clicked:
+            await page.wait_for_timeout(2500)
+            await page.screenshot(path=os.path.join(out_dir, "service_create.png"))
+            res["create_page_url"] = page.url
+            res["create_links"] = (await collect_links(page))[:200]
+            res["create_buttons"] = await collect_buttons(page)
+            res["create_forms"] = await dump_forms(page)
+            res["create_selects"] = await dump_select_options(page)
+    res["note"] = "service-probe only: structure recorded, nothing submitted"
+    return res
+
+
 async def main_async(args):
     result = {"ok": False, "mode": args.mode, "site": args.site, "submitted": False,
               "job_id": args.job_id, "sample_url": args.sample_url}
@@ -757,6 +861,16 @@ async def main_async(args):
             page = await ctx.new_page()
             await page.goto(home, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(2000)
+            if args.mode in ("service-probe", "service-create"):
+                # Karlancer service flow (no portfolio form on this site).
+                svc = await service_probe(page, home, out_dir)
+                result.update(svc)
+                if args.mode == "service-probe":
+                    result["ok"] = True
+                    return save()
+                result["error"] = ("service-create is not implemented yet — "
+                                   "run service-probe first and implement it from its form dump")
+                return save()
             profile_url = args.profile_url
             info = {}
             if not profile_url:
@@ -1006,7 +1120,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create"])
     ap.add_argument("--job-id", required=True)
     ap.add_argument("--results-dir", required=True)
     ap.add_argument("--profile-url", default="")
