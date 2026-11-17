@@ -1069,7 +1069,7 @@ async def wait_and_click_option(page, wants, timeout_ms=30000):
                     for (const w of wants) {
                         for (const scope of scopes) {
                             let best = null, bestLen = 1e9;
-                            const sels = ['.dropdown-item', 'li', '[role="option"]', '[role="menuitem"]'];
+                            const sels = ['.dropdown-item', 'li', '[role="option"]', '[role="menuitem"]', 'div', 'span', 'a', 'button'];
                             for (const sel of sels) {
                                 for (const e of scope.querySelectorAll(sel)) {
                                     if (e.offsetParent === null) continue;
@@ -1293,12 +1293,13 @@ async def service_create(page, home, out_dir, args):
     # form, or the tag input ignores Enter and the dropdown picks race
     step1 = {}
     step1["skills_ready"] = await wait_skills_ready(page)
-    # the category menu offers only design services; for a bot the right
-    # category is "طراحی ربات" (bot design) — there is no programming
-    # category in this menu
+    # the category menu lists TOP-LEVEL categories (design, programming,
+    # content, ...); the bot belongs under "برنامه‌نویسی" (Programming).
+    # (The "طراحی ربات" items seen earlier are subcategories of the
+    # design category, not top-level categories.)
     cat_dbg, sub_dbg = {}, {}
     step1["category"] = await pick_dropdown_option(
-        page, "دسته‌بندی خدمت", ("طراحی ربات",),
+        page, "دسته‌بندی خدمت", ("برنامه‌نویسی",),
         anchor_text="یک دسته‌بندی انتخاب کنید", debug=cat_dbg)
     step1["category_debug"] = cat_dbg
     step1["subcategory"] = await pick_dropdown_option(
