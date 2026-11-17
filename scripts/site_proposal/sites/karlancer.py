@@ -320,7 +320,25 @@ class KarlancerAdapter:
                 return label;
             }""")
             fv["confirm_modal_clicked"] = modal_clicked
-            await page.wait_for_timeout(6000)
+            await page.wait_for_timeout(3000)
+            # RETRY: if the form is still open, the Playwright click may
+            # have been intercepted (overlay). Click submitBid via JS,
+            # which bypasses actionability/overlay checks.
+            still_open = await page.evaluate("""() => {
+                const sb = document.querySelector('button#submitBid');
+                return !!(sb && sb.offsetParent !== null);
+            }""")
+            fv["js_retry_needed"] = bool(still_open)
+            if still_open:
+                js_clicked = await page.evaluate("""() => {
+                    const sb = document.querySelector('button#submitBid');
+                    if (!sb) return false;
+                    sb.click();
+                    return true;
+                }""")
+                fv["js_retry_clicked"] = bool(js_clicked)
+                await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(3000)
             fv["after_errors"] = await _errors(page)
             # DIAGNOSTIC: capture the form state right after the submit click,
             # before navigating away — what is visible, what blocks the submit.
