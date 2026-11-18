@@ -706,10 +706,79 @@ async def _dump_share_candidates(page):
         return {"error": type(e).__name__}
 
 
+async def _find_share(page):
+    """Locate the publish control on the caption screen. Returns
+    (locator, selector-description) for the first visible, enabled
+    candidate, or (None, diagnostics).
+
+    Why this exists: the 2026-11-18 live run failed with "no Share button
+    on the caption screen" even though its caption.png shows the word
+    Share, in blue, at the top-right of the dialog header. The old search
+    only looked for <button> or div[role='button'] — but Instagram's
+    header action is a plain <div> with no role in the current web UI,
+    so it was never matched. This finder also accepts that plain div
+    (exact own text 'Share') and skips disabled controls (the video
+    still processing keeps Share disabled for a while).
+    Does NOT click."""
+    cands = []
+    specs = [
+        ("button[name=Share]", page.get_by_role("button", name="Share")),
+        ("button:has-text(Share)", page.locator("button:has-text('Share')")),
+        ("div[role=button]:has-text(Share)",
+         page.locator("div[role='button']:has-text('Share')")),
+        ("dialog div:text-is(Share)",
+         page.locator("[role='dialog'] div:text-is('Share')")),
+        ("div:text-is(Share)", page.locator("div:text-is('Share')")),
+    ]
+    for desc, loc in specs:
+        try:
+            n = await loc.count()
+        except Exception:
+            continue
+        for i in range(n):
+            el = loc.nth(i)
+            try:
+                if not await el.is_visible(timeout=1000):
+                    continue
+                disabled = await el.evaluate(
+                    "(e) => e.disabled === true || "
+                    "e.getAttribute('aria-disabled') === 'true'")
+                cands.append({"selector": desc, "disabled": bool(disabled)})
+                if not disabled:
+                    return el, desc
+            except Exception:
+                continue
+    return None, {"candidates": cands}
+
+
+async def _click_share(page, log, timeout_s=120):
+    """Poll for an enabled Share control and click it. The video is
+    still processing for a while after the caption is filled, so the
+    control can be disabled at first — wait up to timeout_s for it to
+    become enabled. Returns the matched selector description, or None."""
+    last_diag = {}
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        loc, diag = await _find_share(page)
+        if loc is not None:
+            try:
+                await loc.click(timeout=10000)
+                return diag
+            except Exception:
+                pass
+        last_diag = diag
+        await page.wait_for_timeout(5000)
+    log("share_search", False,
+        f"no enabled Share control in {timeout_s}s: {last_diag}")
+    return None
+
+
 async def run_probe(page, video_path, caption, out_dir, log):
     """Open Create -> pick Reel -> attach the video -> walk to the caption
-    screen -> verify the caption field is findable and fillable -> close
-    the dialog with Discard. Submits NOTHING (Share is never clicked)."""
+    screen -> verify the caption field is findable and fillable -> dump
+    the Share control's DOM and check the post flow's Share finder can
+    see it -> close the dialog with Discard. Submits NOTHING (Share is
+    never clicked)."""
     res = {"dialog_text": "", "upload_dialog_text": "", "duration_shown": None,
            "limit_error": None, "reel_choice": None, "file_input_found": False,
            "caption_field_found": False, "caption_filled": False,
@@ -811,6 +880,13 @@ async def run_probe(page, video_path, caption, out_dir, log):
         f"{res['share_dom']['candidates_per_sample']} visible="
         f"{res['share_dom']['share_visible']} enabled="
         f"{res['share_dom']['share_enabled']}")
+    # Finder check (no click): does the Share control the post flow
+    # would click actually exist and enabled on this screen?
+    share_loc, share_diag = await _find_share(page)
+    res["share_found"] = share_loc is not None
+    res["share_selector"] = share_diag if isinstance(share_diag, str) else None
+    log("share_finder", bool(share_loc),
+        f"found={res['share_found']} via={res['share_selector']}")
     # Close the dialog WITHOUT proceeding: Escape, then a Discard/close click.
     try:
         await page.keyboard.press("Escape")
@@ -866,19 +942,11 @@ async def run_post(page, video_path, caption, out_dir, log):
         await page.screenshot(path=os.path.join(out_dir, "caption.png"))
     except Exception:
         pass
-    hit = await _click_visible_text(page, ("Share",), timeout_ms=15000)
-    if not hit:
-        try:
-            loc = page.locator("div[role='button']:has-text('Share')").first
-            if await loc.count() and await loc.is_visible(timeout=5000):
-                await loc.click(timeout=10000)
-                hit = "Share (role=button)"
-        except Exception:
-            pass
+    hit = await _click_share(page, log)
     if not hit:
         return {"ok": False, "status": "post_failed",
                 "error_message": "no Share button on the caption screen"}
-    log("share_clicked", True, "Share clicked; waiting for publish confirmation")
+    log("share_clicked", True, f"Share clicked via {hit}; waiting for publish confirmation")
     # Wait for the shared confirmation and capture the post URL.
     deadline = time.time() + 180
     post_url = None
@@ -1063,7 +1131,8 @@ async def amain(args):
                                                 "caption_field_found", "caption_filled",
                                                 "caption_selector", "attach_method",
                                                 "create_attempts", "create_menu_text",
-                                                "share_dom")})
+                                                "share_dom", "share_found",
+                                                "share_selector")})
                         if probe.get("error"):
                             return finish("probe_failed", error="probe failed",
                                           error_message=probe["error"])
