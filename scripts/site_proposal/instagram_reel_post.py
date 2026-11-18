@@ -648,6 +648,64 @@ async def detect_login(page):
 # ---------------------------------------------------------------------------
 # probe / post flows
 # ---------------------------------------------------------------------------
+async def _dump_share_candidates(page):
+    """Snapshot every element that could be the Share/publish control on
+    the caption screen, plus processing indicators. Diagnostic only —
+    clicks nothing. Returns a dict (empty/error on failure)."""
+    js = """() => {
+      const vis = (el) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.display !== 'none'
+               && cs.visibility !== 'hidden';
+      };
+      const describe = (el) => {
+        const r = el.getBoundingClientRect();
+        const cls = el.className && el.className.baseVal !== undefined
+                    ? el.className.baseVal : String(el.className || '');
+        return {tag: el.tagName.toLowerCase(),
+                role: el.getAttribute('role'),
+                aria_label: el.getAttribute('aria-label'),
+                text: (el.innerText || '').trim().slice(0, 80),
+                own_text: [...el.childNodes].filter(n => n.nodeType === 3)
+                          .map(n => n.textContent.trim()).join(' ').slice(0, 80),
+                disabled: el.disabled === true,
+                aria_disabled: el.getAttribute('aria-disabled'),
+                visible: vis(el),
+                rect: [Math.round(r.x), Math.round(r.y),
+                       Math.round(r.width), Math.round(r.height)],
+                cls: cls.slice(0, 120)};
+      };
+      const out = {candidates: [], header_buttons: [], spinners: [],
+                   dialog_text: '', body_has_processing: false};
+      for (const el of document.querySelectorAll('body *')) {
+        const own = [...el.childNodes].filter(n => n.nodeType === 3)
+                      .map(n => n.textContent.trim()).join(' ');
+        if (own === 'Share' || own.toLowerCase().includes('share')) {
+          out.candidates.push(describe(el));
+        }
+      }
+      const dlg = document.querySelector("[role='dialog']");
+      if (dlg) {
+        out.dialog_text = (dlg.innerText || '').slice(0, 500);
+        for (const el of dlg.querySelectorAll('button, [role="button"], a')) {
+          out.header_buttons.push(describe(el));
+        }
+      }
+      for (const el of document.querySelectorAll(
+               '[role="progressbar"], [aria-label*="loading" i]')) {
+        out.spinners.push(describe(el));
+      }
+      out.body_has_processing =
+        /processing|uploading/i.test(document.body.innerText || '');
+      return out;
+    }"""
+    try:
+        return await page.evaluate(js)
+    except Exception as e:
+        return {"error": type(e).__name__}
+
+
 async def run_probe(page, video_path, caption, out_dir, log):
     """Open Create -> pick Reel -> attach the video -> walk to the caption
     screen -> verify the caption field is findable and fillable -> close
@@ -713,6 +771,46 @@ async def run_probe(page, video_path, caption, out_dir, log):
         await page.screenshot(path=os.path.join(out_dir, "caption.png"))
     except Exception:
         pass
+    # DOM snapshot of the caption screen: find the real Share control and
+    # whether it appears late (video still processing). Sampled 3x over
+    # ~40 s. Diagnostic only — nothing is clicked here.
+    dom_samples = []
+    for sample_i in range(3):
+        snap = await _dump_share_candidates(page)
+        snap["sample"] = sample_i
+        dom_samples.append(snap)
+        try:
+            await page.screenshot(
+                path=os.path.join(out_dir, f"caption_dom_{sample_i}.png"))
+        except Exception:
+            pass
+        if sample_i < 2:
+            await page.wait_for_timeout(20000)
+    res["share_dom"] = {
+        "samples": len(dom_samples),
+        "candidates_per_sample": [len(s.get("candidates", []))
+                                  for s in dom_samples],
+        "share_visible": [any(c.get("visible") for c in s.get("candidates", []))
+                          for s in dom_samples],
+        "share_enabled": [any(c.get("visible") and not c.get("disabled")
+                              and c.get("aria_disabled") != "true"
+                              for c in s.get("candidates", []))
+                          for s in dom_samples],
+        "spinners_per_sample": [len(s.get("spinners", []))
+                                for s in dom_samples],
+        "body_processing": [bool(s.get("body_has_processing"))
+                            for s in dom_samples],
+    }
+    try:
+        with open(os.path.join(out_dir, "caption_dom.json"), "w") as f:
+            json.dump(dom_samples, f, indent=2)
+    except Exception:
+        pass
+    log("share_dom", True,
+        f"{len(dom_samples)} samples; candidates="
+        f"{res['share_dom']['candidates_per_sample']} visible="
+        f"{res['share_dom']['share_visible']} enabled="
+        f"{res['share_dom']['share_enabled']}")
     # Close the dialog WITHOUT proceeding: Escape, then a Discard/close click.
     try:
         await page.keyboard.press("Escape")
@@ -964,7 +1062,8 @@ async def amain(args):
                                                 "reel_choice", "file_input_found",
                                                 "caption_field_found", "caption_filled",
                                                 "caption_selector", "attach_method",
-                                                "create_attempts", "create_menu_text")})
+                                                "create_attempts", "create_menu_text",
+                                                "share_dom")})
                         if probe.get("error"):
                             return finish("probe_failed", error="probe failed",
                                           error_message=probe["error"])
