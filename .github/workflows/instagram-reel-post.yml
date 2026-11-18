@@ -1,0 +1,131 @@
+name: Instagram Reel Post
+
+# Posts one Instagram Reel from a SAVED SESSION (SITE_SESSION_INSTAGRAM).
+# Mirrors site-proposal.yml / profile-sample-upload.yml: the caller dispatches
+# this workflow with a job_id and reads jobs/<job_id>/result.json back from
+# hq-ai-results. No username/password anywhere; the session is a sealed
+# GitHub secret (see scripts/site_proposal/README_instagram.md).
+#
+# PRIVACY RULE (user order 2026-11-18): the Instagram session is used ONLY
+# for posting his Reels — nothing else on the account, ever. The runner
+# script enforces this with a navigation allowlist (home, create dialog,
+# published post URL). It never opens DMs, the feed, or any other page.
+#
+# SAFETY: mode=probe (default) submits NOTHING. mode=post publishes ONLY
+# when dry_run is false. The default dispatch (probe + dry_run=true) can
+# never post anything, even with a valid session.
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'Public URL of the Reel video (mp4)'
+        required: true
+        type: string
+      caption:
+        description: 'Reel caption (Persian + hashtags)'
+        required: false
+        type: string
+        default: ''
+      mode:
+        description: 'probe (verify login + inspect uploader, submit nothing) or post (publish)'
+        required: true
+        type: choice
+        default: 'probe'
+        options:
+          - probe
+          - post
+      dry_run:
+        description: 'true (default): never publish. false + mode=post: publish for real'
+        required: true
+        type: choice
+        default: 'true'
+        options:
+          - 'true'
+          - 'false'
+      job_id:
+        description: 'Job id, e.g. ig-20261118-xxxx'
+        required: true
+        type: string
+      notion_page_id:
+        description: 'Notion queue row id (traceability only)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  instagram-reel-post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout agw-workers
+        uses: actions/checkout@v4
+
+      - name: Checkout hq-ai-results
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/hq-ai-results
+          token: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
+          path: hq-ai-results
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run Instagram Reel poster
+        env:
+          VIDEO_URL_INPUT: ${{ inputs.video_url }}
+          CAPTION_INPUT: ${{ inputs.caption }}
+          MODE_INPUT: ${{ inputs.mode }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          JOB_ID_INPUT: ${{ inputs.job_id }}
+          NOTION_PAGE_ID_INPUT: ${{ inputs.notion_page_id }}
+          SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
+          SITE_SESSION_INSTAGRAM: ${{ secrets.SITE_SESSION_INSTAGRAM }}
+          PYTHONPATH: .
+        run: |
+          python3 -m scripts.site_proposal.instagram_reel_post \
+            --video-url "$VIDEO_URL_INPUT" \
+            --caption "$CAPTION_INPUT" \
+            --mode "$MODE_INPUT" \
+            --dry-run "$DRY_RUN_INPUT" \
+            --job-id "$JOB_ID_INPUT" \
+            --notion-page-id "$NOTION_PAGE_ID_INPUT" \
+            --results-dir hq-ai-results
+
+      - name: Commit and push results
+        if: always()
+        env:
+          JOB_ID_INPUT: ${{ inputs.job_id }}
+        run: |
+          cd hq-ai-results
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          [ -d "jobs/$JOB_ID_INPUT" ] && git add "jobs/$JOB_ID_INPUT"
+          if git diff --staged --quiet; then
+            echo "No changes to commit in hq-ai-results."
+            exit 0
+          fi
+          git commit -m "instagram-reel: job $JOB_ID_INPUT [skip ci]"
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Push attempt $i of $MAX_RETRIES..."
+            if git pull --rebase origin main && git push origin HEAD:main; then
+              echo "Successfully pushed results to hq-ai-results."
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          echo "Failed to push results to hq-ai-results after $MAX_RETRIES attempts."
+          exit 1
