@@ -1665,7 +1665,20 @@ async def service_create(page, home, out_dir, args):
         page, "مثلا طراحی یک لوگو", svc_title)
     step3["delivery"] = await fill_by_placeholder(page, "روز", f"{args.delivery_days} روز")
     step3["orders"] = await fill_by_placeholder(page, "سفارش", "1")
-    step3["description"] = await fill_by_name(page, "description", args.description)
+    # Karlancer requires the service description to be at least 300 chars;
+    # the driver passes only a one-line "sample for project: <title>" (~70),
+    # which the wizard rejects ("توضیحات نباید کمتر از ۳۰۰ کارکتر باشد",
+    # kar-341787). Expand it with an accurate standard paragraph about what
+    # the service delivers — full source + setup guide + one-time
+    # configuration + use explained + later support — true for every service.
+    svc_desc = (args.description or "").strip()
+    svc_desc += ("\n\nاین خدمت شامل طراحی و پیاده‌سازی کامل، تحویل سورس کامل به همراه "
+                 "راهنمای نصب و راه‌اندازی روی سرور و یک‌بار تنظیم مشخصات شماست. "
+                 "پس از تحویل، نحوه‌ی استفاده و مدیریت خدمت را هم کامل توضیح می‌دهم "
+                 "تا بدون نیاز به دانش فنی بتوانید از آن استفاده کنید. در صورت نیاز "
+                 "به تغییر یا افزودن امکانات، پشتیبانی و توسعه‌ی بعدی هم قابل انجام است.")
+    step3["description"] = await fill_by_name(page, "description", svc_desc)
+    step3["description_chars"] = len(svc_desc)
     step3["delivery_description"] = await fill_by_name(
         page, "deliveryDescription",
         "سورس کامل + راهنمای نصب و راه‌اندازی + یک‌بار تنظیم مشخصات شما.")
