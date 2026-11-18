@@ -849,6 +849,9 @@ async def amain(args):
 
     def finish(status, **extra):
         result["status"] = status
+        # ok must agree with status: a probe that reached the caption
+        # screen and a published post are successes, not failures.
+        result["ok"] = status in ("probe_ok", "posted")
         result.update(extra)
         try:
             path = save_result(args.results_dir, args.job_id, result, mask)
