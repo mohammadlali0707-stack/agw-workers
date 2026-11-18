@@ -30,13 +30,20 @@ automation (scripts/site_proposal/runner.py + upload_sample.py):
 
 Modes:
   probe (default) — verify the session logs in, open the Create dialog,
-    attach the video file, and REPORT what the uploader says (duration it
-    shows, any length limit / error text, whether a Reel choice appears),
-    then close the dialog. Submits NOTHING. Run this first: Instagram's
-    web UI and its length limits are UNVERIFIED until a live probe reports.
-  post — the full flow: upload -> Next -> caption -> Share -> verify the
-    post URL. ONLY runs when dry_run is false AND mode is post. Anything
-    else refuses with status "dry_run" before any browser work.
+    pick Reel in the Create menu, attach the video file, walk through
+    Crop/Edit to the caption screen, verify the caption field is findable
+    and fillable (filled with the supplied caption, or a clearly-marked
+    TEST string when none is supplied), and REPORT what the uploader says
+    (duration it shows, any length limit / error text), then close the
+    dialog with Discard. Submits NOTHING — Share is never clicked in
+    probe mode. Run this first: Instagram's web UI and its length limits
+    are UNVERIFIED until a live probe reports.
+  post — the full flow: upload -> Reel -> Next -> caption (pasted VERBATIM
+    from the --caption input, never generated or reworded here; a post
+    with no caption is REFUSED before any browser work) -> Share ->
+    verify the post URL. ONLY runs when dry_run is false AND mode is
+    post. Anything else refuses with status "dry_run" before any browser
+    work.
 
   dry_run (default true) is a second, independent gate: even mode=post
   refuses to publish while dry_run is true.
@@ -310,28 +317,145 @@ async def _wait_dialog(page, timeout_ms=15000):
         return False
 
 
-CREATE_SELECTORS = [
+async def _dismiss_popups(page):
+    """Dismiss 'Save your login info?' / 'Turn on Notifications' popups
+    (Not Now), if Instagram shows them after login. Nothing else."""
+    for text in ("Not Now", "Not now"):
+        try:
+            hit = await _click_visible_text(page, (text,), timeout_ms=3000)
+            if hit:
+                await page.wait_for_timeout(1000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _menu_text(page):
+    """Inner text of the Create menu ([role=menu]), '' when absent."""
+    try:
+        return await page.evaluate(
+            """() => {
+              const m = document.querySelector('[role="menu"]');
+              return m ? m.innerText.slice(0, 1000) : '';
+            }""")
+    except Exception:
+        return ""
+
+
+async def _create_state(page):
+    """-> (menu_text, dialog_open, dialog_text)."""
+    menu = await _menu_text(page)
+    dlg = await _dialog_text(page)
+    return menu, bool(dlg), dlg
+
+
+# Click targets for the sidebar Create (+) control, most specific first.
+# NOTE: clicking the bare <svg> is unreliable — prefer its clickable
+# ancestor (<a> / [role=button]). At viewports narrower than ~1920px
+# Instagram collapses the sidebar and the + button is not clickable,
+# which is why the browser runs at 1920x1080 (see amain).
+CREATE_CLICK_TARGETS = [
+    "a:has(svg[aria-label='New post'])",
+    "div[role='button']:has(svg[aria-label='New post'])",
+    "a:has(svg[aria-label='Post'])",
     "svg[aria-label='New post']",
     "[aria-label='New post']",
-    "a[href='/create/']",
-    "div[role='button']:has-text('Create')",
     "a:has-text('Create')",
 ]
 
 
-async def _open_create(page):
-    """Click the Create control. Returns True when a dialog opened."""
-    for sel in CREATE_SELECTORS:
-        try:
-            loc = page.locator(sel).first
-            if await loc.count() and await loc.is_visible(timeout=3000):
+async def _open_create(page, log):
+    """Click Create (+), pick Reel in the Create menu, wait for the upload
+    dialog. Returns a dict with opened / reel_choice / menu_text /
+    attempts (per-selector diagnostics) / error.
+
+    REELS ONLY: if the Create menu appears without a Reel option, this
+    FAILS instead of picking Post — a regular Feed post is never an
+    acceptable fallback.
+    """
+    attempts = []
+    menu, dlg_open, _ = await _create_state(page)
+    clicked_any = False
+    if not menu and not dlg_open:
+        for sel in CREATE_CLICK_TARGETS:
+            try:
+                loc = page.locator(sel).first
+                n = await loc.count()
+                vis = False
+                if n:
+                    try:
+                        vis = await loc.is_visible(timeout=3000)
+                    except Exception:
+                        vis = False
+                if not n or not vis:
+                    attempts.append({"selector": sel, "count": n,
+                                     "visible": vis, "clicked": False})
+                    continue
                 await loc.click(timeout=8000)
+                clicked_any = True
                 await page.wait_for_timeout(1500)
-                if await _wait_dialog(page, timeout_ms=10000):
-                    return True
-        except Exception:
-            continue
-    return await _wait_dialog(page, timeout_ms=5000)
+                menu, dlg_open, _ = await _create_state(page)
+                attempts.append({"selector": sel, "count": n, "visible": True,
+                                 "clicked": True, "menu": (menu or "")[:300],
+                                 "dialog_open": dlg_open})
+                if menu or dlg_open:
+                    break
+            except Exception as e:
+                attempts.append({"selector": sel, "clicked": False,
+                                 "error": type(e).__name__})
+                continue
+        if not clicked_any:
+            # Last resort: the link by its accessible name.
+            try:
+                link = page.get_by_role("link", name="Create").first
+                if await link.count() and await link.is_visible(timeout=3000):
+                    await link.click(timeout=8000)
+                    clicked_any = True
+                    await page.wait_for_timeout(1500)
+                    menu, dlg_open, _ = await _create_state(page)
+                    attempts.append({"selector": "get_by_role(link, Create)",
+                                     "clicked": True, "menu": (menu or "")[:300],
+                                     "dialog_open": dlg_open})
+            except Exception as e:
+                attempts.append({"selector": "get_by_role(link, Create)",
+                                 "clicked": False, "error": type(e).__name__})
+    if not clicked_any and not menu and not dlg_open:
+        return {"opened": False, "attempts": attempts, "menu_text": menu,
+                "error": "no Create control was visible/clickable"}
+    # The Create menu offers Post vs Reel: always pick Reel.
+    reel_choice = None
+    if menu:
+        if "reel" in menu.lower():
+            hit = None
+            for sel in ("[role='menuitem']:has-text('Reel')",
+                        "[role='menu'] :text('Reel')",
+                        "div[role='button']:has-text('Reel')"):
+                try:
+                    loc = page.locator(sel).first
+                    if await loc.count() and await loc.is_visible(timeout=3000):
+                        await loc.click(timeout=8000)
+                        hit = sel
+                        break
+                except Exception:
+                    continue
+            if not hit:
+                return {"opened": False, "attempts": attempts,
+                        "menu_text": menu,
+                        "error": "create menu shows Reel but it could not be clicked"}
+            reel_choice = "Reel"
+            log("reel_choice", True, "picked Reel in the Create menu")
+            await page.wait_for_timeout(1500)
+        else:
+            return {"opened": False, "attempts": attempts, "menu_text": menu,
+                    "error": "create menu has no Reel option — refusing to "
+                             "post as a regular Post"}
+    if not await _wait_dialog(page, timeout_ms=15000):
+        return {"opened": False, "attempts": attempts, "menu_text": menu,
+                "error": "create dialog did not open after picking Reel"}
+    dlg = await _dialog_text(page)
+    return {"opened": True, "attempts": attempts, "menu_text": menu,
+            "reel_choice": reel_choice, "dialog_text": dlg}
 
 
 async def _file_input(page):
@@ -344,6 +468,137 @@ async def _file_input(page):
         except Exception:
             continue
     return None
+
+
+async def _attach_video(page, video_path, log):
+    """Attach the video to the open create dialog.
+    The file input is created ON DEMAND: first try an input that already
+    exists; otherwise click 'Select from computer' and catch the native
+    file chooser. Returns {ok, method, error}."""
+    fi = await _file_input(page)
+    if fi is not None:
+        try:
+            await fi.set_input_files(video_path, timeout=30000)
+            return {"ok": True, "method": "set_input_files"}
+        except Exception as e:
+            log("attach", False,
+                f"set_input_files on existing input failed: {type(e).__name__}")
+    try:
+        async with page.expect_file_chooser(timeout=15000) as fc_info:
+            hit = await _click_visible_text(
+                page, ("Select from computer",), timeout_ms=10000)
+            if not hit:
+                return {"ok": False, "method": "file_chooser",
+                        "error": "no file input and no 'Select from computer' button"}
+        chooser = await fc_info.value
+        await chooser.set_files(video_path, timeout=30000)
+        return {"ok": True, "method": "file_chooser"}
+    except Exception as e:
+        return {"ok": False, "method": "file_chooser",
+                "error": f"file chooser failed: {type(e).__name__}"}
+
+
+# Caption field: on the share screen Instagram uses a contenteditable div
+# (role=textbox, aria-label contains 'caption'), NOT a <textarea>.
+# The textarea selectors are fallbacks only.
+CAPTION_SELECTORS = [
+    "div[role='textbox'][contenteditable='true'][aria-label*='caption' i]",
+    "div[role='textbox'][contenteditable='true']",
+    "[role='dialog'] div[contenteditable='true']",
+    "textarea[aria-label*='caption' i]",
+    "textarea[placeholder*='caption' i]",
+    "[role='dialog'] textarea",
+    "textarea",
+]
+
+
+async def _find_caption_field(page):
+    """-> (locator, selector) of the first visible caption field, or (None, None)."""
+    for sel in CAPTION_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() and await loc.is_visible(timeout=3000):
+                return loc, sel
+        except Exception:
+            continue
+    return None, None
+
+
+async def _fill_caption(page, caption):
+    """Fill the caption VERBATIM (never generated or reworded here).
+    Returns (found, filled, selector)."""
+    loc, sel = await _find_caption_field(page)
+    if loc is None:
+        return False, False, None
+    try:
+        await loc.click(timeout=5000)
+    except Exception:
+        pass
+    try:
+        await loc.fill(caption or "", timeout=10000)
+        return True, True, sel
+    except Exception:
+        pass
+    # Fallback for contenteditable: select-all + type.
+    try:
+        await loc.click(timeout=5000)
+        await page.keyboard.press("Control+A")
+        await page.keyboard.type(caption or "", delay=5)
+        return True, True, sel + " (typed)"
+    except Exception:
+        return True, False, sel
+
+
+async def _walk_to_caption(page, log):
+    """After the video is attached: dismiss the Reels-info popup if shown,
+    pick 9:16 on the crop screen, click Next through Crop/Edit.
+    Returns (ok, error, dialog_text_at_end)."""
+    await page.wait_for_timeout(2000)
+    try:
+        await _click_visible_text(page, ("OK", "Got it"), timeout_ms=3000)
+    except Exception:
+        pass
+    # Wait for processing to finish (Next appears, or an error).
+    deadline = time.time() + 120
+    ready = False
+    limit_err = None
+    seen = ""
+    while time.time() < deadline:
+        await page.wait_for_timeout(3000)
+        seen = await _dialog_text(page)
+        low = (seen or "").lower()
+        if any(w in low for w in ("too long", "maximum", "exceeds", "90 seconds")):
+            limit_err = (seen or "")[:500]
+            break
+        if "Next" in seen:
+            ready = True
+            break
+    if limit_err:
+        return False, f"uploader rejected the video: {limit_err}", seen
+    if not ready:
+        return False, "video did not finish processing in 120s", seen
+    # Crop screen: pick 9:16 (vertical Reel) if offered.
+    try:
+        loc = page.locator(
+            "div[role='button']:has-text('9:16'), button:has-text('9:16')").first
+        if await loc.count() and await loc.is_visible(timeout=3000):
+            await loc.click(timeout=5000)
+            await page.wait_for_timeout(1000)
+            log("aspect", True, "9:16 selected")
+    except Exception:
+        pass
+    # Next through Crop -> Edit. The caption screen has no Next; stop there.
+    for step_name in ("crop", "edit"):
+        hit = await _click_visible_text(page, ("Next",), timeout_ms=15000)
+        if not hit:
+            txt = await _dialog_text(page)
+            cf, _sel = await _find_caption_field(page)
+            if "caption" in txt.lower() or cf is not None:
+                return True, None, txt
+            return False, f"no Next button on the {step_name} screen", txt
+        await page.wait_for_timeout(2000)
+        log("next", True, step_name)
+    return True, None, await _dialog_text(page)
 
 
 async def detect_login(page):
@@ -368,7 +623,7 @@ async def detect_login(page):
     login_wall = ("/accounts/login" in url
                   or any("Log in" in (l.get("text") or "") for l in links[:40]))
     create_present = False
-    for sel in CREATE_SELECTORS:
+    for sel in CREATE_CLICK_TARGETS:
         try:
             if await page.locator(sel).count() > 0:
                 create_present = True
@@ -393,58 +648,71 @@ async def detect_login(page):
 # ---------------------------------------------------------------------------
 # probe / post flows
 # ---------------------------------------------------------------------------
-async def run_probe(page, video_path, out_dir, log):
-    """Attach the video, report what the uploader says, close the dialog.
-    Submits NOTHING."""
+async def run_probe(page, video_path, caption, out_dir, log):
+    """Open Create -> pick Reel -> attach the video -> walk to the caption
+    screen -> verify the caption field is findable and fillable -> close
+    the dialog with Discard. Submits NOTHING (Share is never clicked)."""
     res = {"dialog_text": "", "upload_dialog_text": "", "duration_shown": None,
-           "limit_error": None, "reel_choice": None, "file_input_found": False}
-    if not await _open_create(page):
-        log("open_create", False, "Create dialog did not open")
-        res["error"] = "create dialog did not open"
+           "limit_error": None, "reel_choice": None, "file_input_found": False,
+           "caption_field_found": False, "caption_filled": False,
+           "caption_selector": None, "attach_method": None,
+           "create_attempts": [], "create_menu_text": ""}
+    opened = await _open_create(page, log)
+    res["create_attempts"] = opened.get("attempts", [])
+    res["create_menu_text"] = opened.get("menu_text", "")
+    if not opened.get("opened"):
+        log("open_create", False, opened.get("error", "Create dialog did not open"))
+        res["error"] = opened.get("error", "create dialog did not open")
         return res
-    log("open_create", True, "Create dialog opened")
+    res["reel_choice"] = opened.get("reel_choice")
+    log("open_create", True,
+        f"Create dialog opened (reel_choice={res['reel_choice']})")
     try:
         await page.screenshot(path=os.path.join(out_dir, "create_dialog.png"))
     except Exception:
         pass
-    res["dialog_text"] = await _dialog_text(page)
-    fi = await _file_input(page)
-    if fi is None:
-        log("file_input", False, "no file input found in the create dialog")
-        res["error"] = "no file input in create dialog"
+    res["dialog_text"] = opened.get("dialog_text", "") or await _dialog_text(page)
+    att = await _attach_video(page, video_path, log)
+    if not att.get("ok"):
+        log("attach", False, att.get("error", "could not select the video file"))
+        res["error"] = att.get("error", "could not select the video file in the uploader")
         return res
     res["file_input_found"] = True
-    try:
-        await fi.set_input_files(video_path, timeout=30000)
-        log("attach", True, "video file selected in the uploader")
-    except Exception as e:
-        log("attach", False, f"{type(e).__name__}")
-        res["error"] = "could not select the video file in the uploader"
-        return res
-    # Wait for the video to process; capture whatever the UI reports.
-    deadline = time.time() + 90
-    seen = ""
-    while time.time() < deadline:
-        await page.wait_for_timeout(3000)
-        seen = await _dialog_text(page)
-        if seen and ("Next" in seen or "Crop" in seen or "too long" in seen.lower()
-                     or "maximum" in seen.lower() or "90" in seen or ":" in seen):
-            break
-    res["upload_dialog_text"] = seen
-    try:
-        await page.screenshot(path=os.path.join(out_dir, "upload.png"))
-    except Exception:
-        pass
+    res["attach_method"] = att.get("method")
+    log("attach", True, f"video file selected ({att.get('method')})")
+    ok, err, seen = await _walk_to_caption(page, log)
+    res["upload_dialog_text"] = seen or ""
     m = re.search(r"(\d{1,2}):(\d{2})", seen or "")
     if m:
         res["duration_shown"] = int(m.group(1)) * 60 + int(m.group(2))
     low = (seen or "").lower()
     if any(w in low for w in ("too long", "maximum", "exceeds", "90 seconds", "shorter")):
         res["limit_error"] = (seen or "")[:500]
-    if "reel" in low:
-        res["reel_choice"] = True
-    log("upload_report", True,
-        f"duration_shown={res['duration_shown']} limit_error={'yes' if res['limit_error'] else 'no'}")
+    if "reel" in low and not res["reel_choice"]:
+        res["reel_choice"] = "Reel"
+    if not ok:
+        log("walk", False, err)
+        res["error"] = err
+        return res
+    log("walk", True, "reached the caption screen")
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "upload.png"))
+    except Exception:
+        pass
+    # Caption check: fill the field (supplied caption, else a TEST string).
+    # Probe fills only — it never clicks Share, so nothing is published.
+    test_caption = (caption or "").strip() or \
+        "PROBE TEST — caption fill check only, nothing will be posted."
+    found, filled, sel = await _fill_caption(page, test_caption)
+    res["caption_field_found"] = found
+    res["caption_filled"] = filled
+    res["caption_selector"] = sel
+    log("caption_check", bool(found and filled),
+        f"field_found={found} filled={filled} via {sel}")
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "caption.png"))
+    except Exception:
+        pass
     # Close the dialog WITHOUT proceeding: Escape, then a Discard/close click.
     try:
         await page.keyboard.press("Escape")
@@ -454,83 +722,61 @@ async def run_probe(page, video_path, out_dir, log):
     except Exception:
         pass
     log("close_dialog", True, "dialog closed without publishing anything")
+    if not found:
+        res["error"] = "caption field not found on the share screen"
     return res
 
 
 async def run_post(page, video_path, caption, out_dir, log):
-    """Full publish flow. ONLY called when dry_run is false and mode is post."""
-    if not await _open_create(page):
+    """Full publish flow. ONLY called when dry_run is false and mode is post.
+    The caption is pasted VERBATIM from the caller — never generated,
+    reworded, or invented here. An empty caption is refused by the caller
+    before any browser work; this is a second check."""
+    if not (caption or "").strip():
         return {"ok": False, "status": "post_failed",
-                "error_message": "create dialog did not open"}
+                "error_message": "no caption supplied — refusing to post "
+                                 "without a caption"}
+    opened = await _open_create(page, log)
+    if not opened.get("opened"):
+        return {"ok": False, "status": "post_failed",
+                "error_message": opened.get("error", "create dialog did not open")}
     try:
         await page.screenshot(path=os.path.join(out_dir, "create_dialog.png"))
     except Exception:
         pass
-    fi = await _file_input(page)
-    if fi is None:
+    att = await _attach_video(page, video_path, log)
+    if not att.get("ok"):
         return {"ok": False, "status": "post_failed",
-                "error_message": "no file input in create dialog"}
-    try:
-        await fi.set_input_files(video_path, timeout=30000)
-    except Exception:
+                "error_message": att.get("error",
+                                         "could not select the video file in the uploader")}
+    log("attach", True, f"video file selected ({att.get('method')})")
+    ok, err, seen = await _walk_to_caption(page, log)
+    if not ok:
         return {"ok": False, "status": "post_failed",
-                "error_message": "could not select the video file in the uploader"}
-    log("attach", True, "video file selected")
-    # Wait for processing to finish (Next appears, or an error).
-    deadline = time.time() + 120
-    ready = False
-    limit_err = None
-    while time.time() < deadline:
-        await page.wait_for_timeout(3000)
-        txt = await _dialog_text(page)
-        low = txt.lower()
-        if any(w in low for w in ("too long", "maximum", "exceeds", "90 seconds")):
-            limit_err = txt[:500]
-            break
-        if "Next" in txt:
-            ready = True
-            break
-    if limit_err:
-        return {"ok": False, "status": "post_failed",
-                "error_message": f"uploader rejected the video: {limit_err}"}
-    if not ready:
-        return {"ok": False, "status": "post_failed",
-                "error_message": "video did not finish processing in 120s"}
+                "error_message": err}
     try:
         await page.screenshot(path=os.path.join(out_dir, "upload.png"))
     except Exception:
         pass
-    # Step through: crop -> cover/edit -> caption. Each screen has Next.
-    for step_name in ("crop", "cover"):
-        hit = await _click_visible_text(page, ("Next",), timeout_ms=15000)
-        if not hit:
-            return {"ok": False, "status": "post_failed",
-                    "error_message": f"no Next button on the {step_name} screen"}
-        await page.wait_for_timeout(2000)
-        log("next", True, step_name)
+    # Caption: paste the supplied caption verbatim into the field.
+    found, filled, sel = await _fill_caption(page, caption)
+    if not found or not filled:
+        return {"ok": False, "status": "post_failed",
+                "error_message": "caption field not found or could not be filled"}
+    log("caption", True, f"{len(caption)} chars pasted verbatim via {sel}")
     try:
         await page.screenshot(path=os.path.join(out_dir, "caption.png"))
     except Exception:
         pass
-    # Caption field (placeholder/aria-label varies; try several).
-    filled = False
-    for sel in ("textarea[aria-label*='caption' i]",
-                "textarea[placeholder*='caption' i]",
-                "[role='dialog'] textarea",
-                "textarea"):
-        try:
-            loc = page.locator(sel).first
-            if await loc.count() and await loc.is_visible(timeout=3000):
-                await loc.fill(caption or "", timeout=10000)
-                filled = True
-                break
-        except Exception:
-            continue
-    if not filled:
-        return {"ok": False, "status": "post_failed",
-                "error_message": "caption field not found"}
-    log("caption", True, f"{len(caption or '')} chars")
     hit = await _click_visible_text(page, ("Share",), timeout_ms=15000)
+    if not hit:
+        try:
+            loc = page.locator("div[role='button']:has-text('Share')").first
+            if await loc.count() and await loc.is_visible(timeout=5000):
+                await loc.click(timeout=10000)
+                hit = "Share (role=button)"
+        except Exception:
+            pass
     if not hit:
         return {"ok": False, "status": "post_failed",
                 "error_message": "no Share button on the caption screen"}
@@ -631,6 +877,16 @@ async def amain(args):
         return finish("error", error="bad mode",
                       error_message=f"unknown mode {args.mode!r}")
 
+    # ---- gate 2b: a real post needs a caption handed to it. The poster
+    # pastes the caption verbatim and never invents one, so an empty
+    # caption is refused here, before any download or browser work. ----
+    if args.mode == "post" and not args.dry_run and not (args.caption or "").strip():
+        log("caption_gate", False, "no caption supplied — refusing to post")
+        return finish("error", error="no caption supplied",
+                      error_message="Refusing to post without a caption: the "
+                      "poster pastes the caption it is handed verbatim and "
+                      "never invents one. Re-dispatch with the caption input filled.")
+
     # ---- download the video ----
     video_path = os.path.join("/tmp", f"ig-{args.job_id}.mp4")
     try:
@@ -651,7 +907,9 @@ async def amain(args):
             browser = await pw.chromium.launch(headless=True)
             try:
                 context = await browser.new_context(
-                    viewport={"width": 1280, "height": 800},
+                    # 1920x1080: at narrower widths Instagram collapses the
+                    # sidebar and the Create (+) button is not clickable.
+                    viewport={"width": 1920, "height": 1080},
                     user_agent=UA, locale="en-US")
                 try:
                     cookies = sanitize_cookies(session.get("cookies", []))
@@ -671,6 +929,7 @@ async def amain(args):
                                       error_message="home URL failed the allowlist (internal error)")
                     await page.goto(HOME, wait_until="domcontentloaded", timeout=60000)
                     await page.wait_for_timeout(5000)
+                    await _dismiss_popups(page)
                     try:
                         await page.screenshot(path=os.path.join(out_dir, "home.png"))
                     except Exception:
@@ -694,11 +953,15 @@ async def amain(args):
                                       "with this session. The session needs a fresh "
                                       "capture (see README_instagram.md).")
                     if args.mode == "probe":
-                        probe = await run_probe(page, video_path, out_dir, log)
+                        probe = await run_probe(page, video_path,
+                                                args.caption or "", out_dir, log)
                         result.update({k: v for k, v in probe.items()
                                        if k in ("dialog_text", "upload_dialog_text",
                                                 "duration_shown", "limit_error",
-                                                "reel_choice", "file_input_found")})
+                                                "reel_choice", "file_input_found",
+                                                "caption_field_found", "caption_filled",
+                                                "caption_selector", "attach_method",
+                                                "create_attempts", "create_menu_text")})
                         if probe.get("error"):
                             return finish("probe_failed", error="probe failed",
                                           error_message=probe["error"])
