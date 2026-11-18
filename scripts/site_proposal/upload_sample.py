@@ -41,8 +41,10 @@ result); exit 1 only when nothing could be written at all.
 """
 import argparse
 import asyncio
+import html
 import json
 import os
+import subprocess
 import sys
 
 SITE_HOME = {"parscoders": "https://parscoders.com", "karlancer": "https://karlancer.com"}
@@ -1417,6 +1419,62 @@ async def click_next(page):
     return await click_by_text_js(page, "مرحله بعد")
 
 
+async def render_sample_screenshot(ctx, out_dir, args):
+    """Render the demo sample to a PNG for Karlancer service-create.
+
+    The service wizard does NOT advance from the images step without an
+    attached image — kar-341787 failed exactly there ("wizard did not
+    advance to cost/deliverables — no error text captured") because no
+    screenshot was supplied, while the plate-change service (which HAD
+    plate_demo.png attached) sailed through. The sample files are already
+    on disk in the workflow's hq-ai-results checkout, so render from there:
+    a bot demo's index.html, or — for script demos with no page — a summary
+    page built from the script's own --dry-run output. Returns
+    (png_path, error); error is '' on success. The caller must STOP with a
+    clear error when this fails, never run the wizard imageless.
+    """
+    sample_id = (args.sample_url or "").rstrip("/").split("/")[-1]
+    sample_dir = os.path.join(args.results_dir, "samples", sample_id)
+    index = os.path.join(sample_dir, "index.html")
+    shot_path = os.path.join(out_dir, "demo.png")
+    url = None
+    width, height = 480, 1100
+    if os.path.isfile(index):
+        url = "file://" + os.path.abspath(index)
+    else:
+        script = os.path.join(sample_dir, "automation.py")
+        body = ""
+        if os.path.isfile(script):
+            try:
+                r = subprocess.run([sys.executable, script, "--dry-run"],
+                                   capture_output=True, text=True, timeout=120)
+                body = (r.stdout or "").strip()
+            except Exception:
+                body = ""
+        title = html.escape(args.service_title or args.title or sample_id)
+        doc = ("<!DOCTYPE html><html lang=\"fa\" dir=\"rtl\"><head><meta charset=\"utf-8\">"
+               f"<title>{title}</title>"
+               "<style>body{font-family:sans-serif;direction:rtl;padding:24px;background:#f6f6f6;color:#222}"
+               "h1{font-size:22px}pre{background:#fff;border:1px solid #ddd;border-radius:8px;padding:16px;white-space:pre-wrap;font-size:15px;line-height:1.9}</style></head><body>"
+               f"<h1>{title}</h1><p>نمونه اسکریپت — خروجی اجرای آزمایشی:</p><pre>{html.escape(body) if body else 'خروجی نمایشی در دسترس نیست.'}</pre></body></html>")
+        tmp_html = os.path.join(out_dir, "demo_summary.html")
+        with open(tmp_html, "w", encoding="utf-8") as f:
+            f.write(doc)
+        url = "file://" + os.path.abspath(tmp_html)
+        width, height = 640, 850
+    try:
+        shot = await ctx.new_page(viewport={"width": width, "height": height})
+        await shot.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await shot.wait_for_timeout(2500)
+        await shot.screenshot(path=shot_path)
+        await shot.close()
+    except Exception as e:  # noqa: BLE001 - report, caller stops
+        return "", f"{type(e).__name__}: {e}"
+    if not os.path.isfile(shot_path) or os.path.getsize(shot_path) < 5000:
+        return "", "screenshot file missing or too small"
+    return shot_path, ""
+
+
 async def service_create(page, home, out_dir, args):
     """Karlancer service creation (the fix for the portfolio-form blocker).
 
@@ -1596,17 +1654,21 @@ async def service_create(page, home, out_dir, args):
     # --- STEP 3: cost & deliverables ---
     step3 = {}
     step3["price"] = await fill_by_placeholder(page, "هزینه", args.price)
+    # NOTE (2026-11-18): these were hardcoded to the plate-change job; they
+    # must stay generic — the package is named by the service title, and the
+    # delivery/requirements lines describe what every service here delivers
+    # (full source + setup guide + one-time configuration) and needs.
     step3["package_title"] = await fill_by_placeholder(
-        page, "مثلا طراحی یک لوگو", "ربات رزرو خودکار نوبت تعویض پلاک")
+        page, "مثلا طراحی یک لوگو", svc_title)
     step3["delivery"] = await fill_by_placeholder(page, "روز", f"{args.delivery_days} روز")
     step3["orders"] = await fill_by_placeholder(page, "سفارش", "1")
     step3["description"] = await fill_by_name(page, "description", args.description)
     step3["delivery_description"] = await fill_by_name(
         page, "deliveryDescription",
-        "ربات آماده‌ی اجرا + راهنمای نصب و استفاده + یک‌بار تنظیم مشخصات شما (نام، پلاک، کد ملی، موبایل، مرکزها و بازه‌ی زمانی).")
+        "سورس کامل + راهنمای نصب و راه‌اندازی + یک‌بار تنظیم مشخصات شما.")
     step3["requirements"] = await fill_by_name(
         page, "requirements",
-        "نام و نام خانوادگی، شماره پلاک، کد ملی، شماره موبایل، مرکزهای مورد نظر و بازه‌ی زمانی.")
+        "آدرس سایت هدف و مشخصات مورد نیاز (فیلترها، دسترسی‌ها یا داده‌های نمونه).")
     res["step3"] = step3
     await page.screenshot(path=os.path.join(out_dir, "service_step3.png"))
     if not step3.get("price"):
@@ -2126,6 +2188,18 @@ async def main_async(args):
                     result.update(svc)
                     result["ok"] = True
                     return save()
+                # The wizard stalls on the images step without an attached
+                # image (kar-341787). Render the sample now; if that fails,
+                # stop here with a clear error instead of running a doomed
+                # wizard that fails silently at step 2.
+                if not (args.screenshot and os.path.isfile(args.screenshot)):
+                    shot_path, shot_err = await render_sample_screenshot(ctx, out_dir, args)
+                    if not shot_path:
+                        result["error"] = ("service-create: no demo screenshot available "
+                                           f"({shot_err}) — refusing to run the wizard imageless")
+                        return save()
+                    args.screenshot = shot_path
+                    result["demo_screenshot"] = os.path.basename(shot_path)
                 svc = await service_create(page, home, out_dir, args)
                 result.update(svc)
                 result["ok"] = bool(svc.get("ok"))
