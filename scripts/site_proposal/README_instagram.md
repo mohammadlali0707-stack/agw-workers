@@ -44,7 +44,7 @@ other Instagram URL is refused by the code.
 
 | Secret | Where | Notes |
 |---|---|---|
-| `SITE_SESSION_INSTAGRAM` | GitHub secret in `mohammadlali0707-stack/agw-workers` | The Instagram login session: `{"cookies": [...], "localStorage": {...}}`. Sealed (NaCl sealed box) via `/opt/hq/set_instagram_cookies.py`. **Not set yet as of 2026-11-18 — the live login test is still pending.** |
+| `SITE_SESSION_INSTAGRAM` | GitHub secret in `mohammadlali0707-stack/agw-workers` | The Instagram login session: `{"cookies": [...], "localStorage": {...}}`. Sealed (NaCl sealed box) via `/opt/hq/set_instagram_cookies.py` on 2026-11-18T17:40:59Z (10 cookies). **Login probe PASSED the same day** (run 44361625139, `english_class_0121`, no challenge). |
 | `SITE_SESSIONS` | Same repo (fallback) | Combined JSON keyed by lowercase site name (`{"instagram": {...}}`). Per-site secret wins. |
 | n8n credential `GitHub PAT (agw-workers dispatch)` | n8n, id `AM57VL09BsEKihYS` (httpHeaderAuth) | Used by the n8n workflow to dispatch the GitHub workflow and poll `result.json`. |
 | n8n credential `Notion API Key` | n8n, id `PfrA8Rmtrae2odET` (notionApi) | Used by the n8n workflow to read/update the Notion queue rows. The Notion DB must be shared with this integration or the nodes cannot see it. |
@@ -79,22 +79,65 @@ Manual trigger (no Notion needed): GitHub repo → Actions →
 3. **Login check** → `login_required` (login wall) or `checkpoint`
    (Instagram challenged the session). Both mean: re-capture the session.
 4. **Probe first** → `mode=probe` (default) only inspects: it opens the
-   Create dialog, attaches the video, reports the duration the uploader
-   shows and any length-limit error, then closes the dialog. It submits
-   nothing. Always run probe before the first post.
-5. **Post** → upload → Next → caption → Share → verify the post URL
-   loads. Result `posted` carries `post_url`.
+   Create dialog, picks **Reel** in the Create menu, attaches the video,
+   walks Crop/Edit to the caption screen, verifies the caption field is
+   findable and fillable, reports the duration the uploader shows and
+   any length-limit error, then closes the dialog with Discard. It
+   submits nothing — Share is never clicked in probe mode. Always run
+   probe before the first post.
+5. **Caption (verbatim, required for post)** → the poster NEVER writes,
+   rewords, or invents a caption. It pastes the exact caption it is
+   handed (workflow `caption` input / Notion row Caption field, written
+   by Muse together with the video) into Instagram's caption field and
+   posts. **A post with no caption is refused** before any browser work
+   (status `error`, `no caption supplied`). In probe mode the field is
+   filled with the supplied caption, or a clearly-marked TEST string
+   when none is supplied — and the dialog is then discarded, never shared.
+6. **Post** → upload → Reel → Next → caption (verbatim) → Share →
+   verify the post URL loads. Result `posted` carries `post_url`.
 
 `result.json` fields: `ok`, `status`, `job_id`, `mode`, `dry_run`,
 `video_url`, `video_bytes`, `video_seconds`, `logged_in`, `username`,
 `checkpoint`, `error`, `error_message`, `post_url`, `steps[]`
-(each step: `{step, ok, detail}`), plus `dialog_text` /
-`upload_dialog_text` / `duration_shown` / `limit_error` on probe runs.
+(each step: `{step, ok, detail}`), plus on probe runs `dialog_text` /
+`upload_dialog_text` / `duration_shown` / `limit_error` / `reel_choice`
+(`"Reel"` when the Create menu pick succeeded) / `file_input_found` /
+`attach_method` / `caption_field_found` / `caption_filled` /
+`caption_selector` / `create_attempts` (per-selector diagnostics) /
+`create_menu_text`.
+
+## The web upload flow (as fixed 2026-11-18 — what the script does)
+
+Why the first probe failed: the old script clicked the bare Create
+`<svg>` at a 1280×800 viewport and waited for a `[role=dialog]` —
+but at that width Instagram collapses the sidebar (the + button is not
+clickable), and clicking Create opens a **menu** (Post vs Reel), not a
+dialog. The fixed flow, verified against a working Playwright uploader:
+
+1. Browser viewport **1920×1080** (narrower collapses the sidebar).
+2. Dismiss "Save login info?" / "Turn on Notifications" popups (Not Now).
+3. Click Create (+) — the clickable **ancestor** of the
+   `svg[aria-label='New post']`, not the svg itself — with fallbacks.
+4. In the Create menu, click **Reel**. If the menu has no Reel option,
+   the run FAILS — it never falls back to a regular Feed Post.
+5. In the upload dialog, attach the video: the `input[type=file]` is
+   created **on demand**, so if no input exists yet the script clicks
+   **"Select from computer"** and catches the native file chooser.
+6. Dismiss the Reels-info popup if shown; pick **9:16** on the crop
+   screen; click Next through Crop → Edit to the caption screen.
+7. Caption field is a **contenteditable div**
+   (`div[role=textbox][contenteditable=true]`, aria-label contains
+   "caption") — NOT a `<textarea>`. Fill (or select-all + type).
+8. Post mode only: click **Share**, wait for "Your reel has been
+   shared", capture the `/reel/...` URL and verify it loads.
 
 ## Capturing / rotating the session (the user's one action)
 
-The session is captured **once by the user in his own desktop browser**
-— no password is ever typed into any automation or chat:
+The session is captured **once by the user in his own browser**
+— no password is ever typed into any automation or chat. (The live
+session was actually captured on his **phone's Firefox** with the free
+**Cookie-Editor** extension: Export → JSON → `site_instagram.json`.
+The desktop steps below are the fallback, not what was used.)
 
 1. On his computer, open Chrome/Edge, log into instagram.com as himself.
 2. Install the free **EditThisCookie** extension (Chrome Web Store).
@@ -119,7 +162,9 @@ The session is captured **once by the user in his own desktop browser**
 | `login_required` | Session expired/logged out. Re-capture. |
 | `checkpoint` | Instagram challenged the runner login (likely: datacenter IP). Re-capture a fresh session; if it recurs, the runner-IP route may not survive — fall back to posting from inside the Instagram app. |
 | `dry_run` | Dispatch used `dry_run=true` with `mode=post`. Intended. |
-| `probe_failed` / `create dialog did not open` | Instagram changed its web UI. Open the screenshots in `jobs/<job_id>/`, update the selectors in `instagram_reel_post.py` (`CREATE_SELECTORS`, caption/share selectors), re-run probe. |
+| `probe_failed` / `create dialog did not open` | Instagram changed its web UI. Open the screenshots in `jobs/<job_id>/`, read `create_attempts` / `create_menu_text` in `result.json`, update the selectors in `instagram_reel_post.py` (`CREATE_CLICK_TARGETS`, caption/share selectors), re-run probe. |
+| `create menu has no Reel option` | Instagram dropped the Reel choice from the Create menu. STOP — do not force a regular Post. Report it; the Reel route needs a new approach. |
+| `no caption supplied` | A `mode=post` dispatch had an empty `caption` input. The poster never invents captions — re-dispatch with the caption filled. |
 | `post_failed: uploader rejected the video` | The web uploader refused the file (length/format). The probe's `upload_dialog_text` / `limit_error` shows the exact message. ~108 s videos are near the web uploader's limits — this is the main open risk (see below). |
 | n8n marks Failed with `Timed out` | Runner took >10 min or crashed before writing `result.json`. Check the GitHub Actions run log (repo → Actions → Instagram Reel Post → the run). |
 | Webhook 404s | The n8n workflow is inactive (expected until activation). Activate it in the n8n UI only after the login probe passes. |
@@ -131,13 +176,21 @@ session values before writing anything).
 
 ## Known risks / unverified items (2026-11-18)
 
-1. **Web-uploader length limit is UNVERIFIED.** The two Reels are ~108 s.
-   The app allows up to 3 min; the website's Create flow may cap shorter
-   (or treat long videos differently). The first live probe will report
-   the exact limit — do not promise a post until it does.
-2. **Upload selectors are UNVERIFIED.** Instagram's web UI changes often;
-   the script's Create/caption/Share selectors are best-effort with
-   fallbacks + DOM dumps. Probe mode exists for exactly this.
+1. **Web-uploader length limit — no rejection observed at 107.8 s.**
+   The dry-run probe `ig-probe-20261118-1830` carried the ~108 s Reel
+   all the way to the caption screen with no length error
+   (`limit_error: null`), so the web uploader accepts it at least that
+   far. The final Share step is still unproven until the first live post.
+2. **Upload selectors — PROVEN 2026-11-18 by dry-run probe
+   `ig-probe-20261118-1830`** (run 44363624822): Create dialog opened,
+   video attached, walked Crop → Edit to the caption screen, caption
+   field found + filled, dialog discarded, nothing posted
+   (`jobs/ig-probe-20261118-1830/result.json`). Note: on this account
+   clicking Create opens the upload dialog directly (no Post/Reel menu);
+   the vertical video is auto-classified as a Reel ("New reel" on the
+   share screen). The script still picks Reel explicitly if a menu ever
+   appears, and fails rather than posting as a Feed Post. Instagram's
+   web UI changes often, so selectors may still need another round.
 3. **Datacenter-IP checkpoint.** A GitHub runner IP is not his phone.
    Instagram will likely challenge the first login(s) from a new IP
    (code to his email/SMS). The script reports `checkpoint` and stops;
@@ -162,5 +215,10 @@ session values before writing anything).
 - The **Notion automation** (Status → Ready → webhook) must be built in
   the Notion UI (no API exists for it). Webhook URL is above.
 - **No Notion rows are seeded.** The queue is empty until he says so.
-- **No live login test has run.** The first probe with his real session
-  is the next step after he hands over `site_instagram.json`.
+- **Login is PROVEN** (probe run 44361625139, 2026-11-18:
+  `english_class_0121`, no challenge). **The upload path is PROVEN to
+  the caption screen** by dry-run probe `ig-probe-20261118-1830` (run
+  44363624822, 2026-11-18): file input found, video attached, Crop →
+  Edit walked, caption field found + filled, dialog discarded, nothing
+  posted. **The actual publish step (Share → live Reel) is unproven**
+  until the first live post.
