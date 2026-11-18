@@ -2337,7 +2337,14 @@ async def main_async(args):
                 else:
                     dry["error"] = "no portfolio form with a title field found"
                 result["dry_fill"] = dry
-                result["ok"] = True
+                # Fail fast: a probe that could not find the portfolio form
+                # (e.g. logged out — par-623370 probe 1) must NOT pass; the
+                # driver would otherwise run a doomed upload dispatch.
+                if dry.get("error"):
+                    result["ok"] = False
+                    result["error"] = dry["error"]
+                else:
+                    result["ok"] = True
                 result["note"] = "probe only: form structure recorded, nothing submitted"
                 return save()
             # ---- upload mode: capture the sample page itself for an image field ----
@@ -2345,15 +2352,28 @@ async def main_async(args):
             # rendered demo PNG), and fails fast without one.
             sample_png = os.path.join(out_dir, "sample.png")
             if args.mode == "upload":
-                try:
-                    shot = await ctx.new_page()
-                    await shot.goto(args.sample_url, wait_until="domcontentloaded", timeout=60000)
-                    await shot.wait_for_timeout(2500)
-                    await shot.screenshot(path=sample_png)
-                    await shot.close()
-                    result["sample_screenshot"] = True
-                except Exception:
-                    result["sample_screenshot"] = False
+                # Prefer a real rendering of the demo from the local
+                # hq-ai-results checkout (render_sample_screenshot). The old
+                # path screenshotted the GitHub tree URL, which 404s for this
+                # private repo when the page is not logged into GitHub — the
+                # attached image was a 404 page (par-623370).
+                if not (args.screenshot and os.path.isfile(args.screenshot)):
+                    _sp, _se = await render_sample_screenshot(ctx, out_dir, args)
+                    if _sp:
+                        args.screenshot = _sp
+                        result["demo_screenshot"] = os.path.basename(_sp)
+                    else:
+                        result["demo_screenshot_error"] = _se
+                if not (args.screenshot and os.path.isfile(args.screenshot)):
+                    try:
+                        shot = await ctx.new_page()
+                        await shot.goto(args.sample_url, wait_until="domcontentloaded", timeout=60000)
+                        await shot.wait_for_timeout(2500)
+                        await shot.screenshot(path=sample_png)
+                        await shot.close()
+                        result["sample_screenshot"] = True
+                    except Exception:
+                        result["sample_screenshot"] = False
             # ---- upload mode: fill the portfolio form ----
             target = None
             for form in forms:
@@ -2443,33 +2463,73 @@ async def main_async(args):
             # text). NEVER a generic button[type=submit] — the first submit
             # button on this form is the DRAFT button (save_draft), and
             # ':has-text(ذخیره)' also matches the draft.
-            clicked = None
-            for sel in (f"#{PUBLISH_BUTTON_ID}", "button:has-text('ارسال نمونه‌کار')"):
+            # The site blocks publish while the image upload is still in
+            # flight with a "درحال بارگذاری فایل" modal (par-623370: the old
+            # swal-only check missed it, so the code claimed "submitted"
+            # while nothing was published). If the modal is up, click its
+            # "صبر می‌کنم" (wait) button, give the upload 30s to finish,
+            # then click publish again (once).
+            async def _uploading_modal_visible():
                 try:
-                    await page.click(sel, timeout=10000)
-                    clicked = sel
-                    break
+                    loc = page.locator("text=درحال بارگذاری")
+                    return await loc.count() > 0 and await loc.first.is_visible()
                 except Exception:
-                    continue
+                    return False
+
+            async def _click_publish():
+                for sel in (f"#{PUBLISH_BUTTON_ID}", "button:has-text('ارسال نمونه‌کار')"):
+                    try:
+                        await page.click(sel, timeout=10000)
+                        return sel
+                    except Exception:
+                        continue
+                return None
+
+            async def _publish_blocked():
+                try:
+                    b = await page.evaluate(
+                        "() => { const s = document.querySelector('.swal2-container, .swal-modal');"
+                        " return !!s && s.offsetParent !== null; }")
+                except Exception:
+                    b = False
+                if not b:
+                    b = await _uploading_modal_visible()
+                return bool(b)
+
+            clicked = await _click_publish()
             result["submit_clicked"] = clicked
             if not clicked:
                 result["error"] = "could not click the publish button"
                 return save()
             await page.wait_for_timeout(4000)
-            # Did the site's own handler block the submit (upload incomplete)?
-            try:
-                blocked = await page.evaluate(
-                    "() => { const s = document.querySelector('.swal2-container, .swal-modal');"
-                    " return !!s && s.offsetParent !== null; }")
-            except Exception:
-                blocked = False
+            blocked = await _publish_blocked()
             result["submit_blocked_by_upload_warning"] = bool(blocked)
             if blocked:
-                result["error"] = "publish click was blocked by the site (upload still in progress)"
-                return save()
+                result["submit_retried_after_upload_wait"] = True
+                try:
+                    w = page.locator("button:has-text('صبر می‌کنم')")
+                    if await w.count() > 0:
+                        await w.first.click(timeout=5000)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(30000)
+                clicked2 = await _click_publish()
+                result["submit_clicked_retry"] = clicked2
+                if clicked2:
+                    await page.wait_for_timeout(4000)
+                    blocked = await _publish_blocked()
+                if blocked:
+                    result["error"] = "publish click was blocked by the site (upload still in progress)"
+                    return save()
             result["submitted"] = True
             await page.screenshot(path=os.path.join(out_dir, "after_submit.png"))
-            await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
+            # Verify on the portfolio LIST page, not the create form: the
+            # create page is an empty form after publish, so the title can
+            # never be found there (par-623370 failed verification on it).
+            verify_url = (info.get("portfolio_list_url") or info.get("panel_url")
+                          or profile_url)
+            result["verify_url"] = verify_url
+            await page.goto(verify_url, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(2000)
             body = await page.inner_text("body")
             result["verified"] = args.title in body
