@@ -1463,7 +1463,10 @@ async def render_sample_screenshot(ctx, out_dir, args):
         url = "file://" + os.path.abspath(tmp_html)
         width, height = 640, 850
     try:
-        shot = await ctx.new_page(viewport={"width": width, "height": height})
+        # NOTE: BrowserContext.new_page() takes no viewport kwarg in the
+        # Playwright version on the runner — set it on the page instead.
+        shot = await ctx.new_page()
+        await shot.set_viewport_size({"width": width, "height": height})
         await shot.goto(url, wait_until="domcontentloaded", timeout=60000)
         await shot.wait_for_timeout(2500)
         await shot.screenshot(path=shot_path)
