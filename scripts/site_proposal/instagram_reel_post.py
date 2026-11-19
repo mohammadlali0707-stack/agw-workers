@@ -156,6 +156,25 @@ def _codes_from_json(data):
     return out
 
 
+def _shortcode_from_media_id(media_id):
+    """Convert a numeric Instagram media id to its shortcode (base64
+    of the id using Instagram's alphabet). A wrong conversion simply
+    fails the caption-marker verification later and is never deleted,
+    so this is safe to try on any numeric id from the news inbox."""
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    try:
+        n = int(str(media_id).split("_")[0])
+    except Exception:
+        return None
+    if n <= 0:
+        return None
+    out = ""
+    while n > 0:
+        out = alphabet[n % 64] + out
+        n //= 64
+    return out or None
+
+
 async def _newest_reel_via_graphql(page, username, log):
     """Second fallback (read-only): fetch the owner's own media through
     Instagram's GraphQL profile-feed query (the same query the web app
@@ -391,7 +410,12 @@ async def _newest_reel_link(page, username, log):
                                          "variables": _v})
                     except Exception:
                         pass
-                captured.append({"url": u[:120], "status": resp.status,
+                try:
+                    _method = resp.request.method
+                except Exception:
+                    _method = ""
+                captured.append({"url": u[:400], "status": resp.status,
+                                 "method": _method,
                                  "codes": codes[:6], "shape": shape,
                                  "qhash": qhash, "doc_id": doc_id,
                                  "uid_in_vars": uid_in_vars})
@@ -403,6 +427,40 @@ async def _newest_reel_link(page, username, log):
     except Exception:
         pass
 
+    # Record every data (XHR/fetch) request the page makes — the grid
+    # query's real endpoint, if it fires at all, is in this list.
+    requests_seen = []
+
+    def _on_request(req):
+        try:
+            if req.resource_type in ("xhr", "fetch"):
+                try:
+                    _pd = req.post_data or ""
+                except Exception:
+                    _pd = ""
+                requests_seen.append({
+                    "method": req.method,
+                    "url": (req.url or "")[:300],
+                    "pd_head": _pd[:200],
+                })
+        except Exception:
+            pass
+
+    try:
+        page.on("request", _on_request)
+    except Exception:
+        pass
+
+    def _log_requests():
+        seen = []
+        for r in requests_seen:
+            key = (r["method"], r["url"])
+            if key not in seen:
+                seen.append(key)
+        detail = " | ".join(f"{m} {u}" for m, u in seen[:25])
+        log("newest_reel_req", bool(seen),
+            f"{len(seen)} data requests: {detail}")
+
     def _captured_urls():
         # Profile-grid responses first (their variables carry the
         # owner's user id), then any other graphql/query responses.
@@ -411,10 +469,12 @@ async def _newest_reel_link(page, username, log):
         urls = []
         for entry in ordered:
             log("newest_reel_net", bool(entry["codes"]),
-                f"{entry['status']} qhash={entry.get('qhash', '')} "
+                f"{entry['status']} {entry.get('method', '')} "
+                f"qhash={entry.get('qhash', '')} "
                 f"doc={entry.get('doc_id', '')} "
                 f"uid_in_vars={entry.get('uid_in_vars')} "
-                f"codes={entry['codes']} shape={entry.get('shape', '')}")
+                f"codes={entry['codes']} shape={entry.get('shape', '')} "
+                f"url={entry.get('url', '')[:200]}")
             for code in entry["codes"]:
                 cand = f"https://www.instagram.com/reel/{code}/"
                 if cand not in urls:
@@ -498,6 +558,7 @@ async def _newest_reel_link(page, username, log):
     for cand in _captured_urls():
         _add(cand)
     await _replay_captured()
+    _log_requests()
     if candidates:
         return candidates
     # Variant (2026-11-19, untried): open the profile page and click its
@@ -527,6 +588,7 @@ async def _newest_reel_link(page, username, log):
                 for cand in _captured_urls():
                     _add(cand)
                 await _replay_captured()
+                _log_requests()
                 if candidates:
                     return candidates
             else:
@@ -726,9 +788,19 @@ async def _newest_reel_via_news(page, log):
     all_links = []
     for st in stories:
         args = st.get("args") or {}
-        # A "your post" story can carry the media object directly.
-        for med in args.get("media") or []:
-            code = med.get("code") if isinstance(med, dict) else None
+        # A "your post" story can carry the media object directly —
+        # as a dict or a list, with a shortcode ("code") or a numeric
+        # media id ("id"/"pk", convertible to a shortcode).
+        _med = args.get("media")
+        _meds = [_med] if isinstance(_med, dict) else list(_med or [])
+        for med in _meds:
+            if not isinstance(med, dict):
+                continue
+            code = med.get("code")
+            if not code:
+                _mid = med.get("id") or med.get("pk")
+                if _mid:
+                    code = _shortcode_from_media_id(_mid)
             if code:
                 cand = f"https://www.instagram.com/reel/{code}/"
                 if _goto_allowed(cand):
@@ -745,9 +817,18 @@ async def _newest_reel_via_news(page, log):
                     log("newest_reel_news", True, f"Reel link in news inbox: {cand}")
                     return cand
     _ak = list((stories[0].get("args") or {}).keys()) if stories else []
+    _first = stories[0].get("args") or {} if stories else {}
+    _diag = ""
+    try:
+        _diag = (f" first media={json.dumps(_first.get('media'))[:300]}"
+                 f" dest={_first.get('destination')}"
+                 f" media_dest={_first.get('media_destination')}"
+                 f" text={(_first.get('text') or '')[:120]}")
+    except Exception:
+        pass
     log("newest_reel_news", False,
         f"no Reel link in news inbox ({len(stories)} stories, "
-        f"links={all_links[:10]}, first args keys={_ak})")
+        f"links={all_links[:10]}, first args keys={_ak}{_diag})")
     return None
 
 
@@ -917,8 +998,10 @@ async def _newest_reel_via_a1(page, username, log):
         const r = await fetch(url, {headers: {
           'X-IG-App-ID': '936619743392459',
           'X-Requested-With': 'XMLHttpRequest'}});
-        if (r.status === 200) return {ok: true, data: await r.json()};
-        return {ok: false, status: r.status};
+        const t = await r.text();
+        let d = null; try { d = JSON.parse(t); } catch (e) {}
+        return {ok: r.status === 200, status: r.status, data: d,
+                body_head: t.slice(0, 200)};
       } catch (e) { return {ok: false, error: String(e)}; }
     }"""
     try:
@@ -928,8 +1011,11 @@ async def _newest_reel_via_a1(page, username, log):
         return None
     if not res.get("ok"):
         log("newest_reel_a1", False,
-            f"profile JSON failed: status={res.get('status')} {res.get('error', '')}")
-        return None
+            f"profile JSON failed: status={res.get('status')} "
+            f"{res.get('error', '')} body={res.get('body_head', '')[:150]}")
+        # A 201 may still carry the profile JSON — try it anyway.
+        if not res.get("data"):
+            return None
     codes = _codes_from_json(res.get("data"))
     if not codes:
         # Fall back to the legacy shortcode field.
@@ -943,6 +1029,46 @@ async def _newest_reel_via_a1(page, username, log):
         log("newest_reel_a1", True, f"newest Reel via profile JSON: {cand}")
         return cand
     log("newest_reel_a1", False, "profile JSON returned no media codes")
+    return None
+
+
+async def _newest_reel_via_app_api(page, username, log):
+    """NEW 2026-11-19 (untried): the app API host
+    i.instagram.com/api/v1/feed/user/<uid>/ — the web /api/v1/feed/user
+    404s, but the app host is a different backend and may answer the
+    same session. Via the browser's request context (not a page
+    navigation). Returns the first video item's /reel/<code>/ URL, or
+    None. Read-only; owner's own profile only."""
+    uid = await _user_id(page)
+    if not uid:
+        log("newest_reel_app", False, "no user id for the app API")
+        return None
+    url = f"https://i.instagram.com/api/v1/feed/user/{uid}/?count=12"
+    headers = {"User-Agent": ("Instagram 302.0.0.0.0 Android (33/13; 420dpi; "
+                              "1080x2400; samsung; SM-G998B; p3s; qcom; en_US; "
+                              "523123133)"),
+               "X-IG-App-ID": "936619743392459",
+               "X-IG-Device-ID": "android-0000000000000000",
+               "X-Requested-With": "XMLHttpRequest"}
+    try:
+        resp = await page.context.request.get(url, headers=headers)
+    except Exception as e:
+        log("newest_reel_app", False, f"app API failed: {type(e).__name__}")
+        return None
+    if resp.status != 200:
+        log("newest_reel_app", False, f"app API failed: status={resp.status}")
+        return None
+    try:
+        data = await resp.json()
+    except Exception:
+        log("newest_reel_app", False, "app API returned no usable JSON")
+        return None
+    codes = _codes_from_json(data)
+    if codes:
+        cand = f"https://www.instagram.com/reel/{codes[0]}/"
+        log("newest_reel_app", True, f"newest Reel via app API: {cand}")
+        return cand
+    log("newest_reel_app", False, "app API returned no media codes")
     return None
 
 
@@ -1935,6 +2061,7 @@ async def run_recover(page, username, out_dir, log):
             candidates.append(cand)
     for _single in (await _newest_reel_via_feed_api(page, username, log),
                     await _newest_reel_via_a1(page, username, log),
+                    await _newest_reel_via_app_api(page, username, log),
                     await _newest_reel_via_news(page, log),
                     await _newest_reel_via_mobile(page, username, log),
                     await _newest_reel_via_activity(page, username, log)):
