@@ -35,7 +35,10 @@ Modes:
     and fillable (filled with the supplied caption, or a clearly-marked
     TEST string when none is supplied), and REPORT what the uploader says
     (duration it shows, any length limit / error text), then close the
-    dialog with Discard. Submits NOTHING — Share is never clicked in
+    dialog with Discard. It also inspects (probe only) whether the
+    uploader offers a 'Share to Facebook' toggle — on the caption screen
+    and under 'Advanced settings' — and records present/absent and ON/OFF
+    without touching it. Submits NOTHING — Share is never clicked in
     probe mode. Run this first: Instagram's web UI and its length limits
     are UNVERIFIED until a live probe reports.
   post — the full flow: upload -> Reel -> Next -> caption (pasted VERBATIM
@@ -753,6 +756,150 @@ async def _find_share(page):
     return None, {"candidates": cands}
 
 
+async def _inspect_facebook_toggle(page, log, out_dir):
+    """PROBE ONLY: look for Instagram's 'Share to Facebook' toggle on the
+    caption screen, and under 'Advanced settings' inside the create
+    dialog. Inspects only — never clicks a toggle, never clicks Share,
+    never changes anything. Returns a dict for result.json: present
+    (bool), on (True/False/None), location ('caption_screen' /
+    'advanced_settings' / None), plus the raw dialog text and every
+    matching element, so a human can judge what the uploader showed."""
+    fb = {"checked_caption_screen": False, "checked_advanced": False,
+          "advanced_present": False, "advanced_opened": False,
+          "present": False, "on": None, "location": None,
+          "mentions": [], "dialog_text_before": "", "dialog_text_after": "",
+          "candidates": [], "switches": []}
+    js = """() => {
+      const out = {dialog_text: '', dialog_count: 0, candidates: [], switches: []};
+      const vis = (el) => {
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && cs.display !== 'none' && cs.visibility !== 'hidden';
+      };
+      const describe = (el) => {
+        const parent = el.parentElement;
+        return {tag: el.tagName.toLowerCase(),
+                role: el.getAttribute('role'),
+                aria_label: el.getAttribute('aria-label'),
+                aria_checked: el.getAttribute('aria-checked'),
+                checked: el.checked === true,
+                text: (el.innerText || '').trim().slice(0, 120),
+                own_text: [...el.childNodes].filter(n => n.nodeType === 3)
+                          .map(n => n.textContent.trim()).join(' ').slice(0, 120),
+                parent_text: parent ? (parent.innerText || '').trim().slice(0, 200) : '',
+                visible: vis(el)};
+      };
+      const dialogs = [...document.querySelectorAll("[role='dialog']")];
+      out.dialog_count = dialogs.length;
+      const scope = dialogs.length ? dialogs : [document.body];
+      for (const root of scope) {
+        out.dialog_text += (root.innerText || '') + ' | ';
+        for (const el of root.querySelectorAll('*')) {
+          const t = (el.innerText || '');
+          const al = el.getAttribute('aria-label') || '';
+          if ((/facebook/i.test(t) && t.length < 300) || /facebook/i.test(al)) {
+            out.candidates.push(describe(el));
+          }
+        }
+        for (const el of root.querySelectorAll("[role='switch'], [role='checkbox'], input[type='checkbox']")) {
+          out.switches.push(describe(el));
+        }
+      }
+      out.dialog_text = out.dialog_text.slice(0, 3000);
+      return out;
+    }"""
+
+    def dedup(items):
+        seen = set()
+        out = []
+        for it in items or []:
+            key = (it.get("tag"), it.get("role"), it.get("text"),
+                   it.get("aria_checked"), str(it.get("checked")))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(it)
+        return out
+
+    def find_toggle(snap):
+        """-> (present, on) from one snapshot, or (False, None)."""
+        cands = list(snap.get("candidates", [])) + list(snap.get("switches", []))
+        for el in cands:
+            hay = " ".join([el.get("text") or "", el.get("own_text") or "",
+                            el.get("parent_text") or "",
+                            el.get("aria_label") or ""]).lower()
+            if "facebook" not in hay:
+                continue
+            if el.get("role") in ("switch", "checkbox") or el.get("tag") == "input":
+                on = (el.get("aria_checked") == "true") or (el.get("checked") is True)
+                return True, on
+            # A row/label mentioning Facebook with a switch in the same row.
+            for sw in snap.get("switches", []):
+                par = (sw.get("parent_text") or "").lower()
+                if "facebook" in par:
+                    on = (sw.get("aria_checked") == "true") or (sw.get("checked") is True)
+                    return True, on
+        return False, None
+
+    # 1. Caption screen as-is (no clicks).
+    try:
+        before = await page.evaluate(js)
+    except Exception as e:
+        fb["error"] = type(e).__name__
+        return fb
+    fb["dialog_text_before"] = (before.get("dialog_text") or "")[:3000]
+    fb["candidates"] = dedup(before.get("candidates", []))
+    fb["switches"] = dedup(before.get("switches", []))
+    fb["checked_caption_screen"] = True
+    present, on = find_toggle(before)
+    if present:
+        fb["present"] = True
+        fb["on"] = on
+        fb["location"] = "caption_screen"
+        log("facebook_toggle", True,
+            f"toggle on caption screen, on={on}")
+    else:
+        # 2. Open 'Advanced settings' inside the same dialog and look again.
+        fb["advanced_present"] = "advanced settings" in fb["dialog_text_before"].lower()
+        hit = await _click_visible_text(page, ("Advanced settings",), timeout_ms=5000)
+        if not hit:
+            try:
+                loc = page.locator("[role='dialog'] :text('Advanced settings')").first
+                if await loc.count() and await loc.is_visible(timeout=3000):
+                    await loc.click(timeout=5000)
+                    hit = "Advanced settings (fallback)"
+            except Exception:
+                pass
+        fb["advanced_opened"] = bool(hit)
+        await page.wait_for_timeout(1500)
+        try:
+            after = await page.evaluate(js)
+        except Exception as e:
+            fb["error"] = type(e).__name__
+            return fb
+        fb["dialog_text_after"] = (after.get("dialog_text") or "")[:3000]
+        fb["candidates"] = dedup(fb["candidates"] + after.get("candidates", []))
+        fb["switches"] = dedup(fb["switches"] + after.get("switches", []))
+        fb["checked_advanced"] = True
+        present, on = find_toggle(after)
+        if present:
+            fb["present"] = True
+            fb["on"] = on
+            fb["location"] = "advanced_settings"
+            log("facebook_toggle", True,
+                f"toggle under Advanced settings, on={on}")
+        else:
+            log("facebook_toggle", True,
+                "no Facebook toggle found on caption screen or under Advanced settings")
+    fb["mentions"] = sorted({(c.get("text") or c.get("own_text") or "")
+                             for c in fb["candidates"] if c.get("text") or c.get("own_text")})
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "facebook_check.png"))
+    except Exception:
+        pass
+    return fb
+
+
 async def _click_share(page, log, timeout_s=120):
     """Poll for an enabled Share control and click it. The video is
     still processing for a while after the caption is filled, so the
@@ -779,8 +926,9 @@ async def run_probe(page, video_path, caption, out_dir, log):
     """Open Create -> pick Reel -> attach the video -> walk to the caption
     screen -> verify the caption field is findable and fillable -> dump
     the Share control's DOM and check the post flow's Share finder can
-    see it -> close the dialog with Discard. Submits NOTHING (Share is
-    never clicked)."""
+    see it -> inspect the 'Share to Facebook' toggle (present/absent,
+    ON/OFF; never touched) -> close the dialog with Discard. Submits
+    NOTHING (Share is never clicked)."""
     res = {"dialog_text": "", "upload_dialog_text": "", "duration_shown": None,
            "limit_error": None, "reel_choice": None, "file_input_found": False,
            "caption_field_found": False, "caption_filled": False,
@@ -889,6 +1037,10 @@ async def run_probe(page, video_path, caption, out_dir, log):
     res["share_selector"] = share_diag if isinstance(share_diag, str) else None
     log("share_finder", bool(share_loc),
         f"found={res['share_found']} via={res['share_selector']}")
+    # PROBE ONLY: is there a 'Share to Facebook' toggle? Inspect only —
+    # never click a toggle, never click Share.
+    fb = await _inspect_facebook_toggle(page, log, out_dir)
+    res["facebook_toggle"] = fb
     # Close the dialog WITHOUT proceeding: Escape, then a Discard/close click.
     try:
         await page.keyboard.press("Escape")
@@ -1161,7 +1313,8 @@ async def amain(args):
                                                 "caption_selector", "attach_method",
                                                 "create_attempts", "create_menu_text",
                                                 "share_dom", "share_found",
-                                                "share_selector")})
+                                                "share_selector",
+                                                "facebook_toggle")})
                         if probe.get("error"):
                             return finish("probe_failed", error="probe failed",
                                           error_message=probe["error"])
