@@ -65,6 +65,36 @@ Notion row Status -> Ready
   -> row marked Posted (+ Posted URL) or Failed (+ Error text)
 ```
 
+## Triggered by the English pipeline (2026-11-19)
+
+The English auto-publish pipeline on Arvan (`/opt/hq/english_pipeline/`,
+runbook `PIPELINE_RUNBOOK.md`) is the main caller now — not Notion, not
+n8n. It dispatches this workflow itself and polls `result.json`:
+
+- **Trigger:** `runner_ig.py` on Arvan (called by `pipeline.py`) —
+  `POST /repos/mohammadlali0707-stack/agw-workers/actions/workflows/instagram-reel-post.yml/dispatches`
+  with `ref: main` and inputs `video_url`, `caption`, `mode`, `dry_run`,
+  `job_id`. Auth: server PAT `GH_PAT_ACC6` (`/etc/gemini-proxy-gh.env`).
+- **Video:** the pipeline copies the Reel into `/var/www/html/reels/`
+  (nginx serves it at `https://n8n.airboxvip.top/reels/<file>`) and
+  verifies it is fetchable before dispatching. No video is committed
+  to any repo.
+- **job_id:** deterministic per part, `ig-part-N` (N = part number).
+  The pipeline polls `jobs/ig-part-N/result.json` in hq-ai-results
+  until its blob sha changes from the pre-dispatch value (a stale
+  result from an earlier run for the same job is never mistaken for
+  the new one — every result carries a fresh `run_uuid` /
+  `finished_at`).
+- **Idempotency:** if a previous run of the same job already posted
+  (same `job_id` + same `video_url`), the poster returns the posted
+  URL without posting again. The pipeline also saves the Reel URL in
+  its own `state.json` before the Telegram step and resumes from it.
+- **Session rule (user, 2026-11-19):** Instagram connects to the
+  RUNNERS only — never to Muse directly. Muse holds no Instagram
+  session; the secret lives only in this repo. The phone capture
+  route is the same as above (Firefox + Cookie-Editor on his phone,
+  file handed to Muse, sealed via `/opt/hq/set_instagram_cookies.py`).
+
 Manual trigger (no Notion needed): GitHub repo → Actions →
 **Instagram Reel Post** → Run workflow → fill `video_url`, `caption`,
 `mode`, `dry_run`, `job_id`.
@@ -98,7 +128,8 @@ Manual trigger (no Notion needed): GitHub repo → Actions →
 
 `result.json` fields: `ok`, `status`, `job_id`, `mode`, `dry_run`,
 `video_url`, `video_bytes`, `video_seconds`, `logged_in`, `username`,
-`checkpoint`, `error`, `error_message`, `post_url`, `steps[]`
+`checkpoint`, `error`, `error_message`, `post_url`, `finished_at`,
+`run_uuid`, `steps[]`
 (each step: `{step, ok, detail}`), plus on probe runs `dialog_text` /
 `upload_dialog_text` / `duration_shown` / `limit_error` / `reel_choice`
 (`"Reel"` when the Create menu pick succeeded) / `file_input_found` /
