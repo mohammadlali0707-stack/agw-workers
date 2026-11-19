@@ -11,7 +11,12 @@ async def _request(self, method, url, *a, **kw):
     if os.environ.get("GWEB_PROXY"): kw["allow_redirects"] = True
     return await _orig_request(self, method, url, *a, **kw)
 _AS.request = _request
-CANON = {6: "gemini-flash-lite", 1: "gemini-flash", 3: "gemini-pro", 8: "gemini-argon"}
+# owner 2026-11-19: Gemini renamed the website models (Neon=3, Carbon=8, Hydrogen=1, Auto=6);
+# model numbers are stable, names are not (and names localize per UI language).
+# CANON = current names; OLD_CANON = legacy keys kept so existing public ids
+# (gemini-argon -> Carbon, gemini-pro -> Neon, gemini-flash -> Hydrogen) keep working.
+CANON = {6: "gemini-auto", 1: "gemini-hydrogen", 3: "gemini-neon", 8: "gemini-carbon"}
+OLD_CANON = {6: "gemini-flash-lite", 1: "gemini-flash", 3: "gemini-pro", 8: "gemini-argon"}
 JOBS, DONE, READY = "/tmp/wjobs", "/tmp/wdone", "/tmp/web_ready"
 os.makedirs(JOBS, exist_ok=True); os.makedirs(DONE, exist_ok=True)
 STOP = "/tmp/web_stop"; WB_EVERY = 25 * 60
@@ -50,9 +55,12 @@ async def connect(ck):
             try: c._cookies.set(k, v, domain=".google.com", secure=True)
             except Exception: pass
     await c.init(timeout=1500, auto_refresh=False)
-    _ms = c.list_models() or []
-    print("web models raw", [(m.model_number, m.model_name, m.is_available) for m in _ms], flush=True)
-    alias = {CANON.get(m.model_number, m.model_name): m.model_name for m in _ms if m.is_available}
+    alias = {}
+    for _m in (c.list_models() or []):
+        if not _m.is_available: continue
+        alias[CANON.get(_m.model_number, _m.model_name)] = _m.model_name
+        _old = OLD_CANON.get(_m.model_number)
+        if _old and _old not in alias: alias[_old] = _m.model_name
     if len(alias) <= 1: raise RuntimeError("signed_out")
     return c, alias
 def finish(cid, ok, text="", t0=0, err=""):
