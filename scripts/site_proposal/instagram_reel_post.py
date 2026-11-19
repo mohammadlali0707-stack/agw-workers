@@ -124,6 +124,38 @@ def _goto_allowed(url):
     return bool(_ALLOWED_RE.match(url or ""))
 
 
+def _codes_from_json(data):
+    """Shortcodes from a parsed Instagram GraphQL/API JSON body. The
+    current profile-feed GraphQL shape puts the media id in
+    node["code"] (not node["shortcode"]); walk the structure and
+    collect every dict that carries a "code" string together with a
+    media marker (media_type / __typename / pk). Returns codes in
+    document order (newest first), deduplicated."""
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            code = node.get("code")
+            if (isinstance(code, str) and len(code) >= 8
+                    and ("media_type" in node or "__typename" in node
+                         or "pk" in node)):
+                found.append(code)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(data)
+    seen = set()
+    out = []
+    for c in found:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
 async def _newest_reel_via_graphql(page, username, log):
     """Second fallback (read-only): fetch the owner's own media through
     Instagram's GraphQL profile-feed query (the same query the web app
@@ -295,8 +327,22 @@ async def _newest_reel_link(page, username, log):
                     body = ""
                 codes = re.findall(
                     r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', body or "")
+                shape = ""
+                if not codes:
+                    # The current profile-feed GraphQL shape carries the
+                    # media id as node["code"] (not "shortcode").
+                    try:
+                        parsed = json.loads(body or "")
+                    except Exception:
+                        parsed = None
+                    codes = _codes_from_json(parsed)
+                    if isinstance(parsed, dict):
+                        shape = ",".join(list(parsed.keys())[:5])
+                        d = parsed.get("data")
+                        if isinstance(d, dict):
+                            shape += " | data:" + ",".join(list(d.keys())[:5])
                 captured.append({"url": u[:120], "status": resp.status,
-                                 "codes": codes[:6]})
+                                 "codes": codes[:6], "shape": shape})
         except Exception:
             pass
 
@@ -308,7 +354,8 @@ async def _newest_reel_link(page, username, log):
     def _captured_codes():
         for entry in captured:
             log("newest_reel_net", bool(entry["codes"]),
-                f"{entry['status']} {entry['url']} codes={entry['codes']}")
+                f"{entry['status']} {entry['url']} codes={entry['codes']} "
+                f"shape={entry.get('shape', '')}")
             if entry["codes"]:
                 return f"https://www.instagram.com/reel/{entry['codes'][0]}/"
         return None
@@ -574,19 +621,21 @@ async def _newest_reel_via_news(page, log):
     stories = []
     for key in ("new_stories", "old_stories", "stories"):
         stories.extend(data.get(key) or [])
-    links_seen = 0
+    all_links = []
     for st in stories:
         args = st.get("args") or {}
         for link in args.get("links") or []:
             u = link.get("link") or ""
-            links_seen += 1
+            if u:
+                all_links.append(u)
             if "/reel/" in u or "/p/" in u:
                 cand = u if u.startswith("http") else "https://www.instagram.com" + u
                 if _goto_allowed(cand):
                     log("newest_reel_news", True, f"Reel link in news inbox: {cand}")
                     return cand
     log("newest_reel_news", False,
-        f"no Reel link in news inbox ({len(stories)} stories, {links_seen} links)")
+        f"no Reel link in news inbox ({len(stories)} stories, "
+        f"links={all_links[:10]})")
     return None
 
 
@@ -652,8 +701,13 @@ async def _newest_reel_via_mobile(page, username, log):
                 log("newest_reel_mobile", True,
                     f"newest Reel from mobile page data: {cand}")
                 return cand
+        try:
+            mtext = await _body_text(mpage, limit=300)
+        except Exception:
+            mtext = ""
         log("newest_reel_mobile", False,
-            "no /reel/ link or shortcode on the mobile profile")
+            "no /reel/ link or shortcode on the mobile profile; "
+            f"page text: {mtext[:200]}")
         return None
     except Exception as e:
         log("newest_reel_mobile", False, f"mobile context failed: {type(e).__name__}")
