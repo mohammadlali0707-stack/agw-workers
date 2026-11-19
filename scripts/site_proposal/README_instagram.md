@@ -23,8 +23,10 @@ no follows, likes, comments, or browsing, no profile changes. The session
 stays completely private: sealed as a GitHub secret, never printed, never
 logged, never copied anywhere else, never shared with anyone. The runner
 script (`instagram_reel_post.py`) enforces this with a navigation
-allowlist (home page, the Create dialog, the published post URL) — any
-other Instagram URL is refused by the code.
+allowlist (home page, the Create dialog, the published post URL, the
+owner's `/reels/` page for the recover read, and — delete mode only —
+the one Reel URL it is told to delete) — any other Instagram URL is
+refused by the code.
 
 ## Where everything lives
 
@@ -74,7 +76,7 @@ n8n. It dispatches this workflow itself and polls `result.json`:
 - **Trigger:** `runner_ig.py` on Arvan (called by `pipeline.py`) —
   `POST /repos/mohammadlali0707-stack/agw-workers/actions/workflows/instagram-reel-post.yml/dispatches`
   with `ref: main` and inputs `video_url`, `caption`, `mode`, `dry_run`,
-  `job_id`. Auth: server PAT `GH_PAT_ACC6` (`/etc/gemini-proxy-gh.env`).
+  `job_id`, `reel_url` (delete mode only). Auth: server PAT `GH_PAT_ACC6` (`/etc/gemini-proxy-gh.env`).
 - **Video:** the pipeline copies the Reel into `/var/www/html/reels/`
   (nginx serves it at `https://n8n.airboxvip.top/reels/<file>`) and
   verifies it is fetchable before dispatching. No video is committed
@@ -89,6 +91,13 @@ n8n. It dispatches this workflow itself and polls `result.json`:
   (same `job_id` + same `video_url`), the poster returns the posted
   URL without posting again. The pipeline also saves the Reel URL in
   its own `state.json` before the Telegram step and resumes from it.
+  **Caveat (proven 2026-11-19):** the guard only fires when the
+  previous result says `status == "posted"` with a `post_url`. A
+  `post_failed` result (Share clicked, no URL returned, Reel live)
+  does NOT trigger it — the guard cannot detect that live Reel, so
+  the next run would double-post without the `state.json` fix.
+  Never rely on the guard for a `post_failed` job; record the URL
+  in `state.json` (via recover) instead.
 - **Session rule (user, 2026-11-19):** Instagram connects to the
   RUNNERS only — never to Muse directly. Muse holds no Instagram
   session; the secret lives only in this repo. The phone capture
@@ -125,11 +134,39 @@ Manual trigger (no Notion needed): GitHub repo → Actions →
    when none is supplied — and the dialog is then discarded, never shared.
 6. **Post** → upload → Reel → Next → caption (verbatim) → Share →
    verify the post URL loads. Result `posted` carries `post_url`.
+   After Share the wait is **300s** (was 180s); if still no URL, the
+   poster falls back to reading the newest Reel from the owner's
+   `/reels/` page (see recover) instead of reporting `post_failed`
+   on a live Reel. **The "Shared reel" confirmation dialog has NO
+   link** — only a "Done" button (proven 2026-11-19 from the Part 2
+   run's `published.png`) — so the confirmation loop can never find
+   a URL on that screen; the profile read is the only way.
+7. **Recover** (`mode=recover`, read-only, no video) → opens the
+   owner's `/reels/` page and returns the newest Reel URL, verified
+   to load and carrying the caption marker "Succession". It tries,
+   in order: the page links (poll + scroll, 30s), shortcodes
+   embedded in the page HTML, then Instagram's web profile-info API
+   (in-page fetch, same session, owner's own profile only; retries
+   3x on HTTP 429). Result `recovered` carries `post_url`, or
+   `recover_failed`. Known limitation (2026-11-19): the `/reels/`
+   page grid does not render its links in the headless browser, the
+   page HTML carries no shortcode, and the profile-info API returned
+   HTTP 429 (rate-limited) — do not hammer the API; retry after a
+   longer wait.
+8. **Delete** (`mode=delete`, needs `--reel-url` / workflow input
+   `reel_url`) → opens exactly the given Reel URL and deletes it
+   through the UI (••• menu → Delete → confirm), then verifies it
+   is gone (the URL no longer loads). Deletes ONLY that exact URL —
+   never anything else. `dry_run=true` = inspect only (verifies the
+   Delete option is present, deletes nothing). A live delete needs
+   `dry_run=false` AND an explicit dispatch — **delete NEVER runs
+   automatically.** Result `deleted` carries `deleted_url`, or
+   `delete_option_found` for a successful inspect-only run.
 
 `result.json` fields: `ok`, `status`, `job_id`, `mode`, `dry_run`,
 `video_url`, `video_bytes`, `video_seconds`, `logged_in`, `username`,
-`checkpoint`, `error`, `error_message`, `post_url`, `finished_at`,
-`run_uuid`, `steps[]`
+`checkpoint`, `error`, `error_message`, `post_url`, `deleted_url`,
+`finished_at`, `run_uuid`, `steps[]`
 (each step: `{step, ok, detail}`), plus on probe runs `dialog_text` /
 `upload_dialog_text` / `duration_shown` / `limit_error` / `reel_choice`
 (`"Reel"` when the Create menu pick succeeded) / `file_input_found` /
