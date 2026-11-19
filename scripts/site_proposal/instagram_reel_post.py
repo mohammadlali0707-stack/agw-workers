@@ -55,14 +55,19 @@ Modes:
     post. Anything else refuses with status "dry_run" before any browser
     work. After Share, the confirmation waits up to 300s, then falls back
     to reading the newest Reel from the owner's /reels/ page (see recover).
-  recover — open the owner's /reels/ page (logged in) and return the
-    newest Reel URL it finds, verified to load and carrying the caption
-    marker "Succession" (the lessons' caption always contains it). Used
-    when a post succeeded but no URL came back (the 2026-11-19 Part 2
-    case: Share clicked, no URL in 180s, Reel live). Submits NOTHING —
-    read-only. If the /reels/ page grid does not render its links in the
-    headless browser, the same profile media is read through Instagram's
-    web profile-info API (same session; owner's own profile only).
+  recover — find the newest Reel on the owner's profile (logged in) and
+    return its URL, verified to load and carrying the caption marker
+    "Succession" PLUS a Part 2 marker ("Get Rennie" / "keep you posted"
+    — so the recovered URL is proven to be the Part 2 Reel, never the
+    older Part 1 Reel). Used when a post succeeded but no URL came back
+    (the 2026-11-19 Part 2 case: Share clicked, no URL in 180s, Reel
+    live). Submits NOTHING — read-only. It tries, in order: the /reels/
+    page grid (with a response listener that captures the grid's own
+    GraphQL data even when the grid never renders, plus a Reels-tab
+    click variant), the web profile-info API, the GraphQL profile-feed
+    query, the /api/v1/feed/user timeline API, the notifications inbox,
+    the mobile web profile (m.instagram.com), and the account's own
+    'Your activity' page. Same session; owner's own profile only.
     Needs no video (the --video-url input is accepted but ignored; no
     download happens).
   delete — open the ONE Reel URL given with --reel-url and delete it
@@ -103,12 +108,16 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # --- navigation allowlist (privacy rule). Nothing else is ever opened. ---
 # home page (login check + create dialog live here), the published post URL
 # (verification after Share), the owner's /reels/ page (the recover mode's
-# read of the newest Reel the account just posted), and — delete mode only —
-# the ONE specific Reel URL it is told to delete. DMs (/direct), feed
-# (/explore), following lists, settings (/accounts/edit) and every other
-# path are refused.
+# read of the newest Reel the account just posted), the owner's own
+# 'Your activity' page (recover only — lists the posts the account made),
+# and — delete mode only — the ONE specific Reel URL it is told to
+# delete. The owner's own profile page (Reels-tab variant) and the mobile
+# profile (m.instagram.com, same owner) are checked by _goto_profile_allowed
+# / built from the logged-in username, never from any other input.
+# DMs (/direct), feed (/explore), following lists, settings
+# (/accounts/edit) and every other path are refused.
 _ALLOWED_RE = re.compile(
-    r"^https://www\.instagram\.com/(?:$|reel/[\w-]+/?$|p/[\w-]+/?$|[\w.\-]+/reels/?$)")
+    r"^https://www\.instagram\.com/(?:$|reel/[\w-]+/?$|p/[\w-]+/?$|[\w.\-]+/reels/?$|your_activity/?$)")
 
 
 def _goto_allowed(url):
@@ -204,12 +213,15 @@ async def _newest_reel_via_api(page, username, log):
     (rate-limited) on 2026-11-19, which may clear after a short wait."""
     url = ("https://www.instagram.com/api/v1/users/web_profile_info/"
            f"?username={username}")
-    js = """async (url) => {
+    csrf = await _csrf_token(page)
+    js = """async ([url, csrf]) => {
+      const headers = {'X-IG-App-ID': '936619743392459',
+        'X-Requested-With': 'XMLHttpRequest',
+        'X-ASBD-ID': '129477'};
+      if (csrf) headers['X-CSRFToken'] = csrf;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const r = await fetch(url, {headers: {
-            'X-IG-App-ID': '936619743392459',
-            'X-Requested-With': 'XMLHttpRequest'}});
+          const r = await fetch(url, {headers});
           if (r.status === 200) return {ok: true, data: await r.json()};
           if (r.status === 429) {
             await new Promise(res => setTimeout(res, 60000));
@@ -221,7 +233,7 @@ async def _newest_reel_via_api(page, username, log):
       return {ok: false, status: 429, note: 'still rate-limited after 3 attempts'};
     }"""
     try:
-        res = await page.evaluate(js, url)
+        res = await page.evaluate(js, [url, csrf])
     except Exception as e:
         log("newest_reel_api", False, f"web_profile_info failed: {type(e).__name__}")
         return None
@@ -255,43 +267,132 @@ async def _newest_reel_link(page, username, log):
     full https://www.instagram.com/reel/<code>/ URL, or None. Never
     clicks anything, never opens DMs/feed/other pages.
     The reels grid loads asynchronously (GraphQL), so this polls for up
-    to 30s and scrolls to trigger lazy loading — a single 5s wait was
-    not enough (2026-11-19: the first recover run found no links)."""
+    to 45s and scrolls to trigger lazy loading — a single 5s wait was
+    not enough (2026-11-19: the first recover run found no links).
+    NEW 2026-11-19 (recover v2): a response listener captures the
+    profile grid's OWN GraphQL/API responses — if the grid request
+    succeeds but the page never renders its links, the shortcodes are
+    still in the response body. If the direct /reels/ URL does not
+    render, the profile page's Reels tab is clicked instead (a
+    different code path for the same grid)."""
     url = f"https://www.instagram.com/{username}/reels/"
     if not _goto_allowed(url):
         return None
+    # Capture the grid's own data responses (read-only): the page's
+    # GraphQL/API calls carry the media shortcodes even when the grid
+    # never renders its links. Also records each such call's status, so
+    # a later run can tell a rate limit (429) from a dead query (400).
+    captured = []
+
+    async def _on_response(resp):
+        try:
+            u = resp.url or ""
+            if ("graphql/query" in u or "web_profile_info" in u
+                    or "feed/user" in u):
+                try:
+                    body = await resp.text()
+                except Exception:
+                    body = ""
+                codes = re.findall(
+                    r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', body or "")
+                captured.append({"url": u[:120], "status": resp.status,
+                                 "codes": codes[:6]})
+        except Exception:
+            pass
+
+    try:
+        page.on("response", _on_response)
+    except Exception:
+        pass
+
+    def _captured_codes():
+        for entry in captured:
+            log("newest_reel_net", bool(entry["codes"]),
+                f"{entry['status']} {entry['url']} codes={entry['codes']}")
+            if entry["codes"]:
+                return f"https://www.instagram.com/reel/{entry['codes'][0]}/"
+        return None
+
+    async def _scan_links(seconds):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                hrefs = await page.evaluate(
+                    "() => [...document.querySelectorAll('a[href]')]"
+                    ".map(a => a.getAttribute('href') || '')"
+                    ".filter(h => h.includes('/reel/'))")
+            except Exception:
+                hrefs = []
+            for href in hrefs or []:
+                cand = ("https://www.instagram.com" + href
+                        if href.startswith("/") else href)
+                if _goto_allowed(cand):
+                    log("newest_reel", True, f"newest Reel on profile: {cand}")
+                    return cand
+            # No links yet: scroll to trigger lazy loading, then wait.
+            try:
+                await page.evaluate(
+                    "() => window.scrollTo(0, document.body.scrollHeight)")
+            except Exception:
+                pass
+            await page.wait_for_timeout(3000)
+        return None
+
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         log("newest_reel", False, f"could not load {username}/reels: {type(e).__name__}")
         return None
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        try:
-            hrefs = await page.evaluate(
-                "() => [...document.querySelectorAll('a[href]')]"
-                ".map(a => a.getAttribute('href') || '')"
-                ".filter(h => h.includes('/reel/'))")
-        except Exception:
-            hrefs = []
-        for href in hrefs or []:
-            cand = "https://www.instagram.com" + href if href.startswith("/") else href
-            if _goto_allowed(cand):
-                log("newest_reel", True, f"newest Reel on profile: {cand}")
-                return cand
-        # No links yet: scroll to trigger lazy loading, then wait.
-        try:
-            await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-        except Exception:
-            pass
-        await page.wait_for_timeout(3000)
+    found = await _scan_links(45)
+    if found:
+        return found
     # Diagnostics for the next run: what did the page actually show?
     try:
         body = await _body_text(page, limit=500)
         log("newest_reel", False,
-            f"no /reel/ link on {username}/reels after 30s; page text: {body[:300]}")
+            f"no /reel/ link on {username}/reels after 45s; page text: {body[:300]}")
     except Exception:
         log("newest_reel", False, "no /reel/ link found on the profile reels page")
+    # The grid's own responses may carry the shortcodes even though no
+    # link rendered — check what the page's calls returned.
+    cand = _captured_codes()
+    if cand:
+        log("newest_reel", True, f"newest Reel from grid response: {cand}")
+        return cand
+    # Variant (2026-11-19, untried): open the profile page and click its
+    # Reels tab — a different code path from the direct /reels/ URL.
+    profile_url = f"https://www.instagram.com/{username}/"
+    if _goto_profile_allowed(profile_url, username):
+        try:
+            await page.goto(profile_url, wait_until="domcontentloaded",
+                            timeout=60000)
+            await page.wait_for_timeout(4000)
+            tab = None
+            for loc in [page.locator("a[href$='/reels/']"),
+                        page.locator("a:has-text('Reels')")]:
+                try:
+                    if await loc.count() and await loc.first.is_visible(timeout=3000):
+                        tab = loc.first
+                        break
+                except Exception:
+                    continue
+            if tab is not None:
+                await tab.click(timeout=10000)
+                await page.wait_for_timeout(5000)
+                found = await _scan_links(45)
+                if found:
+                    return found
+                cand = _captured_codes()
+                if cand:
+                    log("newest_reel", True,
+                        f"newest Reel from grid response: {cand}")
+                    return cand
+            else:
+                log("newest_reel_tab", False,
+                    "no Reels tab found on the profile page")
+        except Exception as e:
+            log("newest_reel_tab", False,
+                f"profile Reels-tab variant failed: {type(e).__name__}")
     # The page grid does not render links in the headless browser — try
     # the page's own embedded data first (the profile HTML carries the
     # media edges as JSON with "shortcode" fields; the first is the
@@ -314,12 +415,18 @@ async def _newest_reel_link(page, username, log):
     return await _newest_reel_via_graphql(page, username, log)
 
 
-async def _verify_reel_url(page, url):
+async def _verify_reel_url(page, url, must_contain=None):
     """Load a Reel URL and check it really is a live Reel. Returns
     (loads, has_caption_marker): loads = the page is not the 'Sorry, this
     page isn't available' dead page; has_caption_marker = the page text
     contains 'Succession' (every lesson caption contains it — an identity
-    signal that the Reel is ours, not some other account's post)."""
+    signal that the Reel is ours, not some other account's post).
+    must_contain (list of strings, optional): the candidate must also
+    carry one of these markers in the page HTML — used by recover to
+    prove the candidate is the Part 2 Reel (words 6-10, e.g. 'Get
+    Rennie') and NOT the older Part 1 Reel, so a delete can never target
+    the wrong post. When given and none matches, the second return
+    value is False."""
     if not _goto_allowed(url):
         return False, False
     try:
@@ -329,7 +436,265 @@ async def _verify_reel_url(page, url):
     except Exception:
         return False, False
     loads = "Sorry, this page isn't available" not in body
-    return loads, ("Succession" in body)
+    marker = "Succession" in body
+    if must_contain:
+        try:
+            html = await page.content()
+        except Exception:
+            html = ""
+        marker = marker and any(m in (html or "") for m in must_contain)
+    return loads, marker
+
+
+def _goto_profile_allowed(url, username):
+    """The owner's own profile page (Reels-tab variant of the recover
+    read). Only ever called with the logged-in username — never any
+    other account, never any other path."""
+    return url in (f"https://www.instagram.com/{username}/",
+                   f"https://www.instagram.com/{username}")
+
+
+async def _csrf_token(page):
+    """The `csrftoken` cookie value, for API calls that need the
+    X-CSRFToken header. Returns '' when absent."""
+    try:
+        for c in await page.context.cookies():
+            if c.get("name") == "csrftoken" and c.get("value"):
+                return c["value"]
+    except Exception:
+        pass
+    return ""
+
+
+async def _user_id(page):
+    """The logged-in user's numeric id, from the `ds_user_id` cookie or
+    the profile page's meta tag. Returns None when unknown."""
+    try:
+        for c in await page.context.cookies():
+            if c.get("name") == "ds_user_id" and c.get("value"):
+                return c["value"]
+    except Exception:
+        pass
+    try:
+        html = await page.content()
+    except Exception:
+        html = ""
+    m = re.search(r"instagram://user\?id=(\d+)", html or "")
+    return m.group(1) if m else None
+
+
+async def _newest_reel_via_feed_api(page, username, log):
+    """NEW 2026-11-19 (untried): the classic user-timeline endpoint
+    GET /api/v1/feed/user/<uid>/?count=12 — a different read path from
+    web_profile_info (404) and GraphQL (400). In-page fetch first (same
+    session, full headers incl. CSRF), then Playwright's request
+    context. Items are newest-first; the first video item (media_type
+    2) is the newest Reel. Read-only; owner's own profile only."""
+    uid = await _user_id(page)
+    if not uid:
+        log("newest_reel_feed", False,
+            "no user id (no ds_user_id cookie, no meta tag)")
+        return None
+    csrf = await _csrf_token(page)
+    url = f"https://www.instagram.com/api/v1/feed/user/{uid}/?count=12"
+    headers = {"X-IG-App-ID": "936619743392459",
+               "X-Requested-With": "XMLHttpRequest",
+               "X-ASBD-ID": "129477"}
+    if csrf:
+        headers["X-CSRFToken"] = csrf
+    data = None
+    js = """async ([url, headers]) => {
+      try {
+        const r = await fetch(url, {headers});
+        if (r.status === 200) return {ok: true, data: await r.json()};
+        return {ok: false, status: r.status};
+      } catch (e) { return {ok: false, error: String(e)}; }
+    }"""
+    try:
+        res = await page.evaluate(js, [url, headers])
+    except Exception as e:
+        res = {"ok": False, "error": type(e).__name__}
+    if res.get("ok"):
+        data = res.get("data")
+    else:
+        log("newest_reel_feed", False,
+            f"feed/user in-page fetch failed: status={res.get('status')} "
+            f"{res.get('error', '')}")
+    if not isinstance(data, dict):
+        # Second transport: Playwright's request context (shares the
+        # browser context's cookies).
+        try:
+            resp = await page.context.request.get(url, headers=headers)
+            if resp.status == 200:
+                data = await resp.json()
+            else:
+                log("newest_reel_feed", False,
+                    f"feed/user request-context failed: status={resp.status}")
+        except Exception as e:
+            log("newest_reel_feed", False,
+                f"feed/user request-context failed: {type(e).__name__}")
+    if not isinstance(data, dict):
+        log("newest_reel_feed", False, "feed/user returned no usable JSON")
+        return None
+    for item in data.get("items") or []:
+        if item.get("media_type") == 2 and item.get("code"):
+            cand = f"https://www.instagram.com/reel/{item['code']}/"
+            log("newest_reel_feed", True, f"newest Reel via feed/user API: {cand}")
+            return cand
+    log("newest_reel_feed", False, "no video item in feed/user response")
+    return None
+
+
+async def _newest_reel_via_news(page, log):
+    """NEW 2026-11-19 (untried): the notifications/activity inbox
+    GET /api/v1/news/inbox/ — Instagram posts a 'your reel is live'
+    entry when a Reel publishes; its args carry a link to the media.
+    Read-only; owner's own inbox only. Returns the first /reel/ (or
+    /p/) link found, or None."""
+    url = "https://www.instagram.com/api/v1/news/inbox/"
+    js = """async (url) => {
+      try {
+        const r = await fetch(url, {headers: {
+          'X-IG-App-ID': '936619743392459',
+          'X-Requested-With': 'XMLHttpRequest'}});
+        if (r.status === 200) return {ok: true, data: await r.json()};
+        return {ok: false, status: r.status};
+      } catch (e) { return {ok: false, error: String(e)}; }
+    }"""
+    try:
+        res = await page.evaluate(js, url)
+    except Exception as e:
+        log("newest_reel_news", False, f"news inbox failed: {type(e).__name__}")
+        return None
+    if not res.get("ok"):
+        log("newest_reel_news", False,
+            f"news inbox failed: status={res.get('status')} {res.get('error', '')}")
+        return None
+    data = res.get("data") or {}
+    stories = []
+    for key in ("new_stories", "old_stories", "stories"):
+        stories.extend(data.get(key) or [])
+    links_seen = 0
+    for st in stories:
+        args = st.get("args") or {}
+        for link in args.get("links") or []:
+            u = link.get("link") or ""
+            links_seen += 1
+            if "/reel/" in u or "/p/" in u:
+                cand = u if u.startswith("http") else "https://www.instagram.com" + u
+                if _goto_allowed(cand):
+                    log("newest_reel_news", True, f"Reel link in news inbox: {cand}")
+                    return cand
+    log("newest_reel_news", False,
+        f"no Reel link in news inbox ({len(stories)} stories, {links_seen} links)")
+    return None
+
+
+MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+             "Mobile/15E148 Safari/604.1")
+
+
+async def _newest_reel_via_mobile(page, username, log):
+    """NEW 2026-11-19 (untried): the mobile web profile
+    (m.instagram.com) renders a different front-end; its grid may
+    expose the /reel/ links the desktop /reels/ page never renders.
+    A second, mobile browser context with the SAME session cookies.
+    Read-only; owner's own profile only. The mobile URLs are built
+    from the logged-in username, never from any other input."""
+    try:
+        browser = page.context.browser
+        cookies = await page.context.cookies()
+    except Exception as e:
+        log("newest_reel_mobile", False, f"no browser/cookies: {type(e).__name__}")
+        return None
+    if browser is None:
+        log("newest_reel_mobile", False, "no browser handle for a mobile context")
+        return None
+    mctx = None
+    try:
+        mctx = await browser.new_context(
+            viewport={"width": 390, "height": 844},
+            user_agent=MOBILE_UA, locale="en-US",
+            is_mobile=True, has_touch=True)
+        if cookies:
+            await mctx.add_cookies(cookies)
+        mpage = await mctx.new_page()
+        for path in (f"https://m.instagram.com/{username}/reels/",
+                     f"https://m.instagram.com/{username}/"):
+            try:
+                await mpage.goto(path, wait_until="domcontentloaded", timeout=60000)
+                await mpage.wait_for_timeout(5000)
+            except Exception as e:
+                log("newest_reel_mobile", False,
+                    f"mobile {path} failed: {type(e).__name__}")
+                continue
+            try:
+                hrefs = await mpage.evaluate(
+                    "() => [...document.querySelectorAll('a[href]')]"
+                    ".map(a => a.getAttribute('href') || '')"
+                    ".filter(h => h.includes('/reel/') || h.includes('/p/'))")
+            except Exception:
+                hrefs = []
+            for href in hrefs or []:
+                cand = ("https://www.instagram.com" + href
+                        if href.startswith("/") else href)
+                if "/reel/" in cand and _goto_allowed(cand):
+                    log("newest_reel_mobile", True,
+                        f"newest Reel on mobile profile: {cand}")
+                    return cand
+            try:
+                html = await mpage.content()
+            except Exception:
+                html = ""
+            for m in re.finditer(r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', html or ""):
+                cand = f"https://www.instagram.com/reel/{m.group(1)}/"
+                log("newest_reel_mobile", True,
+                    f"newest Reel from mobile page data: {cand}")
+                return cand
+        log("newest_reel_mobile", False,
+            "no /reel/ link or shortcode on the mobile profile")
+        return None
+    except Exception as e:
+        log("newest_reel_mobile", False, f"mobile context failed: {type(e).__name__}")
+        return None
+    finally:
+        try:
+            if mctx:
+                await mctx.close()
+        except Exception:
+            pass
+
+
+async def _newest_reel_via_activity(page, username, log):
+    """NEW 2026-11-19 (untried): the account's own 'Your activity'
+    page lists the photos/videos it posted. Read-only; owner's own
+    activity only."""
+    url = "https://www.instagram.com/your_activity/"
+    if not _goto_allowed(url):
+        return None
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(5000)
+    except Exception as e:
+        log("newest_reel_activity", False,
+            f"could not load your_activity: {type(e).__name__}")
+        return None
+    try:
+        hrefs = await page.evaluate(
+            "() => [...document.querySelectorAll('a[href]')]"
+            ".map(a => a.getAttribute('href') || '')"
+            ".filter(h => h.includes('/reel/') || h.includes('/p/'))")
+    except Exception:
+        hrefs = []
+    for href in hrefs or []:
+        cand = ("https://www.instagram.com" + href
+                if href.startswith("/") else href)
+        if _goto_allowed(cand):
+            log("newest_reel_activity", True, f"post link on your_activity: {cand}")
+            return cand
+    log("newest_reel_activity", False, "no /reel/ or /p/ link on your_activity")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1301,24 +1666,42 @@ async def run_probe(page, video_path, caption, out_dir, log):
 
 async def run_recover(page, username, out_dir, log):
     """Read-only recovery: find the newest Reel on the logged-in profile
-    and verify it loads and carries the caption marker 'Succession'.
-    Used when a post succeeded but no URL came back (the 2026-11-19
-    Part 2 case: Share clicked, no URL in 180s, Reel live). Submits
-    NOTHING — it only reads the /reels/ page and the candidate Reel
-    page. Returns {"ok", "status", "post_url", ...} with status
-    "recovered" on success, "recover_failed" otherwise."""
+    and verify it loads and carries the caption marker 'Succession' plus
+    a Part 2 marker (so the URL is proven to be the Part 2 Reel, never
+    the older Part 1 Reel). Used when a post succeeded but no URL came
+    back (the 2026-11-19 Part 2 case: Share clicked, no URL in 180s,
+    Reel live). Submits NOTHING — it only reads pages and the candidate
+    Reel page. Tries, in order: the /reels/ page (grid + Reels-tab
+    variant + network capture), the feed/user timeline API, the
+    notifications inbox, the mobile web profile, and 'Your activity'.
+    Returns {"ok", "status", "post_url", ...} with status "recovered"
+    on success, "recover_failed" otherwise."""
+    # Part 2 identity markers (words 6-10 caption): the recovered URL
+    # must be THIS Reel, not the older Part 1 Reel — a delete can never
+    # target the wrong post.
+    part2_markers = ["Get Rennie", "keep you posted"]
     newest = await _newest_reel_link(page, username, log)
+    if not newest:
+        newest = await _newest_reel_via_feed_api(page, username, log)
+    if not newest:
+        newest = await _newest_reel_via_news(page, log)
+    if not newest:
+        newest = await _newest_reel_via_mobile(page, username, log)
+    if not newest:
+        newest = await _newest_reel_via_activity(page, username, log)
     if not newest:
         return {"ok": False, "status": "recover_failed",
                 "error_message": "no Reel link found on the profile reels page"}
-    loads, marker = await _verify_reel_url(page, newest)
+    loads, marker = await _verify_reel_url(page, newest,
+                                           must_contain=part2_markers)
     if not loads:
         return {"ok": False, "status": "recover_failed",
                 "error_message": f"newest Reel URL does not load: {newest}"}
     if not marker:
         return {"ok": False, "status": "recover_failed",
-                "error_message": f"newest Reel has no 'Succession' caption "
-                                 f"marker (not our lesson Reel?): {newest}"}
+                "error_message": f"newest Reel {newest} did not verify as "
+                                 f"the Part 2 Reel (loads={loads}, "
+                                 f"Succession/Part-2 marker={marker})"}
     try:
         await page.screenshot(path=os.path.join(out_dir, "recovered.png"))
     except Exception:
