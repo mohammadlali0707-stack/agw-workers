@@ -1697,6 +1697,21 @@ async def detect_login(page):
             "login_wall": login_wall, "url": url}
 
 
+async def _page_logged_in(page):
+    """True when the current page renders the logged-in nav (the Create
+    control is present). The Reel page sometimes renders logged-out
+    (Log In / Sign Up header) even though the home page is logged in —
+    when that happens the ••• menu has no Delete option and the API
+    calls return the login HTML instead of JSON."""
+    for sel in CREATE_CLICK_TARGETS:
+        try:
+            if await page.locator(sel).count() > 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 # ---------------------------------------------------------------------------
 # probe / post flows
 # ---------------------------------------------------------------------------
@@ -2199,22 +2214,28 @@ async def _delete_reel_via_api(page, reel_url, log):
         log("delete_api", False, f"could not decode media id from {reel_url}")
         return False
     csrf = await _csrf_token(page)
-    url = f"https://www.instagram.com/api/v1/media/{media_id}/delete/?media_type=2"
+    url = f"https://www.instagram.com/api/v1/media/{media_id}/delete/"
     headers = {"X-IG-App-ID": "936619743392459",
                "X-Requested-With": "XMLHttpRequest",
                "X-ASBD-ID": "129477"}
     if csrf:
         headers["X-CSRFToken"] = csrf
-    js = """async ([url, headers]) => {
+    # Form body (not a query param): media_type + the CSRF token, the
+    # way the web app posts it. An empty body / query-param-only call
+    # returns the SPA shell HTML (200) instead of a deletion.
+    js = """async ([url, headers, csrf]) => {
       try {
-        const r = await fetch(url, {method: 'POST', headers,
-          body: new URLSearchParams({})});
+        const body = new URLSearchParams({media_type: '2'});
+        if (csrf) body.append('_csrftoken', csrf);
+        const r = await fetch(url, {method: 'POST', headers, body});
         const t = await r.text();
-        return {ok: r.status === 200, status: r.status, body: t.slice(0, 300)};
+        return {ok: r.status === 200, status: r.status,
+                ctype: (r.headers.get('content-type') || '').slice(0, 60),
+                body: t.slice(0, 300)};
       } catch (e) { return {ok: false, error: String(e)}; }
     }"""
     try:
-        res = await page.evaluate(js, [url, headers])
+        res = await page.evaluate(js, [url, headers, csrf])
     except Exception as e:
         log("delete_api", False, f"media delete API failed: {type(e).__name__}")
         return False
@@ -2224,8 +2245,16 @@ async def _delete_reel_via_api(page, reel_url, log):
             f"status={res.get('status')} {res.get('error', '')} "
             f"body={res.get('body', '')[:200]}")
         return False
+    _body = res.get("body", "") or ""
+    if _body.lstrip().startswith("<"):
+        # HTML, not JSON — the endpoint returned the SPA shell / login
+        # page instead of a deletion (not authenticated as an API call).
+        log("delete_api", False,
+            f"media delete API for {media_id} returned HTML, not JSON "
+            f"(ctype={res.get('ctype', '')}) — no deletion happened")
+        return False
     log("delete_api", True,
-        f"media delete API ok for {media_id}: {res.get('body', '')[:200]}")
+        f"media delete API ok for {media_id}: {_body[:200]}")
     # Verify the Reel is really gone.
     await page.wait_for_timeout(3000)
     loads, _marker = await _verify_reel_url(page, reel_url)
@@ -2262,6 +2291,23 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
         return {"ok": True, "status": "deleted", "deleted_url": reel_url,
                 "error": None, "error_message": None,
                 "note": "Reel URL was already unavailable before delete"}
+    # The Reel page sometimes renders logged-out even though the home
+    # page is logged in (then the ••• menu has no Delete and the API
+    # returns login HTML). Re-establish the session via the home page
+    # and come back before trying anything.
+    if not await _page_logged_in(page):
+        log("delete", False, "Reel page renders logged-out — re-establishing the session via home")
+        try:
+            await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(4000)
+            await page.goto(reel_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(4000)
+        except Exception:
+            pass
+        if not await _page_logged_in(page):
+            log("delete", False, "Reel page still renders logged-out after re-establishing the session")
+        else:
+            log("delete", True, "Reel page now renders logged-in")
     if not dry_run:
         # Primary: delete via the media delete API. The UI action rail
         # does not reliably render in the headless browser (the •••
