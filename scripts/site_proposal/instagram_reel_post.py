@@ -200,8 +200,20 @@ async def _newest_reel_link(page, username, log):
             f"no /reel/ link on {username}/reels after 30s; page text: {body[:300]}")
     except Exception:
         log("newest_reel", False, "no /reel/ link found on the profile reels page")
-    # The page grid does not render links in the headless browser — read
-    # the same profile media through the profile-info API instead.
+    # The page grid does not render links in the headless browser — try
+    # the page's own embedded data first (the profile HTML carries the
+    # media edges as JSON with "shortcode" fields; the first is the
+    # newest post), then the profile-info API.
+    try:
+        html = await page.content()
+    except Exception:
+        html = ""
+    for m in re.finditer(r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', html or ""):
+        cand = f"https://www.instagram.com/reel/{m.group(1)}/"
+        if _goto_allowed(cand):
+            log("newest_reel", True, f"newest Reel from page data: {cand}")
+            return cand
+    log("newest_reel", False, "no shortcode in the /reels/ page HTML either")
     return await _newest_reel_via_api(page, username, log)
 
 
