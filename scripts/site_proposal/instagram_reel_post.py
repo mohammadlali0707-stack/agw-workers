@@ -9,9 +9,16 @@ PRIVACY RULE (user order, 2026-11-18 — non-negotiable):
   a GitHub secret (SITE_SESSION_INSTAGRAM), never printed, never logged,
   never copied anywhere else, never shared with anyone.
   This script performs ONLY: (1) a login check on instagram.com, (2) the
-  Reel upload flow (probe = inspect only, post = publish). It navigates to
+  Reel upload flow (probe = inspect only, post = publish), (3) a recovery
+  read of the owner's /reels/ page (recover mode — find the newest Reel
+  the account just posted, so a Share that succeeded without returning a
+  URL is never lost), (4) delete mode (user order 2026-11-19): open the
+  ONE specific Reel URL it is told to delete and delete ONLY that Reel —
+  never anything else, never a whole profile, never DMs/feed. Delete NEVER
+  runs automatically: it needs an explicit job dispatch. It navigates to
   no other Instagram page — see _goto_allowed() for the enforced allowlist
-  (home, the create dialog, the published post URL for verification).
+  (home, the create dialog, the published post URL for verification, the
+  owner's /reels/ page, and the single Reel URL given to delete mode).
   Any navigation outside that list is refused by the code, not by convention.
 
 AGENT-INDEPENDENCE: this file + instagram-reel-post.yml + README_instagram.md
@@ -46,7 +53,22 @@ Modes:
     with no caption is REFUSED before any browser work) -> Share ->
     verify the post URL. ONLY runs when dry_run is false AND mode is
     post. Anything else refuses with status "dry_run" before any browser
-    work.
+    work. After Share, the confirmation waits up to 300s, then falls back
+    to reading the newest Reel from the owner's /reels/ page (see recover).
+  recover — open the owner's /reels/ page (logged in) and return the
+    newest Reel URL it finds, verified to load and carrying the caption
+    marker "Succession" (the lessons' caption always contains it). Used
+    when a post succeeded but no URL came back (the 2026-11-19 Part 2
+    case: Share clicked, no URL in 180s, Reel live). Submits NOTHING —
+    read-only. Needs no video (the --video-url input is accepted but
+    ignored; no download happens).
+  delete — open the ONE Reel URL given with --reel-url and delete it
+    through the UI (••• menu -> Delete -> confirm), then verify it is
+    gone (the URL no longer loads). Deletes ONLY that exact URL — never
+    anything else. dry_run=true = inspect only: verify the Delete option
+    is present in the ••• menu and close it WITHOUT deleting. Live delete
+    needs dry_run=false AND an explicit dispatch (never automatic).
+    Needs no video (the --video-url input is accepted but ignored).
 
   dry_run (default true) is a second, independent gate: even mode=post
   refuses to publish while dry_run is true.
@@ -77,15 +99,64 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 # --- navigation allowlist (privacy rule). Nothing else is ever opened. ---
 # home page (login check + create dialog live here), the published post URL
-# (verification after Share), and the owner's /reels/ page (fallback check
-# that the Reel exists). DMs (/direct), feed (/explore), following lists,
-# settings (/accounts/edit) and every other path are refused.
+# (verification after Share), the owner's /reels/ page (the recover mode's
+# read of the newest Reel the account just posted), and — delete mode only —
+# the ONE specific Reel URL it is told to delete. DMs (/direct), feed
+# (/explore), following lists, settings (/accounts/edit) and every other
+# path are refused.
 _ALLOWED_RE = re.compile(
     r"^https://www\.instagram\.com/(?:$|reel/[\w-]+/?$|p/[\w-]+/?$|[\w.\-]+/reels/?$)")
 
 
 def _goto_allowed(url):
     return bool(_ALLOWED_RE.match(url or ""))
+
+
+async def _newest_reel_link(page, username, log):
+    """Read-only: open the owner's /reels/ page and return the FIRST
+    /reel/<code>/ link (the newest Reel). The /reels/ page is inside the
+    navigation allowlist (privacy rule: the recover read only ever opens
+    this page, to find the Reel this account just posted). Returns the
+    full https://www.instagram.com/reel/<code>/ URL, or None. Never
+    clicks anything, never opens DMs/feed/other pages."""
+    url = f"https://www.instagram.com/{username}/reels/"
+    if not _goto_allowed(url):
+        return None
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(5000)
+        hrefs = await page.evaluate(
+            "() => [...document.querySelectorAll('a[href]')]"
+            ".map(a => a.getAttribute('href') || '')"
+            ".filter(h => h.includes('/reel/'))")
+    except Exception as e:
+        log("newest_reel", False, f"could not load {username}/reels: {type(e).__name__}")
+        return None
+    for href in hrefs or []:
+        cand = "https://www.instagram.com" + href if href.startswith("/") else href
+        if _goto_allowed(cand):
+            log("newest_reel", True, f"newest Reel on profile: {cand}")
+            return cand
+    log("newest_reel", False, "no /reel/ link found on the profile reels page")
+    return None
+
+
+async def _verify_reel_url(page, url):
+    """Load a Reel URL and check it really is a live Reel. Returns
+    (loads, has_caption_marker): loads = the page is not the 'Sorry, this
+    page isn't available' dead page; has_caption_marker = the page text
+    contains 'Succession' (every lesson caption contains it — an identity
+    signal that the Reel is ours, not some other account's post)."""
+    if not _goto_allowed(url):
+        return False, False
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(3000)
+        body = await _body_text(page, limit=2000)
+    except Exception:
+        return False, False
+    loads = "Sorry, this page isn't available" not in body
+    return loads, ("Succession" in body)
 
 
 # ---------------------------------------------------------------------------
@@ -1055,11 +1126,189 @@ async def run_probe(page, video_path, caption, out_dir, log):
     return res
 
 
-async def run_post(page, video_path, caption, out_dir, log):
+async def run_recover(page, username, out_dir, log):
+    """Read-only recovery: find the newest Reel on the logged-in profile
+    and verify it loads and carries the caption marker 'Succession'.
+    Used when a post succeeded but no URL came back (the 2026-11-19
+    Part 2 case: Share clicked, no URL in 180s, Reel live). Submits
+    NOTHING — it only reads the /reels/ page and the candidate Reel
+    page. Returns {"ok", "status", "post_url", ...} with status
+    "recovered" on success, "recover_failed" otherwise."""
+    newest = await _newest_reel_link(page, username, log)
+    if not newest:
+        return {"ok": False, "status": "recover_failed",
+                "error_message": "no Reel link found on the profile reels page"}
+    loads, marker = await _verify_reel_url(page, newest)
+    if not loads:
+        return {"ok": False, "status": "recover_failed",
+                "error_message": f"newest Reel URL does not load: {newest}"}
+    if not marker:
+        return {"ok": False, "status": "recover_failed",
+                "error_message": f"newest Reel has no 'Succession' caption "
+                                 f"marker (not our lesson Reel?): {newest}"}
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "recovered.png"))
+    except Exception:
+        pass
+    log("recovered", True, f"newest Reel verified: {newest}")
+    return {"ok": True, "status": "recovered", "post_url": newest,
+            "error": None, "error_message": None}
+
+
+async def run_delete(page, reel_url, out_dir, log, dry_run=True):
+    """Delete ONE specific Reel. Opens exactly the given Reel URL (the
+    allowlist permits reel/ URLs) and deletes it through the UI:
+    ••• menu -> Delete -> confirm. Deletes ONLY that exact URL — it
+    never navigates anywhere else. dry_run=True (inspect only): verify
+    the Delete option is present in the ••• menu, screenshot it, close
+    the menu WITHOUT deleting. dry_run=False: actually delete, then
+    verify the URL no longer loads ('Sorry, this page isn't available').
+    Returns {"ok", "status", "deleted_url", ...} with status "deleted"
+    on success, "delete_failed" otherwise (or "delete_option_found" for
+    a successful inspect-only run)."""
+    if not reel_url or not _goto_allowed(reel_url):
+        return {"ok": False, "status": "delete_failed",
+                "error_message": "no valid Reel URL given to delete "
+                                 "(--reel-url must be an instagram.com/reel/... URL)"}
+    try:
+        await page.goto(reel_url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(4000)
+        body = await _body_text(page, limit=2000)
+    except Exception as e:
+        return {"ok": False, "status": "delete_failed",
+                "error_message": f"could not open the Reel URL: {type(e).__name__}"}
+    if "Sorry, this page isn't available" in body:
+        log("delete", True, f"Reel already gone: {reel_url}")
+        return {"ok": True, "status": "deleted", "deleted_url": reel_url,
+                "error": None, "error_message": None,
+                "note": "Reel URL was already unavailable before delete"}
+    # Find the ••• (More options) control. Try several selectors; the web
+    # UI exposes it as a button with aria-label 'More options', or a
+    # plain div/button with the text '•••' / '...'.
+    more = None
+    more_desc = None
+    for desc, loc in [
+        ("button[aria-label=More options]",
+         page.locator("button[aria-label='More options']")),
+        ("button:has-text(•••)", page.locator("button:has-text('•••')")),
+        ("div[role=button]:has-text(•••)",
+         page.locator("div[role='button']:has-text('•••')")),
+        ("[aria-label='More options']",
+         page.locator("[aria-label='More options']")),
+    ]:
+        try:
+            if await loc.count() and await loc.first.is_visible(timeout=2000):
+                more, more_desc = loc.first, desc
+                break
+        except Exception:
+            continue
+    if more is None:
+        try:
+            await page.screenshot(path=os.path.join(out_dir, "delete_no_menu.png"))
+        except Exception:
+            pass
+        return {"ok": False, "status": "delete_failed",
+                "error_message": "could not find the ••• (More options) control on the Reel page"}
+    try:
+        await more.click(timeout=10000)
+        await page.wait_for_timeout(2000)
+    except Exception:
+        return {"ok": False, "status": "delete_failed",
+                "error_message": "could not open the ••• menu"}
+    # In the menu, find the Delete option (a button/menuitem with the
+    # text 'Delete'). Do NOT click anything else.
+    delete_opt = None
+    for desc, loc in [
+        ("button:has-text(Delete)", page.locator("button:has-text('Delete')")),
+        ("[role=menuitem]:has-text(Delete)",
+         page.locator("[role='menuitem']:has-text('Delete')")),
+        ("div[role=button]:has-text(Delete)",
+         page.locator("div[role='button']:has-text('Delete')")),
+        ("text=Delete", page.locator("text=Delete")),
+    ]:
+        try:
+            if await loc.count() and await loc.first.is_visible(timeout=2000):
+                delete_opt = loc.first
+                break
+        except Exception:
+            continue
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "delete_menu.png"))
+    except Exception:
+        pass
+    if delete_opt is None:
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return {"ok": False, "status": "delete_failed",
+                "error_message": "••• menu opened but no Delete option found"}
+    if dry_run:
+        # Inspect only: the Delete option is present. Close the menu and
+        # report — the Reel is NOT deleted.
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+        log("delete_inspect", True,
+            f"Delete option present for {reel_url} (inspect only, nothing deleted)")
+        return {"ok": True, "status": "delete_option_found",
+                "deleted_url": None, "error": None, "error_message": None,
+                "note": "dry_run inspect only: Delete option found, Reel NOT deleted"}
+    # Live delete: click Delete, then confirm in the dialog.
+    try:
+        await delete_opt.click(timeout=10000)
+        await page.wait_for_timeout(2000)
+    except Exception:
+        return {"ok": False, "status": "delete_failed",
+                "error_message": "could not click Delete in the ••• menu"}
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "delete_confirm.png"))
+    except Exception:
+        pass
+    confirmed = False
+    for desc, loc in [
+        ("button:has-text(Delete)", page.locator("button:has-text('Delete')")),
+        ("[role=button]:has-text(Delete)",
+         page.locator("[role='button']:has-text('Delete')")),
+        ("text=Delete", page.locator("text=Delete")),
+    ]:
+        try:
+            if await loc.count() and await loc.first.is_visible(timeout=3000):
+                await loc.first.click(timeout=10000)
+                confirmed = True
+                break
+        except Exception:
+            continue
+    if not confirmed:
+        return {"ok": False, "status": "delete_failed",
+                "error_message": "Delete clicked but no confirmation button appeared"}
+    await page.wait_for_timeout(5000)
+    # Verify the Reel is gone: the URL must no longer load.
+    loads, _ = await _verify_reel_url(page, reel_url)
+    if loads:
+        return {"ok": False, "status": "delete_failed",
+                "error_message": f"delete confirmed but the Reel URL still loads: {reel_url}"}
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "deleted.png"))
+    except Exception:
+        pass
+    log("deleted", True, f"Reel deleted and verified gone: {reel_url}")
+    return {"ok": True, "status": "deleted", "deleted_url": reel_url,
+            "error": None, "error_message": None}
+
+
+async def run_post(page, video_path, caption, out_dir, log, username=None):
     """Full publish flow. ONLY called when dry_run is false and mode is post.
     The caption is pasted VERBATIM from the caller — never generated,
     reworded, or invented here. An empty caption is refused by the caller
-    before any browser work; this is a second check."""
+    before any browser work; this is a second check.
+    Confirmation (2026-11-19 fix): after Share the wait is 300s (was
+    180s — the Part 2 post succeeded but returned no URL in 180s). If
+    still no URL, fall back to reading the newest Reel from the owner's
+    /reels/ page and verify it loads and carries the 'Succession'
+    caption marker, instead of reporting post_failed."""
     if not (caption or "").strip():
         return {"ok": False, "status": "post_failed",
                 "error_message": "no caption supplied — refusing to post "
@@ -1102,7 +1351,9 @@ async def run_post(page, video_path, caption, out_dir, log):
                 "error_message": "no Share button on the caption screen"}
     log("share_clicked", True, f"Share clicked via {hit}; waiting for publish confirmation")
     # Wait for the shared confirmation and capture the post URL.
-    deadline = time.time() + 180
+    # 300s (was 180s): the 2026-11-19 Part 2 post succeeded but returned
+    # no URL within 180s, so the runner reported post_failed on a live Reel.
+    deadline = time.time() + 300
     post_url = None
     while time.time() < deadline:
         await page.wait_for_timeout(3000)
@@ -1130,8 +1381,27 @@ async def run_post(page, video_path, caption, out_dir, log):
     except Exception:
         pass
     if not post_url:
-        return {"ok": False, "status": "post_failed",
-                "error_message": "Share clicked but no published post URL appeared in 180s"}
+        # Fallback (2026-11-19): Share may have succeeded without a URL
+        # (the Part 2 case). Read the newest Reel from the owner's
+        # /reels/ page instead of reporting post_failed on a live Reel.
+        log("confirm_fallback", True,
+            "no URL in 300s after Share — reading newest Reel from the profile")
+        newest = await _newest_reel_link(page, username, log) if username else None
+        if newest:
+            loads, marker = await _verify_reel_url(page, newest)
+            if loads and marker:
+                post_url = newest
+                log("confirm_fallback", True,
+                    f"recovered the posted Reel from the profile: {post_url}")
+            else:
+                log("confirm_fallback", False,
+                    f"newest Reel {newest} did not verify "
+                    f"(loads={loads}, marker={marker})")
+        if not post_url:
+            return {"ok": False, "status": "post_failed",
+                    "error_message": "Share clicked but no published post URL "
+                                     "appeared in 300s, and no verifiable newest "
+                                     "Reel was found on the profile"}
     # Verify the post URL loads.
     if not _goto_allowed(post_url):
         return {"ok": False, "status": "post_failed",
@@ -1175,8 +1445,11 @@ async def amain(args):
         result["finished_at"] = datetime.now(timezone.utc).isoformat()
         result["run_uuid"] = uuid.uuid4().hex
         # ok must agree with status: a probe that reached the caption
-        # screen and a published post are successes, not failures.
-        result["ok"] = status in ("probe_ok", "posted")
+        # screen and a published post are successes, not failures. A
+        # recovered Reel URL, a deleted Reel, and a delete-option
+        # inspection are successes too.
+        result["ok"] = status in ("probe_ok", "posted", "recovered",
+                                  "deleted", "delete_option_found")
         result.update(extra)
         try:
             path = save_result(args.results_dir, args.job_id, result, mask)
@@ -1223,9 +1496,18 @@ async def amain(args):
         return finish("dry_run",
                       error="dry_run is on — refusing to post",
                       error_message="Dispatch with dry_run=false and mode=post to publish.")
-    if args.mode not in ("probe", "post"):
+    if args.mode not in ("probe", "post", "recover", "delete"):
         return finish("error", error="bad mode",
                       error_message=f"unknown mode {args.mode!r}")
+
+    # ---- gate 2a: delete mode needs the exact Reel URL. It deletes ONLY
+    # that URL — never anything else — so a missing/invalid URL is
+    # refused before any browser work. ----
+    if args.mode == "delete" and not (args.reel_url or "").strip():
+        log("delete_gate", False, "no --reel-url supplied — refusing to delete")
+        return finish("error", error="no Reel URL to delete",
+                      error_message="Delete mode needs --reel-url (the exact "
+                      "instagram.com/reel/... URL). It deletes ONLY that URL.")
 
     # ---- gate 2b: a real post needs a caption handed to it. The poster
     # pastes the caption verbatim and never invents one, so an empty
@@ -1237,22 +1519,32 @@ async def amain(args):
                       "poster pastes the caption it is handed verbatim and "
                       "never invents one. Re-dispatch with the caption input filled.")
 
-    # ---- download the video ----
+    # ---- download the video (probe/post only). Recover and delete need
+    # no video: they only read pages / delete one given Reel URL. ----
     video_path = os.path.join("/tmp", f"ig-{args.job_id}.mp4")
-    try:
-        nbytes, derr = download_video(args.video_url, video_path)
-    except Exception as e:
-        return finish("error", error="video download failed",
-                      error_message=f"{type(e).__name__}")
-    if derr:
-        return finish("error", error="video download failed", error_message=derr)
-    result["video_bytes"] = nbytes
-    result["video_seconds"] = mp4_duration_seconds(video_path)
-    log("download", True, f"{nbytes} bytes, {result['video_seconds']}s")
+    if args.mode in ("recover", "delete"):
+        result["video_bytes"] = 0
+        result["video_seconds"] = None
+        log("download", True, f"mode={args.mode}: no video needed, skipping download")
+    else:
+        try:
+            nbytes, derr = download_video(args.video_url, video_path)
+        except Exception as e:
+            return finish("error", error="video download failed",
+                          error_message=f"{type(e).__name__}")
+        if derr:
+            return finish("error", error="video download failed", error_message=derr)
+        result["video_bytes"] = nbytes
+        result["video_seconds"] = mp4_duration_seconds(video_path)
+        log("download", True, f"{nbytes} bytes, {result['video_seconds']}s")
 
     # ---- browser: login check, then probe or post ----
-    from playwright.async_api import async_playwright
+    # The playwright import is INSIDE the try (2026-11-19): if the module
+    # is missing, the job still writes an error result.json instead of
+    # crashing with no result (the pipeline would then poll 30 min for a
+    # file that never appears).
     try:
+        from playwright.async_api import async_playwright
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             try:
@@ -1302,6 +1594,25 @@ async def amain(args):
                                       error_message="instagram.com showed a login wall "
                                       "with this session. The session needs a fresh "
                                       "capture (see README_instagram.md).")
+                    if args.mode == "recover":
+                        rec = await run_recover(page, login["username"],
+                                                out_dir, log)
+                        if rec.get("ok"):
+                            return finish("recovered", error=None,
+                                          error_message=None,
+                                          post_url=rec.get("post_url"))
+                        return finish("recover_failed", error="recover failed",
+                                      error_message=rec.get("error_message", "unknown"))
+                    if args.mode == "delete":
+                        dele = await run_delete(page, args.reel_url or "",
+                                                out_dir, log, args.dry_run)
+                        if dele.get("ok"):
+                            return finish(dele.get("status", "deleted"),
+                                          error=None, error_message=None,
+                                          deleted_url=dele.get("deleted_url"),
+                                          note=dele.get("note"))
+                        return finish("delete_failed", error="delete failed",
+                                      error_message=dele.get("error_message", "unknown"))
                     if args.mode == "probe":
                         probe = await run_probe(page, video_path,
                                                 args.caption or "", out_dir, log)
@@ -1322,7 +1633,7 @@ async def amain(args):
                                       error=None, error_message=None,
                                       note="probe only: nothing was published")
                     posted = await run_post(page, video_path, args.caption or "",
-                                            out_dir, log)
+                                            out_dir, log, login["username"])
                     if posted.get("ok"):
                         return finish("posted", error=None, error_message=None,
                                       post_url=posted.get("post_url"))
@@ -1346,13 +1657,23 @@ async def amain(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Post an Instagram Reel from a saved session.")
-    ap.add_argument("--video-url", "--video_url", required=True, dest="video_url")
+    ap.add_argument("--video-url", "--video_url", required=True, dest="video_url",
+                    help="Public URL of the Reel video (mp4). Required by the "
+                         "workflow input; recover/delete accept it but ignore it.")
     ap.add_argument("--caption", default="")
     ap.add_argument("--job-id", "--job_id", required=True, dest="job_id")
-    ap.add_argument("--mode", choices=["probe", "post"], default="probe")
+    ap.add_argument("--mode", choices=["probe", "post", "recover", "delete"],
+                    default="probe",
+                    help="probe (inspect only), post (publish), recover (find the "
+                         "newest Reel on the profile), delete (delete --reel-url).")
+    ap.add_argument("--reel-url", "--reel_url", dest="reel_url", default="",
+                    help="Delete mode only: the exact instagram.com/reel/... URL "
+                         "to delete. Nothing else is ever deleted.")
     ap.add_argument("--dry-run", "--dry_run", dest="dry_run", default="true",
                     choices=["true", "false"],
-                    help="true (default): never publish. false + mode=post: publish.")
+                    help="true (default): never publish. false + mode=post: publish. "
+                         "For delete: true = inspect only (verify the Delete option "
+                         "is present, do not delete); false = actually delete.")
     ap.add_argument("--results-dir", "--results_dir", dest="results_dir",
                     default="hq-ai-results")
     ap.add_argument("--notion-page-id", "--notion_page_id", dest="notion_page_id", default="")
