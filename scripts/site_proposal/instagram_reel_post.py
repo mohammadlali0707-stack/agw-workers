@@ -292,28 +292,40 @@ async def _newest_reel_via_api(page, username, log):
 
 
 async def _newest_reel_link(page, username, log):
-    """Read-only: open the owner's /reels/ page and return the FIRST
-    /reel/<code>/ link (the newest Reel). The /reels/ page is inside the
-    navigation allowlist (privacy rule: the recover read only ever opens
-    this page, to find the Reel this account just posted). Returns the
-    full https://www.instagram.com/reel/<code>/ URL, or None. Never
-    clicks anything, never opens DMs/feed/other pages.
+    """Read-only: open the owner's /reels/ page and return the Reel
+    URLs it finds, NEWEST FIRST (a list — may be empty). Callers
+    verify each candidate (loads + caption markers) and take the first
+    that verifies. The /reels/ page is inside the navigation allowlist
+    (privacy rule: the recover read only ever opens this page, to find
+    the Reel this account just posted). Never clicks anything, never
+    opens DMs/feed/other pages.
     The reels grid loads asynchronously (GraphQL), so this polls for up
-    to 45s and scrolls to trigger lazy loading — a single 5s wait was
-    not enough (2026-11-19: the first recover run found no links).
+    to 45s and scrolls to trigger lazy loading.
     NEW 2026-11-19 (recover v2): a response listener captures the
     profile grid's OWN GraphQL/API responses — if the grid request
     succeeds but the page never renders its links, the shortcodes are
-    still in the response body. If the direct /reels/ URL does not
-    render, the profile page's Reels tab is clicked instead (a
-    different code path for the same grid)."""
+    still in the response body (the current shape carries node["code"],
+    not "shortcode"). Responses whose query variables contain the
+    owner's user id are the profile grid; other graphql/query calls
+    (e.g. the home timeline) are listed after them. If the direct
+    /reels/ URL does not render, the profile page's Reels tab is
+    clicked instead (a different code path for the same grid)."""
     url = f"https://www.instagram.com/{username}/reels/"
     if not _goto_allowed(url):
-        return None
+        return []
+    owner_uid = await _user_id(page)
+    candidates = []
+
+    def _add(cand):
+        if cand and _goto_allowed(cand) and cand not in candidates:
+            candidates.append(cand)
+
     # Capture the grid's own data responses (read-only): the page's
     # GraphQL/API calls carry the media shortcodes even when the grid
-    # never renders its links. Also records each such call's status, so
-    # a later run can tell a rate limit (429) from a dead query (400).
+    # never renders its links. Also records each such call's status and
+    # which query it was, so a later run can tell the profile grid
+    # (variables carry the owner's user id) from other queries (e.g.
+    # the home timeline) and a rate limit (429) from a dead query (400).
     captured = []
 
     async def _on_response(resp):
@@ -328,6 +340,8 @@ async def _newest_reel_link(page, username, log):
                 codes = re.findall(
                     r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', body or "")
                 shape = ""
+                qhash = ""
+                uid_in_vars = False
                 if not codes:
                     # The current profile-feed GraphQL shape carries the
                     # media id as node["code"] (not "shortcode").
@@ -341,8 +355,18 @@ async def _newest_reel_link(page, username, log):
                         d = parsed.get("data")
                         if isinstance(d, dict):
                             shape += " | data:" + ",".join(list(d.keys())[:5])
+                try:
+                    import urllib.parse as _up
+                    _qs = _up.parse_qs(_up.urlparse(u).query)
+                    qhash = (_qs.get("query_hash") or [""])[0][:12]
+                    _vars = _qs.get("variables") or [""]
+                    if _vars[0] and owner_uid:
+                        uid_in_vars = owner_uid in _vars[0]
+                except Exception:
+                    pass
                 captured.append({"url": u[:120], "status": resp.status,
-                                 "codes": codes[:6], "shape": shape})
+                                 "codes": codes[:6], "shape": shape,
+                                 "qhash": qhash, "uid_in_vars": uid_in_vars})
         except Exception:
             pass
 
@@ -351,16 +375,27 @@ async def _newest_reel_link(page, username, log):
     except Exception:
         pass
 
-    def _captured_codes():
-        for entry in captured:
+    def _captured_urls():
+        # Profile-grid responses first (their variables carry the
+        # owner's user id), then any other graphql/query responses.
+        ordered = sorted(captured,
+                         key=lambda e: (not e.get("uid_in_vars"),))
+        urls = []
+        for entry in ordered:
             log("newest_reel_net", bool(entry["codes"]),
-                f"{entry['status']} {entry['url']} codes={entry['codes']} "
-                f"shape={entry.get('shape', '')}")
-            if entry["codes"]:
-                return f"https://www.instagram.com/reel/{entry['codes'][0]}/"
-        return None
+                f"{entry['status']} qhash={entry.get('qhash', '')} "
+                f"uid_in_vars={entry.get('uid_in_vars')} "
+                f"codes={entry['codes']} shape={entry.get('shape', '')}")
+            for code in entry["codes"]:
+                cand = f"https://www.instagram.com/reel/{code}/"
+                if cand not in urls:
+                    urls.append(cand)
+        return urls
 
     async def _scan_links(seconds):
+        """Poll for /reel/ links; once any appear, let the grid settle
+        3s and return ALL of them (DOM order = newest first).
+        Returns [] on timeout."""
         deadline = time.time() + seconds
         while time.time() < deadline:
             try:
@@ -370,12 +405,25 @@ async def _newest_reel_link(page, username, log):
                     ".filter(h => h.includes('/reel/'))")
             except Exception:
                 hrefs = []
-            for href in hrefs or []:
-                cand = ("https://www.instagram.com" + href
-                        if href.startswith("/") else href)
-                if _goto_allowed(cand):
-                    log("newest_reel", True, f"newest Reel on profile: {cand}")
-                    return cand
+            if hrefs:
+                await page.wait_for_timeout(3000)
+                try:
+                    hrefs = await page.evaluate(
+                        "() => [...document.querySelectorAll('a[href]')]"
+                        ".map(a => a.getAttribute('href') || '')"
+                        ".filter(h => h.includes('/reel/'))")
+                except Exception:
+                    pass
+                out = []
+                for href in hrefs or []:
+                    cand = ("https://www.instagram.com" + href
+                            if href.startswith("/") else href)
+                    if _goto_allowed(cand) and cand not in out:
+                        out.append(cand)
+                if out:
+                    log("newest_reel", True,
+                        f"{len(out)} Reel link(s) on profile: {out}")
+                    return out
             # No links yet: scroll to trigger lazy loading, then wait.
             try:
                 await page.evaluate(
@@ -383,16 +431,17 @@ async def _newest_reel_link(page, username, log):
             except Exception:
                 pass
             await page.wait_for_timeout(3000)
-        return None
+        return []
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
     except Exception as e:
         log("newest_reel", False, f"could not load {username}/reels: {type(e).__name__}")
-        return None
-    found = await _scan_links(45)
-    if found:
-        return found
+        return []
+    for cand in await _scan_links(45):
+        _add(cand)
+    if candidates:
+        return candidates
     # Diagnostics for the next run: what did the page actually show?
     try:
         body = await _body_text(page, limit=500)
@@ -402,10 +451,10 @@ async def _newest_reel_link(page, username, log):
         log("newest_reel", False, "no /reel/ link found on the profile reels page")
     # The grid's own responses may carry the shortcodes even though no
     # link rendered — check what the page's calls returned.
-    cand = _captured_codes()
-    if cand:
-        log("newest_reel", True, f"newest Reel from grid response: {cand}")
-        return cand
+    for cand in _captured_urls():
+        _add(cand)
+    if candidates:
+        return candidates
     # Variant (2026-11-19, untried): open the profile page and click its
     # Reels tab — a different code path from the direct /reels/ URL.
     profile_url = f"https://www.instagram.com/{username}/"
@@ -426,14 +475,14 @@ async def _newest_reel_link(page, username, log):
             if tab is not None:
                 await tab.click(timeout=10000)
                 await page.wait_for_timeout(5000)
-                found = await _scan_links(45)
-                if found:
-                    return found
-                cand = _captured_codes()
-                if cand:
-                    log("newest_reel", True,
-                        f"newest Reel from grid response: {cand}")
-                    return cand
+                for cand in await _scan_links(45):
+                    _add(cand)
+                if candidates:
+                    return candidates
+                for cand in _captured_urls():
+                    _add(cand)
+                if candidates:
+                    return candidates
             else:
                 log("newest_reel_tab", False,
                     "no Reels tab found on the profile page")
@@ -449,17 +498,21 @@ async def _newest_reel_link(page, username, log):
     except Exception:
         html = ""
     for m in re.finditer(r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', html or ""):
-        cand = f"https://www.instagram.com/reel/{m.group(1)}/"
-        if _goto_allowed(cand):
-            log("newest_reel", True, f"newest Reel from page data: {cand}")
-            return cand
+        _add(f"https://www.instagram.com/reel/{m.group(1)}/")
+    if candidates:
+        return candidates
     log("newest_reel", False, "no shortcode in the /reels/ page HTML either")
     # The profile-info API is rate-limited / 404 — try the GraphQL
     # profile-feed query (the web app's own grid query) as a last read.
     api_url = await _newest_reel_via_api(page, username, log)
     if api_url:
-        return api_url
-    return await _newest_reel_via_graphql(page, username, log)
+        _add(api_url)
+        return candidates
+    gql_url = await _newest_reel_via_graphql(page, username, log)
+    if gql_url:
+        _add(gql_url)
+    return candidates
+
 
 
 async def _verify_reel_url(page, url, must_contain=None):
@@ -479,7 +532,10 @@ async def _verify_reel_url(page, url, must_contain=None):
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
         await page.wait_for_timeout(3000)
-        body = await _body_text(page, limit=2000)
+        # Large limit: the caption sits below pages of navigation chrome
+        # in the body text, so a small limit can miss it entirely
+        # (2026-11-19: a real Reel failed verification on limit=2000).
+        body = await _body_text(page, limit=20000)
     except Exception:
         return False, False
     loads = "Sorry, this page isn't available" not in body
@@ -1734,28 +1790,35 @@ async def run_recover(page, username, out_dir, log):
     # must be THIS Reel, not the older Part 1 Reel — a delete can never
     # target the wrong post.
     part2_markers = ["Get Rennie", "keep you posted"]
-    newest = await _newest_reel_link(page, username, log)
-    if not newest:
-        newest = await _newest_reel_via_feed_api(page, username, log)
-    if not newest:
-        newest = await _newest_reel_via_news(page, log)
-    if not newest:
-        newest = await _newest_reel_via_mobile(page, username, log)
-    if not newest:
-        newest = await _newest_reel_via_activity(page, username, log)
-    if not newest:
+    candidates = []
+    for cand in await _newest_reel_link(page, username, log):
+        if cand not in candidates:
+            candidates.append(cand)
+    for _single in (await _newest_reel_via_feed_api(page, username, log),
+                    await _newest_reel_via_news(page, log),
+                    await _newest_reel_via_mobile(page, username, log),
+                    await _newest_reel_via_activity(page, username, log)):
+        if _single and _single not in candidates:
+            candidates.append(_single)
+    if not candidates:
         return {"ok": False, "status": "recover_failed",
                 "error_message": "no Reel link found on the profile reels page"}
-    loads, marker = await _verify_reel_url(page, newest,
-                                           must_contain=part2_markers)
-    if not loads:
+    # Try each candidate in order (newest first): the first that loads
+    # AND carries the Part 2 caption markers is the wrong Part 2 Reel.
+    # A candidate that fails verification is logged, never deleted.
+    newest = None
+    for cand in candidates:
+        loads, marker = await _verify_reel_url(page, cand,
+                                               must_contain=part2_markers)
+        if loads and marker:
+            newest = cand
+            break
+        log("recover_candidate", False,
+            f"{cand} did not verify as Part 2 (loads={loads}, marker={marker})")
+    if not newest:
         return {"ok": False, "status": "recover_failed",
-                "error_message": f"newest Reel URL does not load: {newest}"}
-    if not marker:
-        return {"ok": False, "status": "recover_failed",
-                "error_message": f"newest Reel {newest} did not verify as "
-                                 f"the Part 2 Reel (loads={loads}, "
-                                 f"Succession/Part-2 marker={marker})"}
+                "error_message": f"{len(candidates)} candidate(s) found but "
+                                 f"none verified as the Part 2 Reel: {candidates}"}
     try:
         await page.screenshot(path=os.path.join(out_dir, "recovered.png"))
     except Exception:
@@ -1996,17 +2059,17 @@ async def run_post(page, video_path, caption, out_dir, log, username=None):
         # /reels/ page instead of reporting post_failed on a live Reel.
         log("confirm_fallback", True,
             "no URL in 300s after Share — reading newest Reel from the profile")
-        newest = await _newest_reel_link(page, username, log) if username else None
-        if newest:
-            loads, marker = await _verify_reel_url(page, newest)
+        cands = await _newest_reel_link(page, username, log) if username else []
+        for cand in cands:
+            loads, marker = await _verify_reel_url(page, cand)
             if loads and marker:
-                post_url = newest
+                post_url = cand
                 log("confirm_fallback", True,
                     f"recovered the posted Reel from the profile: {post_url}")
-            else:
-                log("confirm_fallback", False,
-                    f"newest Reel {newest} did not verify "
-                    f"(loads={loads}, marker={marker})")
+                break
+            log("confirm_fallback", False,
+                f"newest Reel {cand} did not verify "
+                f"(loads={loads}, marker={marker})")
         if not post_url:
             return {"ok": False, "status": "post_failed",
                     "error_message": "Share clicked but no published post URL "
