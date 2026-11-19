@@ -75,7 +75,9 @@ async def main():
         alias[CANON.get(_m.model_number, _m.model_name)] = _m.model_name
         _old = OLD_CANON.get(_m.model_number)
         if _old and _old not in alias: alias[_old] = _m.model_name
-    if len(alias) <= 1: return result(False, error=f"signed_out (status {getattr(c, 'account_status', '?')})")
+    # owner 2026-11-19: dual-key alias -> count distinct MODELS, not keys (a dead
+    # session has only model 6, which yields 2 keys but 1 distinct model)
+    if len(set(alias.values())) <= 1: return result(False, error=f"signed_out (status {getattr(c, 'account_status', '?')})")
     try: return await run_job(c, alias)
     finally:
         wb = await writeback(c, ck)
