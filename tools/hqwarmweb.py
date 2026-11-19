@@ -61,7 +61,8 @@ async def connect(ck):
         alias[CANON.get(_m.model_number, _m.model_name)] = _m.model_name
         _old = OLD_CANON.get(_m.model_number)
         if _old and _old not in alias: alias[_old] = _m.model_name
-    if len(alias) <= 1: raise RuntimeError("signed_out")
+    # owner 2026-11-19: dual-key alias -> count distinct MODELS, not keys
+    if len(set(alias.values())) <= 1: raise RuntimeError("signed_out")
     return c, alias
 def finish(cid, ok, text="", t0=0, err=""):
     d = f"{DONE}/{cid}.tmp"; os.makedirs(d, exist_ok=True)
