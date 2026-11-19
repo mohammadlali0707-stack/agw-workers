@@ -2135,6 +2135,27 @@ async def run_recover(page, username, out_dir, log):
             "error": None, "error_message": None}
 
 
+async def _dump_more_candidates(page, log):
+    """Diagnostic: list the buttons on the Reel page (aria-label + own
+    text) so a later run can see what the ••• control actually is."""
+    js = """() => {
+      const out = [];
+      for (const el of document.querySelectorAll('button, [role=button], a[href]')) {
+        const label = el.getAttribute('aria-label') || '';
+        const txt = (el.textContent || '').trim().slice(0, 30);
+        if (label || txt) out.push(label + ' | ' + txt);
+        if (out.length >= 40) break;
+      }
+      return out;
+    }"""
+    try:
+        items = await page.evaluate(js)
+    except Exception:
+        items = []
+    log("delete_diag", False,
+        f"buttons on Reel page ({len(items)}): {items[:20]}")
+
+
 async def run_delete(page, reel_url, out_dir, log, dry_run=True):
     """Delete ONE specific Reel. Opens exactly the given Reel URL (the
     allowlist permits reel/ URLs) and deletes it through the UI:
@@ -2162,33 +2183,52 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
         return {"ok": True, "status": "deleted", "deleted_url": reel_url,
                 "error": None, "error_message": None,
                 "note": "Reel URL was already unavailable before delete"}
-    # Find the ••• (More options) control. Try several selectors; the web
-    # UI exposes it as a button with aria-label 'More options', or a
-    # plain div/button with the text '•••' / '...'.
+    # Find the ••• (More options) control. Poll up to 30s — the action
+    # rail renders after the media data loads, later than the caption.
+    # Try several selectors; the web UI exposes it as a button with
+    # aria-label 'More options', or a plain div/button with the text
+    # '•••' / '...'. (2026-11-19: a single 4s wait + one pass found
+    # nothing on a page whose caption DID render.)
     more = None
     more_desc = None
-    for desc, loc in [
-        ("button[aria-label=More options]",
-         page.locator("button[aria-label='More options']")),
-        ("button:has-text(•••)", page.locator("button:has-text('•••')")),
-        ("div[role=button]:has-text(•••)",
-         page.locator("div[role='button']:has-text('•••')")),
-        ("[aria-label='More options']",
-         page.locator("[aria-label='More options']")),
-    ]:
-        try:
-            if await loc.count() and await loc.first.is_visible(timeout=2000):
-                more, more_desc = loc.first, desc
-                break
-        except Exception:
-            continue
+    deadline = time.time() + 30
+    while time.time() < deadline and more is None:
+        for desc, loc in [
+            ("button[aria-label=More options]",
+             page.locator("button[aria-label='More options']")),
+            ("role=button More options",
+             page.get_by_role("button", name="More options")),
+            ("button[aria-label*=More]",
+             page.locator("button[aria-label*='More']")),
+            ("button:has-text(•••)", page.locator("button:has-text('•••')")),
+            ("div[role=button]:has-text(•••)",
+             page.locator("div[role='button']:has-text('•••')")),
+            ("[aria-label='More options']",
+             page.locator("[aria-label='More options']")),
+            ("text=•••", page.locator("text=•••")),
+        ]:
+            try:
+                if await loc.count() and await loc.first.is_visible(timeout=1000):
+                    more, more_desc = loc.first, desc
+                    break
+            except Exception:
+                continue
+        if more is None:
+            await page.wait_for_timeout(3000)
     if more is None:
         try:
             await page.screenshot(path=os.path.join(out_dir, "delete_no_menu.png"))
         except Exception:
             pass
+        await _dump_more_candidates(page, log)
+        try:
+            _bt = (await _body_text(page, limit=500)).replace("\n", " | ")[:400]
+        except Exception:
+            _bt = ""
+        log("delete", False, f"Reel page body: {_bt}")
         return {"ok": False, "status": "delete_failed",
                 "error_message": "could not find the ••• (More options) control on the Reel page"}
+    log("delete", True, f"••• control found via {more_desc}")
     try:
         await more.click(timeout=10000)
         await page.wait_for_timeout(2000)
