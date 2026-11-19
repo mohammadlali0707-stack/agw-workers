@@ -1677,7 +1677,17 @@ async def detect_login(page):
         for l in links:
             href = l.get("href") or ""
             m = re.fullmatch(r"/([\w.\-]+)/", href)
-            if m and m.group(1) not in ("explore", "direct", "reels", "accounts"):
+            if m and m.group(1) not in (
+                    "explore", "direct", "reels", "accounts", "popular",
+                    "about", "blog", "jobs", "help", "api", "privacy",
+                    "terms", "locations", "lite", "meta", "threads",
+                    "directory", "legal", "safety", "press", "careers",
+                    "ai", "muse", "contact", "web", "developer",
+                    "cookies", "accessibility", "stories", "p", "reel",
+                    "tv", "igtv", "shop", "saved", "tagged", "followers",
+                    "following", "activity", "settings", "edit",
+                    "archive", "insights", "ads", "meta_ai", "aistudio",
+                    "professional_dashboard", "professional-dashboard"):
                 username = m.group(1)
                 break
     except Exception:
@@ -2307,12 +2317,27 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
         return {"ok": False, "status": "delete_failed",
                 "error_message": "could not find the ••• (More options) control on the Reel page"}
     log("delete", True, f"••• control found via {more_desc}")
-    try:
-        await more.click(timeout=10000)
-        await page.wait_for_timeout(2000)
-    except Exception:
+    # Click it. A plain click can time out in the headless browser
+    # (the element moves / is covered while the Reel viewer settles),
+    # so fall back to a forced click and then a JS click.
+    _clicked = False
+    for _how in ("click", "force", "js"):
+        try:
+            if _how == "click":
+                await more.click(timeout=10000)
+            elif _how == "force":
+                await more.click(timeout=10000, force=True)
+            else:
+                await more.evaluate("el => el.click()")
+            _clicked = True
+            log("delete", True, f"••• menu opened via {_how} click")
+            break
+        except Exception:
+            continue
+    if not _clicked:
         return {"ok": False, "status": "delete_failed",
                 "error_message": "could not open the ••• menu"}
+    await page.wait_for_timeout(2000)
     # In the menu, find the Delete option (a button/menuitem with the
     # text 'Delete'). Do NOT click anything else.
     delete_opt = None
