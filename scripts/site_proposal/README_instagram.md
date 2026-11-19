@@ -290,3 +290,55 @@ session values before writing anything).
   Edit walked, caption field found + filled, dialog discarded, nothing
   posted. **The actual publish step (Share → live Reel) is unproven**
   until the first live post.
+
+## Recover + delete modes (2026-11-19, Part 2 incident)
+
+`mode=recover` / `mode=delete` were added to find and remove a Reel the
+runner itself posted, after the post reported `post_failed` but the Reel
+went live anyway. Both are read-only except the live delete, which only
+ever touches the exact `--reel-url` given.
+
+### Recover — how a posted Reel's URL is found
+- The profile `/reels/` grid NEVER renders links in the headless browser
+  (desktop or mobile). The page's own data is the only source.
+- The real data endpoint is **`POST /api/graphql`** (form-encoded body).
+  The profile's media comes from the **`fetch__XDTUserDict`** query — its
+  response carries node `code` values, newest first. (Job
+  ig-recover-part-2g recovered `Df7rRTasyR1` = wrong Part 2,
+  `Df5_bBMuMLe` = Reel 1 / Part 1 this way.)
+- The `xdt_api__v1__feed__timeline__connection` response is the HOME
+  FEED — its codes are random other people's reels, different every
+  load. Never trust them; they all fail caption verification.
+- Other read paths, in order: `/api/v1/feed/user/` (404),
+  `?__a=1` profile JSON (201, empty body), `i.instagram.com` app API
+  (403), news inbox `/api/v1/news/inbox/` (works — collect ALL stories'
+  media; a numeric media id converts to a shortcode), mobile web
+  profile (no links), `your_activity` (no links), old GraphQL query
+  hash (400), web_profile_info (429 then 404). Replaying a captured
+  GraphQL query as JSON returns HTML — the endpoint wants form-encoded.
+- Verification gate (never delete without it): the candidate must load
+  AND carry 'Succession' in the body text AND a Part 2 marker
+  ('Get Rennie' / 'keep you posted') in the page HTML.
+- Shortcode <-> media id: base64 of the id, alphabet A-Za-z0-9-_.
+  `Df7rRTasyR1` = 4034008196320535669, `Df5_bBMuMLe` = 4033533874930238174.
+
+### Delete — session throttle (2026-11-19)
+- Delete mode: `mode=delete`, `--reel-url`, `dry_run=false` + explicit
+  dispatch. API delete (`POST /api/v1/media/<id>/delete/`, form body
+  `media_type=2` + `_csrftoken`) is primary; the UI ••• path (poll 30s,
+  force/JS click) is the fallback. A logged-in guard re-establishes the
+  session via home when the Reel page renders logged-out.
+- **BLOCKED 2026-11-19 ~20:17 UTC by a session throttle** (5 failed
+  delete jobs): the Reel page renders LOGGED-OUT (Log In / Sign Up
+  header, "Follow", no owner controls) even though home passes the login
+  check, and the delete API returns 429 or 200 + login HTML. The page
+  rendered logged-in until ~19:58 UTC and logged-out from ~20:10 UTC,
+  after the burst of recover/delete runs — a time-windowed throttle.
+  **Retry after a quiet period (no Instagram requests for 30–60+ min).**
+  Verify after: profile shows 1 post (only Reel 1) and the old URL fails
+  to load (a confirm-recover returns Reel 1 as newest).
+- `detect_login` username detection is flaky (it once returned
+  "popular" from a `/popular/` link, once null) — the exclusion list
+  covers the footer/nav segments, but do not trust `result.username`
+  for the profile URL without checking it; the delete/recover flows use
+  the Reel URL directly and are unaffected.
