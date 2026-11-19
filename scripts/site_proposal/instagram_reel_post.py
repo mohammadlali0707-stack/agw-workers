@@ -65,6 +65,8 @@ import struct
 import sys
 import time
 import urllib.request
+import uuid
+from datetime import datetime, timezone
 
 HOME = "https://www.instagram.com/"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -1015,6 +1017,11 @@ async def amain(args):
 
     def finish(status, **extra):
         result["status"] = status
+        # Fresh stamp on every write: the pipeline polls for a blob-sha
+        # change to tell this run's result apart from a previous run's
+        # result for the same job_id.
+        result["finished_at"] = datetime.now(timezone.utc).isoformat()
+        result["run_uuid"] = uuid.uuid4().hex
         # ok must agree with status: a probe that reached the caption
         # screen and a published post are successes, not failures.
         result["ok"] = status in ("probe_ok", "posted")
@@ -1026,6 +1033,28 @@ async def amain(args):
         except Exception as e:
             print(f"FATAL: could not write result.json: {type(e).__name__}", flush=True)
             return 1
+
+    # ---- gate 0: idempotency — a previous run of this job already
+    # posted the Reel (same job_id + same video URL). Return its URL
+    # instead of posting a duplicate. Only for real posts; probes
+    # always run fresh. Placed before the session gate on purpose: a
+    # session that died AFTER the post must not hide the posted URL. ----
+    if args.mode == "post" and not args.dry_run:
+        try:
+            _prev_path = os.path.join(args.results_dir, "jobs", args.job_id,
+                                      "result.json")
+            if os.path.exists(_prev_path):
+                with open(_prev_path, encoding="utf-8") as _f:
+                    _prev = json.load(_f)
+                if (isinstance(_prev, dict) and _prev.get("status") == "posted"
+                        and _prev.get("post_url")
+                        and _prev.get("video_url") == args.video_url):
+                    log("idempotent", True,
+                        f"job {args.job_id} already posted")
+                    return finish("posted", error=None, error_message=None,
+                                  post_url=_prev.get("post_url"))
+        except Exception:
+            pass
 
     # ---- gate 1: session (before any browser or download) ----
     session, err = load_session("instagram")
