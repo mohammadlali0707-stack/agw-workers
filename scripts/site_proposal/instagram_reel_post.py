@@ -1397,13 +1397,18 @@ async def _create_state(page):
 # ancestor (<a> / [role=button]). At viewports narrower than ~1920px
 # Instagram collapses the sidebar and the + button is not clickable,
 # which is why the browser runs at 1920x1080 (see amain).
+# NOTE (2026-11-19): the bare "a:has-text('Create')" target was REMOVED.
+# It matched "Create new account" on the logged-out "Continue as <user>"
+# screen, so detect_login reported logged_in=True on a logged-out page
+# (proven by the ig-recover-part-2i run: profile pages showed the
+# "Continue as english_with_succession" screen while login_check passed).
+# The real sidebar Create button carries the New post SVG, covered below.
 CREATE_CLICK_TARGETS = [
     "a:has(svg[aria-label='New post'])",
     "div[role='button']:has(svg[aria-label='New post'])",
     "a:has(svg[aria-label='Post'])",
     "svg[aria-label='New post']",
     "[aria-label='New post']",
-    "a:has-text('Create')",
 ]
 
 
@@ -1663,7 +1668,13 @@ async def detect_login(page):
                   or "Confirm your identity" in body
                   or "confirm your identity" in body.lower())
     login_wall = ("/accounts/login" in url
-                  or any("Log in" in (l.get("text") or "") for l in links[:40]))
+                  or any("Log in" in (l.get("text") or "") for l in links[:40])
+                  # The "Continue as <user>" screen means the session is
+                  # not authenticated (Instagram remembers the account but
+                  # wants a fresh login tap). Without this, the Create
+                  # check could pass on that screen via "Create new account".
+                  or "Use another profile" in body
+                  or "Create new account" in body)
     create_present = False
     for sel in CREATE_CLICK_TARGETS:
         try:
@@ -2947,6 +2958,10 @@ async def amain(args):
                                       error_message="instagram.com showed a login wall "
                                       "with this session. The session needs a fresh "
                                       "capture (see README_instagram.md).")
+                    if args.mode == "recover" and not login.get("username"):
+                        return finish("recover_failed",
+                                      error="no username from login check",
+                                      error_message="the home page did not yield a profile username, so recover has no profile to read (refusing to open a bogus URL).")
                     if args.mode == "recover":
                         rec = await run_recover(page, login["username"],
                                                 out_dir, log)
