@@ -8,7 +8,12 @@ async def _request(self, method, url, *a, **kw):
     if os.environ.get("GWEB_PROXY"): kw["allow_redirects"] = True   # curl_cffi SAFE redirect mode rejects the local proxy IP
     return await _orig_request(self, method, url, *a, **kw)
 _AS.request = _request
-CANON = {6: "gemini-flash-lite", 1: "gemini-flash", 3: "gemini-pro", 8: "gemini-argon"}
+# owner 2026-11-19: Gemini renamed the website models (Neon=3, Carbon=8, Hydrogen=1, Auto=6);
+# model numbers are stable, names are not (and names localize per UI language).
+# CANON = current names; OLD_CANON = legacy keys kept so existing public ids
+# (gemini-argon -> Carbon, gemini-pro -> Neon, gemini-flash -> Hydrogen) keep working.
+CANON = {6: "gemini-auto", 1: "gemini-hydrogen", 3: "gemini-neon", 8: "gemini-carbon"}
+OLD_CANON = {6: "gemini-flash-lite", 1: "gemini-flash", 3: "gemini-pro", 8: "gemini-argon"}
 OUT = "/tmp/out"; os.makedirs(OUT + "/files", exist_ok=True)
 job = json.load(open("/tmp/job.json"))
 def result(ok, **kw):
@@ -64,7 +69,12 @@ async def main():
             except Exception: pass
     try: await c.init(timeout=1500, auto_refresh=False)
     except Exception as e: return result(False, error=f"init {type(e).__name__}: {str(e)[:200]}")
-    alias = {CANON.get(m.model_number, m.model_name): m.model_name for m in (c.list_models() or []) if m.is_available}
+    alias = {}
+    for _m in (c.list_models() or []):
+        if not _m.is_available: continue
+        alias[CANON.get(_m.model_number, _m.model_name)] = _m.model_name
+        _old = OLD_CANON.get(_m.model_number)
+        if _old and _old not in alias: alias[_old] = _m.model_name
     if len(alias) <= 1: return result(False, error=f"signed_out (status {getattr(c, 'account_status', '?')})")
     try: return await run_job(c, alias)
     finally:
