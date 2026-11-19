@@ -117,27 +117,47 @@ def _goto_allowed(url):
 
 async def _newest_reel_via_api(page, username, log):
     """Fallback (read-only): fetch the owner's own profile media via
-    Instagram's web profile-info API (same session, same browser
-    context) and return the newest Reel URL. The /reels/ PAGE grid does
-    not render its links in the headless browser (2026-11-19: the page
-    loads the profile header — '2 posts' — but no /reel/ links appear
-    even after 30s of polling + scrolling), so the same data is read
-    through the profile API instead. This is NOT a page navigation (the
-    allowlist governs page.goto only); it fetches ONLY the owner's own
-    profile media, to find the Reel this account just posted. No DMs,
-    no feed, no other account, no writes."""
+    Instagram's web profile-info API and return the newest Reel URL.
+    The /reels/ PAGE grid does not render its links in the headless
+    browser (2026-11-19: the page loads the profile header — '2 posts'
+    — but no /reel/ links appear even after 30s of polling + scrolling,
+    and no shortcode is in the page HTML), so the same data is read
+    through the profile API instead. The fetch runs in the PAGE's JS
+    context (same-origin fetch, session cookies included) — not a
+    separate HTTP client. This is NOT a page navigation (the allowlist
+    governs page.goto only); it fetches ONLY the owner's own profile
+    media, to find the Reel this account just posted. No DMs, no feed,
+    no other account, no writes.
+    Retries up to 3 times (60s apart): the API returned HTTP 429
+    (rate-limited) on 2026-11-19, which may clear after a short wait."""
     url = ("https://www.instagram.com/api/v1/users/web_profile_info/"
            f"?username={username}")
+    js = """async (url) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const r = await fetch(url, {headers: {
+            'X-IG-App-ID': '936619743392459',
+            'X-Requested-With': 'XMLHttpRequest'}});
+          if (r.status === 200) return {ok: true, data: await r.json()};
+          if (r.status === 429) {
+            await new Promise(res => setTimeout(res, 60000));
+            continue;
+          }
+          return {ok: false, status: r.status};
+        } catch (e) { return {ok: false, error: String(e)}; }
+      }
+      return {ok: false, status: 429, note: 'still rate-limited after 3 attempts'};
+    }"""
     try:
-        resp = await page.context.request.get(
-            url, headers={"X-IG-App-ID": "936619743392459"})
-        if resp.status != 200:
-            log("newest_reel_api", False, f"web_profile_info HTTP {resp.status}")
-            return None
-        data = await resp.json()
+        res = await page.evaluate(js, url)
     except Exception as e:
         log("newest_reel_api", False, f"web_profile_info failed: {type(e).__name__}")
         return None
+    if not res.get("ok"):
+        log("newest_reel_api", False,
+            f"web_profile_info failed: status={res.get('status')} {res.get('note', '')} {res.get('error', '')}")
+        return None
+    data = res.get("data") or {}
     try:
         edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
     except Exception:
