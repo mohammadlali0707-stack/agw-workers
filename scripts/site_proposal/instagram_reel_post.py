@@ -118,26 +118,45 @@ async def _newest_reel_link(page, username, log):
     navigation allowlist (privacy rule: the recover read only ever opens
     this page, to find the Reel this account just posted). Returns the
     full https://www.instagram.com/reel/<code>/ URL, or None. Never
-    clicks anything, never opens DMs/feed/other pages."""
+    clicks anything, never opens DMs/feed/other pages.
+    The reels grid loads asynchronously (GraphQL), so this polls for up
+    to 30s and scrolls to trigger lazy loading — a single 5s wait was
+    not enough (2026-11-19: the first recover run found no links)."""
     url = f"https://www.instagram.com/{username}/reels/"
     if not _goto_allowed(url):
         return None
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(5000)
-        hrefs = await page.evaluate(
-            "() => [...document.querySelectorAll('a[href]')]"
-            ".map(a => a.getAttribute('href') || '')"
-            ".filter(h => h.includes('/reel/'))")
     except Exception as e:
         log("newest_reel", False, f"could not load {username}/reels: {type(e).__name__}")
         return None
-    for href in hrefs or []:
-        cand = "https://www.instagram.com" + href if href.startswith("/") else href
-        if _goto_allowed(cand):
-            log("newest_reel", True, f"newest Reel on profile: {cand}")
-            return cand
-    log("newest_reel", False, "no /reel/ link found on the profile reels page")
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            hrefs = await page.evaluate(
+                "() => [...document.querySelectorAll('a[href]')]"
+                ".map(a => a.getAttribute('href') || '')"
+                ".filter(h => h.includes('/reel/'))")
+        except Exception:
+            hrefs = []
+        for href in hrefs or []:
+            cand = "https://www.instagram.com" + href if href.startswith("/") else href
+            if _goto_allowed(cand):
+                log("newest_reel", True, f"newest Reel on profile: {cand}")
+                return cand
+        # No links yet: scroll to trigger lazy loading, then wait.
+        try:
+            await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        await page.wait_for_timeout(3000)
+    # Diagnostics for the next run: what did the page actually show?
+    try:
+        body = await _body_text(page, limit=500)
+        log("newest_reel", False,
+            f"no /reel/ link on {username}/reels after 30s; page text: {body[:300]}")
+    except Exception:
+        log("newest_reel", False, "no /reel/ link found on the profile reels page")
     return None
 
 
