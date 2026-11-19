@@ -327,6 +327,7 @@ async def _newest_reel_link(page, username, log):
     # (variables carry the owner's user id) from other queries (e.g.
     # the home timeline) and a rate limit (429) from a dead query (400).
     captured = []
+    replay_infos = []
 
     async def _on_response(resp):
         try:
@@ -364,9 +365,36 @@ async def _newest_reel_link(page, username, log):
                         uid_in_vars = owner_uid in _vars[0]
                 except Exception:
                     pass
+                # The web app POSTs GraphQL (doc_id + variables in the
+                # POST body, not the URL). Capture the grid query's
+                # doc_id + variables so it can be replayed directly.
+                doc_id = ""
+                try:
+                    _pd = resp.request.post_data
+                except Exception:
+                    _pd = None
+                if _pd:
+                    try:
+                        _pj = json.loads(_pd)
+                        doc_id = str(_pj.get("doc_id")
+                                     or _pj.get("query_hash") or "")[:16]
+                        _v = _pj.get("variables")
+                        if isinstance(_v, str):
+                            _v = json.loads(_v)
+                        if isinstance(_v, dict):
+                            if owner_uid and owner_uid in json.dumps(_v):
+                                uid_in_vars = True
+                                if not any(r.get("doc_id") == str(_pj.get("doc_id") or "")
+                                           for r in replay_infos):
+                                    replay_infos.append(
+                                        {"doc_id": str(_pj.get("doc_id") or ""),
+                                         "variables": _v})
+                    except Exception:
+                        pass
                 captured.append({"url": u[:120], "status": resp.status,
                                  "codes": codes[:6], "shape": shape,
-                                 "qhash": qhash, "uid_in_vars": uid_in_vars})
+                                 "qhash": qhash, "doc_id": doc_id,
+                                 "uid_in_vars": uid_in_vars})
         except Exception:
             pass
 
@@ -384,6 +412,7 @@ async def _newest_reel_link(page, username, log):
         for entry in ordered:
             log("newest_reel_net", bool(entry["codes"]),
                 f"{entry['status']} qhash={entry.get('qhash', '')} "
+                f"doc={entry.get('doc_id', '')} "
                 f"uid_in_vars={entry.get('uid_in_vars')} "
                 f"codes={entry['codes']} shape={entry.get('shape', '')}")
             for code in entry["codes"]:
@@ -391,6 +420,21 @@ async def _newest_reel_link(page, username, log):
                 if cand not in urls:
                     urls.append(cand)
         return urls
+
+    _replayed_docs = set()
+
+    async def _replay_captured():
+        # Replay the captured grid query (if any): its data IS the
+        # profile grid, so it outranks codes from other queries (e.g.
+        # the home timeline) that the listener also captured.
+        for _ri in replay_infos:
+            if not _ri.get("doc_id") or _ri["doc_id"] in _replayed_docs:
+                continue
+            _replayed_docs.add(_ri["doc_id"])
+            _rc = await _replay_grid_query(page, _ri["doc_id"],
+                                           _ri["variables"], log)
+            if _rc and _rc not in candidates:
+                candidates.insert(0, _rc)
 
     async def _scan_links(seconds):
         """Poll for /reel/ links; once any appear, let the grid settle
@@ -453,6 +497,7 @@ async def _newest_reel_link(page, username, log):
     # link rendered — check what the page's calls returned.
     for cand in _captured_urls():
         _add(cand)
+    await _replay_captured()
     if candidates:
         return candidates
     # Variant (2026-11-19, untried): open the profile page and click its
@@ -481,6 +526,7 @@ async def _newest_reel_link(page, username, log):
                     return candidates
                 for cand in _captured_urls():
                     _add(cand)
+                await _replay_captured()
                 if candidates:
                     return candidates
             else:
@@ -680,6 +726,15 @@ async def _newest_reel_via_news(page, log):
     all_links = []
     for st in stories:
         args = st.get("args") or {}
+        # A "your post" story can carry the media object directly.
+        for med in args.get("media") or []:
+            code = med.get("code") if isinstance(med, dict) else None
+            if code:
+                cand = f"https://www.instagram.com/reel/{code}/"
+                if _goto_allowed(cand):
+                    log("newest_reel_news", True,
+                        f"Reel media in news inbox: {cand}")
+                    return cand
         for link in args.get("links") or []:
             u = link.get("link") or ""
             if u:
@@ -689,9 +744,10 @@ async def _newest_reel_via_news(page, log):
                 if _goto_allowed(cand):
                     log("newest_reel_news", True, f"Reel link in news inbox: {cand}")
                     return cand
+    _ak = list((stories[0].get("args") or {}).keys()) if stories else []
     log("newest_reel_news", False,
         f"no Reel link in news inbox ({len(stories)} stories, "
-        f"links={all_links[:10]})")
+        f"links={all_links[:10]}, first args keys={_ak})")
     return None
 
 
@@ -804,6 +860,89 @@ async def _newest_reel_via_activity(page, username, log):
             log("newest_reel_activity", True, f"post link on your_activity: {cand}")
             return cand
     log("newest_reel_activity", False, "no /reel/ or /p/ link on your_activity")
+    return None
+
+
+async def _replay_grid_query(page, doc_id, variables, log):
+    """Replay the profile grid's own GraphQL query (doc_id + variables
+    captured from the page's live request) via in-page fetch POST.
+    The page's grid may not render even when the query itself returns
+    the media. Returns the first media code's Reel URL, or None.
+    Read-only; owner's own profile only."""
+    if not doc_id or not isinstance(variables, dict):
+        return None
+    csrf = await _csrf_token(page)
+    headers = {"Content-Type": "application/json",
+               "X-IG-App-ID": "936619743392459",
+               "X-Requested-With": "XMLHttpRequest",
+               "X-ASBD-ID": "129477"}
+    if csrf:
+        headers["X-CSRFToken"] = csrf
+    body = {"doc_id": doc_id, "variables": variables}
+    js = """async ([url, headers, body]) => {
+      try {
+        const r = await fetch(url, {method: 'POST', headers,
+          body: JSON.stringify(body)});
+        if (r.status === 200) return {ok: true, data: await r.json()};
+        return {ok: false, status: r.status};
+      } catch (e) { return {ok: false, error: String(e)}; }
+    }"""
+    try:
+        res = await page.evaluate(
+            js, ["https://www.instagram.com/graphql/query/", headers, body])
+    except Exception as e:
+        log("newest_reel_replay", False, f"grid replay failed: {type(e).__name__}")
+        return None
+    if not res.get("ok"):
+        log("newest_reel_replay", False,
+            f"grid replay failed: status={res.get('status')} {res.get('error', '')}")
+        return None
+    codes = _codes_from_json(res.get("data"))
+    if codes:
+        cand = f"https://www.instagram.com/reel/{codes[0]}/"
+        log("newest_reel_replay", True, f"newest Reel via grid replay: {cand}")
+        return cand
+    log("newest_reel_replay", False, "grid replay returned no media codes")
+    return None
+
+
+async def _newest_reel_via_a1(page, username, log):
+    """NEW 2026-11-19 (untried): the legacy profile JSON endpoint
+    GET /<username>/?__a=1&__d=dis — in-page fetch (not a navigation),
+    same session. Returns the newest video's /reel/<code>/ URL, or
+    None. Read-only; owner's own profile only."""
+    url = f"https://www.instagram.com/{username}/?__a=1&__d=dis"
+    js = """async (url) => {
+      try {
+        const r = await fetch(url, {headers: {
+          'X-IG-App-ID': '936619743392459',
+          'X-Requested-With': 'XMLHttpRequest'}});
+        if (r.status === 200) return {ok: true, data: await r.json()};
+        return {ok: false, status: r.status};
+      } catch (e) { return {ok: false, error: String(e)}; }
+    }"""
+    try:
+        res = await page.evaluate(js, url)
+    except Exception as e:
+        log("newest_reel_a1", False, f"profile JSON failed: {type(e).__name__}")
+        return None
+    if not res.get("ok"):
+        log("newest_reel_a1", False,
+            f"profile JSON failed: status={res.get('status')} {res.get('error', '')}")
+        return None
+    codes = _codes_from_json(res.get("data"))
+    if not codes:
+        # Fall back to the legacy shortcode field.
+        try:
+            _txt = json.dumps(res.get("data") or "")
+        except Exception:
+            _txt = ""
+        codes = re.findall(r'"shortcode"\s*:\s*"([A-Za-z0-9_-]+)"', _txt)
+    if codes:
+        cand = f"https://www.instagram.com/reel/{codes[0]}/"
+        log("newest_reel_a1", True, f"newest Reel via profile JSON: {cand}")
+        return cand
+    log("newest_reel_a1", False, "profile JSON returned no media codes")
     return None
 
 
@@ -1795,6 +1934,7 @@ async def run_recover(page, username, out_dir, log):
         if cand not in candidates:
             candidates.append(cand)
     for _single in (await _newest_reel_via_feed_api(page, username, log),
+                    await _newest_reel_via_a1(page, username, log),
                     await _newest_reel_via_news(page, log),
                     await _newest_reel_via_mobile(page, username, log),
                     await _newest_reel_via_activity(page, username, log)):
