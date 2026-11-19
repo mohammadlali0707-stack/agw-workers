@@ -175,6 +175,22 @@ def _shortcode_from_media_id(media_id):
     return out or None
 
 
+def _media_id_from_shortcode(code):
+    """Decode an Instagram shortcode back to its numeric media id
+    (the shortcode is base64 of the id using Instagram's alphabet).
+    Round-trip verified 2026-11-19 (Df7rRTasyR1 <-> 4034008196320535669).
+    Used only to address the media delete API for the exact Reel URL
+    the user ordered deleted."""
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    try:
+        n = 0
+        for ch in code:
+            n = n * 64 + alphabet.index(ch)
+        return str(n)
+    except Exception:
+        return None
+
+
 async def _newest_reel_via_graphql(page, username, log):
     """Second fallback (read-only): fetch the owner's own media through
     Instagram's GraphQL profile-feed query (the same query the web app
@@ -2153,7 +2169,60 @@ async def _dump_more_candidates(page, log):
     except Exception:
         items = []
     log("delete_diag", False,
-        f"buttons on Reel page ({len(items)}): {items[:20]}")
+        f"buttons on Reel page ({len(items)}): {items}")
+
+
+async def _delete_reel_via_api(page, reel_url, log):
+    """Delete a Reel via the media delete API (POST
+    /api/v1/media/<media_id>/delete/?media_type=2), the same endpoint
+    the web app calls after Delete. The media id is decoded from the
+    shortcode in the URL. Returns True only if the API said ok AND the
+    Reel URL no longer loads afterwards, else False. Only ever called
+    for the exact URL the user ordered deleted (and only on a live
+    delete, never on an inspect). The API checks ownership server-side,
+    so a wrong id cannot delete someone else's media."""
+    m = re.search(r"/reel/([A-Za-z0-9_-]+)/", reel_url or "")
+    if not m:
+        return False
+    media_id = _media_id_from_shortcode(m.group(1))
+    if not media_id:
+        log("delete_api", False, f"could not decode media id from {reel_url}")
+        return False
+    csrf = await _csrf_token(page)
+    url = f"https://www.instagram.com/api/v1/media/{media_id}/delete/?media_type=2"
+    headers = {"X-IG-App-ID": "936619743392459",
+               "X-Requested-With": "XMLHttpRequest",
+               "X-ASBD-ID": "129477"}
+    if csrf:
+        headers["X-CSRFToken"] = csrf
+    js = """async ([url, headers]) => {
+      try {
+        const r = await fetch(url, {method: 'POST', headers,
+          body: new URLSearchParams({})});
+        const t = await r.text();
+        return {ok: r.status === 200, status: r.status, body: t.slice(0, 300)};
+      } catch (e) { return {ok: false, error: String(e)}; }
+    }"""
+    try:
+        res = await page.evaluate(js, [url, headers])
+    except Exception as e:
+        log("delete_api", False, f"media delete API failed: {type(e).__name__}")
+        return False
+    if not res.get("ok"):
+        log("delete_api", False,
+            f"media delete API failed for {media_id}: "
+            f"status={res.get('status')} {res.get('error', '')} "
+            f"body={res.get('body', '')[:200]}")
+        return False
+    log("delete_api", True,
+        f"media delete API ok for {media_id}: {res.get('body', '')[:200]}")
+    # Verify the Reel is really gone.
+    await page.wait_for_timeout(3000)
+    loads, _marker = await _verify_reel_url(page, reel_url)
+    if loads:
+        log("delete_api", False, "Reel URL still loads after API delete")
+        return False
+    return True
 
 
 async def run_delete(page, reel_url, out_dir, log, dry_run=True):
@@ -2216,6 +2285,15 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
         if more is None:
             await page.wait_for_timeout(3000)
     if more is None:
+        if not dry_run:
+            # Fallback: the action rail never renders in the headless
+            # browser, so delete via the media delete API directly.
+            if await _delete_reel_via_api(page, reel_url, log):
+                return {"ok": True, "status": "deleted",
+                        "deleted_url": reel_url, "error": None,
+                        "error_message": None,
+                        "note": "deleted via media delete API "
+                                "(action rail did not render)"}
         try:
             await page.screenshot(path=os.path.join(out_dir, "delete_no_menu.png"))
         except Exception:
