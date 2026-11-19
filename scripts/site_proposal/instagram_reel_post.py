@@ -2222,6 +2222,53 @@ async def _dump_more_candidates(page, log):
         log(f"delete_diag_{i // 3 + 1:02d}", True, " || ".join(chunk))
 
 
+async def _inspect_session_state(page, reel_url, log):
+    """READ-ONLY diagnostic (dry-run inspect only): determine whether
+    the context's cookies authenticate server-side, and where the Reel
+    page's logged-out render comes from. Home page JS state, raw HTTP
+    reads of the Reel URL + the owner's /reels/ page through the
+    context's own HTTP client (bypasses page JS), and a long wait on
+    the Reel page. Logs names/markers only — never cookie values."""
+    username = None
+    try:
+        await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(4000)
+        det = await detect_login(page)
+        username = det.get("username")
+        log("inspect_home", True,
+            f"logged_in={det.get('logged_in')} username={username} "
+            f"checkpoint={det.get('checkpoint')} login_wall={det.get('login_wall')}")
+        names = await page.evaluate(
+            "() => document.cookie.split(';').map(s => s.trim().split('=')[0]).filter(Boolean)")
+        log("inspect_home_cookies", True, f"js_cookies={names}")
+    except Exception as e:
+        log("inspect_home", False, f"{type(e).__name__}")
+    req = page.context.request
+    targets = [("reel", reel_url)]
+    if username:
+        targets.append(("reels_page", f"https://www.instagram.com/{username}/reels/"))
+    for label, url in targets:
+        try:
+            r = await req.get(url, timeout=30000)
+            t = await r.text()
+            has_user = bool(username) and (f"/{username}/" in t)
+            log(f"inspect_raw_{label}", True,
+                f"status={r.status} len={len(t)} has_profile_link={has_user} "
+                f"has_login={'Log in' in t}")
+        except Exception as e:
+            log(f"inspect_raw_{label}", False, f"{type(e).__name__}")
+    try:
+        await page.goto(reel_url, wait_until="domcontentloaded", timeout=60000)
+        names = await page.evaluate(
+            "() => document.cookie.split(';').map(s => s.trim().split('=')[0]).filter(Boolean)")
+        log("inspect_reel_cookies", True, f"js_cookies={names}")
+        await page.wait_for_timeout(15000)
+        logged = await _page_logged_in(page)
+        log("inspect_reel_wait15", logged, f"Reel page logged-in after 15s: {logged}")
+    except Exception as e:
+        log("inspect_reel_wait15", False, f"{type(e).__name__}")
+
+
 async def _probe_delete_api_variants(page, log):
     """READ-ONLY diagnostic (dry-run inspect only): probe the media
     delete API with a FAKE media id that cannot exist, so no real media
@@ -2245,6 +2292,15 @@ async def _probe_delete_api_variants(page, log):
       out.asbd_len = asbd.length;
       out.csrf_len = (csrf || '').length;
       out.ds_user = dsUserId ? 'yes' : 'no';
+      try {
+        const uid = dsUserId || '';
+        if (uid) {
+          const vars = encodeURIComponent(JSON.stringify({id: uid, first: 2}));
+          const gr = await fetch('https://www.instagram.com/graphql/query/?query_hash=69cba40317214236af376e7d0a9e1a5&variables=' + vars, {headers: {'X-IG-App-ID': '936619743392459', 'X-Requested-With': 'XMLHttpRequest'}});
+          const gt = await gr.text();
+          out.v0 = {status: gr.status, ctype: (gr.headers.get('content-type') || '').slice(0, 40), has_edges: gt.includes('edge_owner_to_timeline_media'), body: gt.slice(0, 120)};
+        } else { out.v0 = {error: 'no uid'}; }
+      } catch (e) { out.v0 = {error: String(e)}; }
       const fake = '1234567890123456789';
       const base = {'X-IG-App-ID': '936619743392459',
                     'X-Requested-With': 'XMLHttpRequest',
@@ -2286,6 +2342,10 @@ async def _probe_delete_api_variants(page, log):
         f"claim_len={res.get('claim_len')} asbd_len={res.get('asbd_len')} "
         f"csrf_len={res.get('csrf_len')} ds_user={res.get('ds_user')} "
         f"get_error={res.get('get_error', '')}")
+    v0 = res.get("v0") or {}
+    log("api_probe_v0_graphql", True,
+        f"status={v0.get('status')} ctype={v0.get('ctype')} "
+        f"has_edges={v0.get('has_edges')} body={str(v0.get('body', v0.get('error', '')))[:150]}")
     for r in res.get("results", []):
         log("api_probe_" + str(r.get("name", "?")).lower(), True,
             f"status={r.get('status')} ctype={r.get('ctype')} "
@@ -2402,8 +2462,9 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
         else:
             log("delete", True, "Reel page now renders logged-in")
     if dry_run:
-        # Inspect only: probe the delete API with a fake id (read-only)
-        # and dump the page's interactive elements, before looking for •••.
+        # Inspect only: session-state check first, then the fake-id API
+        # probe and the element dump, before looking for •••.
+        await _inspect_session_state(page, reel_url, log)
         await _probe_delete_api_variants(page, log)
         await _dump_more_candidates(page, log)
     if not dry_run:
