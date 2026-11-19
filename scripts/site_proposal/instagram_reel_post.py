@@ -119,20 +119,32 @@ async def _newest_reel_via_graphql(page, username, log):
     """Second fallback (read-only): fetch the owner's own media through
     Instagram's GraphQL profile-feed query (the same query the web app
     itself uses for the profile grid) and return the newest Reel URL.
-    The user id comes from the profile page's own meta tag
-    (al:ios:url instagram://user?id=<id>). In-page fetch, same
+    The user id comes from the `ds_user_id` cookie (set by Instagram
+    for the logged-in user) or, failing that, the profile page's meta
+    tag (al:ios:url instagram://user?id=<id>). In-page fetch, same
     session, owner's own profile only. No DMs, no feed, no other
     account, no writes. The web_profile_info API returned 429 then
     404 (2026-11-19), so GraphQL is the remaining read path."""
+    uid = None
     try:
-        html = await page.content()
+        for c in await page.context.cookies():
+            if c.get("name") == "ds_user_id" and c.get("value"):
+                uid = c["value"]
+                break
     except Exception:
-        html = ""
-    m = re.search(r"instagram://user\?id=(\d+)", html or "")
-    if not m:
-        log("newest_reel_gql", False, "no user id in the profile page meta tags")
+        pass
+    if not uid:
+        try:
+            html = await page.content()
+        except Exception:
+            html = ""
+        m = re.search(r"instagram://user\?id=(\d+)", html or "")
+        if m:
+            uid = m.group(1)
+    if not uid:
+        log("newest_reel_gql", False,
+            "no user id (no ds_user_id cookie, no meta tag)")
         return None
-    uid = m.group(1)
     import json as _json
     import urllib.parse as _up
     variables = _json.dumps({"id": uid, "first": 12}, separators=(",", ":"))
