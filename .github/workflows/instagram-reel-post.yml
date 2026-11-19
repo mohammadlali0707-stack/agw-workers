@@ -9,11 +9,18 @@ name: Instagram Reel Post
 # PRIVACY RULE (user order 2026-11-18): the Instagram session is used ONLY
 # for posting his Reels — nothing else on the account, ever. The runner
 # script enforces this with a navigation allowlist (home, create dialog,
-# published post URL). It never opens DMs, the feed, or any other page.
+# published post URL, the owner's /reels/ page for the recover read, and —
+# delete mode only — the one Reel URL it is told to delete). It never opens
+# DMs, the feed, or any other page. Delete NEVER runs automatically: it
+# needs an explicit dispatch of mode=delete with a reel_url.
 #
 # SAFETY: mode=probe (default) submits NOTHING. mode=post publishes ONLY
-# when dry_run is false. The default dispatch (probe + dry_run=true) can
-# never post anything, even with a valid session.
+# when dry_run is false. mode=recover only READS the profile (finds the
+# newest Reel). mode=delete with dry_run=true only INSPECTS (verifies the
+# Delete option is present, deletes nothing); a live delete needs
+# dry_run=false AND an explicit dispatch. The default dispatch
+# (probe + dry_run=true) can never post or delete anything, even with a
+# valid session.
 
 on:
   workflow_dispatch:
@@ -28,15 +35,22 @@ on:
         type: string
         default: ''
       mode:
-        description: 'probe (verify login + inspect uploader, submit nothing) or post (publish)'
+        description: 'probe (verify login + inspect uploader, submit nothing), post (publish), recover (find the newest Reel on the profile, read-only), or delete (delete the reel_url Reel; dry_run=true inspects only)'
         required: true
         type: choice
         default: 'probe'
         options:
           - probe
           - post
+          - recover
+          - delete
+      reel_url:
+        description: 'Delete mode only: the exact instagram.com/reel/... URL to delete. Nothing else is ever deleted.'
+        required: false
+        type: string
+        default: ''
       dry_run:
-        description: 'true (default): never publish. false + mode=post: publish for real'
+        description: 'true (default): never publish. false + mode=post: publish for real. For delete: true = inspect only (verify the Delete option, do not delete); false = actually delete'
         required: true
         type: choice
         default: 'true'
@@ -88,6 +102,7 @@ jobs:
           VIDEO_URL_INPUT: ${{ inputs.video_url }}
           CAPTION_INPUT: ${{ inputs.caption }}
           MODE_INPUT: ${{ inputs.mode }}
+          REEL_URL_INPUT: ${{ inputs.reel_url }}
           DRY_RUN_INPUT: ${{ inputs.dry_run }}
           JOB_ID_INPUT: ${{ inputs.job_id }}
           NOTION_PAGE_ID_INPUT: ${{ inputs.notion_page_id }}
@@ -99,6 +114,7 @@ jobs:
             --video-url "$VIDEO_URL_INPUT" \
             --caption "$CAPTION_INPUT" \
             --mode "$MODE_INPUT" \
+            --reel-url "$REEL_URL_INPUT" \
             --dry-run "$DRY_RUN_INPUT" \
             --job-id "$JOB_ID_INPUT" \
             --notion-page-id "$NOTION_PAGE_ID_INPUT" \
