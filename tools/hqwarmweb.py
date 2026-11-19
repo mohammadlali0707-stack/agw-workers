@@ -50,7 +50,9 @@ async def connect(ck):
             try: c._cookies.set(k, v, domain=".google.com", secure=True)
             except Exception: pass
     await c.init(timeout=1500, auto_refresh=False)
-    alias = {CANON.get(m.model_number, m.model_name): m.model_name for m in (c.list_models() or []) if m.is_available}
+    _ms = c.list_models() or []
+    print("web models raw", [(m.model_number, m.model_name, m.is_available) for m in _ms], flush=True)
+    alias = {CANON.get(m.model_number, m.model_name): m.model_name for m in _ms if m.is_available}
     if len(alias) <= 1: raise RuntimeError("signed_out")
     return c, alias
 def finish(cid, ok, text="", t0=0, err=""):
