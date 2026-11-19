@@ -2262,6 +2262,18 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
         return {"ok": True, "status": "deleted", "deleted_url": reel_url,
                 "error": None, "error_message": None,
                 "note": "Reel URL was already unavailable before delete"}
+    if not dry_run:
+        # Primary: delete via the media delete API. The UI action rail
+        # does not reliably render in the headless browser (the •••
+        # button is found but the menu it opens has no Delete option),
+        # so the API is the reliable path. Falls back to the UI below
+        # if the API fails (e.g. a 429 rate limit).
+        if await _delete_reel_via_api(page, reel_url, log):
+            return {"ok": True, "status": "deleted",
+                    "deleted_url": reel_url, "error": None,
+                    "error_message": None,
+                    "note": "deleted via media delete API"}
+        log("delete", False, "API delete failed, falling back to the UI path")
     # Find the ••• (More options) control. Poll up to 30s — the action
     # rail renders after the media data loads, later than the caption.
     # Try several selectors; the web UI exposes it as a button with
@@ -2338,6 +2350,19 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
         return {"ok": False, "status": "delete_failed",
                 "error_message": "could not open the ••• menu"}
     await page.wait_for_timeout(2000)
+    # Diagnostic: what menu actually opened? (The nav sidebar's More
+    # menu has no Delete; the Reel's ••• menu must have it.)
+    try:
+        _menu_text = await page.evaluate(
+            """() => {
+              const dlg = document.querySelector('[role="dialog"], [role="menu"]');
+              const el = dlg || document.body;
+              return (el.innerText || '').slice(0, 800);
+            }""")
+    except Exception:
+        _menu_text = ""
+    log("delete_menu", True, f"menu text after ••• click: {_menu_text}")
+    await _dump_more_candidates(page, log)
     # In the menu, find the Delete option (a button/menuitem with the
     # text 'Delete'). Do NOT click anything else.
     delete_opt = None
