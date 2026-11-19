@@ -115,6 +115,66 @@ def _goto_allowed(url):
     return bool(_ALLOWED_RE.match(url or ""))
 
 
+async def _newest_reel_via_graphql(page, username, log):
+    """Second fallback (read-only): fetch the owner's own media through
+    Instagram's GraphQL profile-feed query (the same query the web app
+    itself uses for the profile grid) and return the newest Reel URL.
+    The user id comes from the profile page's own meta tag
+    (al:ios:url instagram://user?id=<id>). In-page fetch, same
+    session, owner's own profile only. No DMs, no feed, no other
+    account, no writes. The web_profile_info API returned 429 then
+    404 (2026-11-19), so GraphQL is the remaining read path."""
+    try:
+        html = await page.content()
+    except Exception:
+        html = ""
+    m = re.search(r"instagram://user\?id=(\d+)", html or "")
+    if not m:
+        log("newest_reel_gql", False, "no user id in the profile page meta tags")
+        return None
+    uid = m.group(1)
+    import json as _json
+    import urllib.parse as _up
+    variables = _json.dumps({"id": uid, "first": 12}, separators=(",", ":"))
+    url = ("https://www.instagram.com/graphql/query/?query_hash="
+           "69cba40317214236af376e7d0a9e1a5&variables="
+           + _up.quote(variables, safe=""))
+    js = """async (url) => {
+      try {
+        const r = await fetch(url, {headers: {
+          'X-IG-App-ID': '936619743392459',
+          'X-Requested-With': 'XMLHttpRequest'}});
+        if (r.status === 200) return {ok: true, data: await r.json()};
+        return {ok: false, status: r.status};
+      } catch (e) { return {ok: false, error: String(e)}; }
+    }"""
+    try:
+        res = await page.evaluate(js, url)
+    except Exception as e:
+        log("newest_reel_gql", False, f"graphql failed: {type(e).__name__}")
+        return None
+    if not res.get("ok"):
+        log("newest_reel_gql", False,
+            f"graphql failed: status={res.get('status')} {res.get('error', '')}")
+        return None
+    data = res.get("data") or {}
+    try:
+        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+    except Exception:
+        log("newest_reel_gql", False, "graphql JSON has no media edges")
+        return None
+    for edge in edges or []:
+        node = edge.get("node") or {}
+        if node.get("__typename") in ("GraphVideo", "GraphSidecar") or node.get("is_video"):
+            code = node.get("shortcode")
+            if code:
+                cand = f"https://www.instagram.com/reel/{code}/"
+                log("newest_reel_gql", True, f"newest Reel via GraphQL: {cand}")
+                return cand
+    log("newest_reel_gql", False, "no video edge in GraphQL media")
+    return None
+
+
 async def _newest_reel_via_api(page, username, log):
     """Fallback (read-only): fetch the owner's own profile media via
     Instagram's web profile-info API and return the newest Reel URL.
@@ -234,7 +294,12 @@ async def _newest_reel_link(page, username, log):
             log("newest_reel", True, f"newest Reel from page data: {cand}")
             return cand
     log("newest_reel", False, "no shortcode in the /reels/ page HTML either")
-    return await _newest_reel_via_api(page, username, log)
+    # The profile-info API is rate-limited / 404 — try the GraphQL
+    # profile-feed query (the web app's own grid query) as a last read.
+    api_url = await _newest_reel_via_api(page, username, log)
+    if api_url:
+        return api_url
+    return await _newest_reel_via_graphql(page, username, log)
 
 
 async def _verify_reel_url(page, url):
