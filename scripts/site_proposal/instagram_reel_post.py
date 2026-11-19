@@ -2177,15 +2177,31 @@ async def run_recover(page, username, out_dir, log):
 
 
 async def _dump_more_candidates(page, log):
-    """Diagnostic: list the buttons on the Reel page (aria-label + own
-    text) so a later run can see what the ••• control actually is."""
+    """Diagnostic: list ALL interactive elements on the Reel page (tag,
+    role, aria-label, title, own text, class, position) so a later run
+    can see what the ••• control actually is. The old version capped
+    at 40 elements and stopped before the action rail (the rail renders
+    after the caption in DOM order), and log() truncates each detail to
+    500 chars, so the dump is split across several log steps."""
     js = """() => {
       const out = [];
-      for (const el of document.querySelectorAll('button, [role=button], a[href]')) {
-        const label = el.getAttribute('aria-label') || '';
-        const txt = (el.textContent || '').trim().slice(0, 30);
-        if (label || txt) out.push(label + ' | ' + txt);
-        if (out.length >= 40) break;
+      const els = document.querySelectorAll(
+        'button, [role=button], a[href], svg[aria-label], [aria-label], [title]');
+      for (const el of els) {
+        const tag = (el.tagName || '').toLowerCase();
+        const role = el.getAttribute('role') || '';
+        const aria = el.getAttribute('aria-label') || '';
+        const title = el.getAttribute('title') || '';
+        const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 25);
+        const cls = (el.getAttribute('class') || '').slice(0, 30);
+        let xy = '';
+        try {
+          const r = el.getBoundingClientRect();
+          xy = Math.round(r.x) + ',' + Math.round(r.y);
+        } catch (e) {}
+        if (aria || title || txt) {
+          out.push(tag + '|' + role + '|' + aria + '|' + title + '|' + txt + '|' + cls + '|' + xy);
+        }
       }
       return out;
     }"""
@@ -2193,10 +2209,87 @@ async def _dump_more_candidates(page, log):
         items = await page.evaluate(js)
     except Exception:
         items = []
-    log("delete_diag", False,
-        f"buttons on Reel page ({len(items)}): {items}")
+    hits = [it for it in items
+            if 'more' in it.lower() or '•••' in it or '…' in it
+            or 'options' in it.lower()]
+    log("delete_diag", True,
+        f"interactive elements on Reel page: {len(items)} total")
+    log("more_hits", bool(hits),
+        f"More/options-like elements ({len(hits)}): {hits[:12]}")
+    # Chunk the full list so the 500-char log truncation never cuts it.
+    for i in range(0, len(items), 3):
+        chunk = items[i:i + 3]
+        log(f"delete_diag_{i // 3 + 1:02d}", True, " || ".join(chunk))
 
 
+async def _probe_delete_api_variants(page, log):
+    """READ-ONLY diagnostic (dry-run inspect only): probe the media
+    delete API with a FAKE media id that cannot exist, so no real media
+    can be deleted, and record which header/body variant gets a JSON
+    answer instead of the SPA shell HTML. A JSON response (even an
+    error such as 'media not found') proves the endpoint + headers are
+    right; HTML means the request is routed to the SPA shell. The
+    X-IG-WWW-Claim / X-ASBD-ID values are read and used inside the page
+    only — only their presence/length is logged, never the values."""
+    csrf = await _csrf_token(page)
+    ds_user = await _user_id(page)
+    js = """async ([csrf, dsUserId]) => {
+      const out = {results: []};
+      let claim = '', asbd = '';
+      try {
+        const g = await fetch('/', {headers: {'X-Requested-With': 'XMLHttpRequest'}});
+        claim = g.headers.get('x-ig-www-claim') || '';
+        asbd = g.headers.get('x-asbd-id') || '';
+      } catch (e) { out.get_error = String(e); }
+      out.claim_len = claim.length;
+      out.asbd_len = asbd.length;
+      out.csrf_len = (csrf || '').length;
+      out.ds_user = dsUserId ? 'yes' : 'no';
+      const fake = '1234567890123456789';
+      const base = {'X-IG-App-ID': '936619743392459',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'X-ASBD-ID': '129477'};
+      if (csrf) base['X-CSRFToken'] = csrf;
+      const withClaim = (h) => { const o = {...h}; if (claim) o['X-IG-WWW-Claim'] = claim; return o; };
+      const withUser = (h) => { const o = {...h}; if (dsUserId) o['X-IG-U-DS-USER-ID'] = dsUserId; return o; };
+      const variants = [
+        ['V1_baseline', 'https://www.instagram.com/api/v1/media/' + fake + '/delete/', {...base}, 'body'],
+        ['V2_claim', 'https://www.instagram.com/api/v1/media/' + fake + '/delete/', withClaim(base), 'body'],
+        ['V3_userid', 'https://www.instagram.com/api/v1/media/' + fake + '/delete/', withUser(base), 'body'],
+        ['V4_claim_userid', 'https://www.instagram.com/api/v1/media/' + fake + '/delete/', withUser(withClaim(base)), 'body'],
+        ['V5_query', 'https://www.instagram.com/api/v1/media/' + fake + '/delete/?media_type=2', withUser(withClaim(base)), 'query'],
+      ];
+      if (asbd) {
+        const h6 = withUser(withClaim(base)); h6['X-ASBD-ID'] = asbd;
+        variants.push(['V6_asbd_live', 'https://www.instagram.com/api/v1/media/' + fake + '/delete/', h6, 'body']);
+      }
+      for (const [name, url, headers, kind] of variants) {
+        try {
+          const body = new URLSearchParams();
+          if (kind === 'body') body.append('media_type', '2');
+          if (csrf) body.append('_csrftoken', csrf);
+          const r = await fetch(url, {method: 'POST', headers, body});
+          const t = await r.text();
+          out.results.push({name, status: r.status,
+            ctype: (r.headers.get('content-type') || '').slice(0, 50),
+            body: t.slice(0, 150)});
+        } catch (e) { out.results.push({name, error: String(e)}); }
+      }
+      return out;
+    }"""
+    try:
+        res = await page.evaluate(js, [csrf, ds_user])
+    except Exception as e:
+        log("api_probe", False, f"probe failed: {type(e).__name__}")
+        return
+    log("api_probe", True,
+        f"claim_len={res.get('claim_len')} asbd_len={res.get('asbd_len')} "
+        f"csrf_len={res.get('csrf_len')} ds_user={res.get('ds_user')} "
+        f"get_error={res.get('get_error', '')}")
+    for r in res.get("results", []):
+        log("api_probe_" + str(r.get("name", "?")).lower(), True,
+            f"status={r.get('status')} ctype={r.get('ctype')} "
+            f"body={str(r.get('body', r.get('error', '')))[:200]}")
 async def _delete_reel_via_api(page, reel_url, log):
     """Delete a Reel via the media delete API (POST
     /api/v1/media/<media_id>/delete/?media_type=2), the same endpoint
@@ -2308,6 +2401,11 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
             log("delete", False, "Reel page still renders logged-out after re-establishing the session")
         else:
             log("delete", True, "Reel page now renders logged-in")
+    if dry_run:
+        # Inspect only: probe the delete API with a fake id (read-only)
+        # and dump the page's interactive elements, before looking for •••.
+        await _probe_delete_api_variants(page, log)
+        await _dump_more_candidates(page, log)
     if not dry_run:
         # Primary: delete via the media delete API. The UI action rail
         # does not reliably render in the headless browser (the •••
