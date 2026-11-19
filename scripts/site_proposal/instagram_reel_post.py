@@ -60,8 +60,11 @@ Modes:
     marker "Succession" (the lessons' caption always contains it). Used
     when a post succeeded but no URL came back (the 2026-11-19 Part 2
     case: Share clicked, no URL in 180s, Reel live). Submits NOTHING —
-    read-only. Needs no video (the --video-url input is accepted but
-    ignored; no download happens).
+    read-only. If the /reels/ page grid does not render its links in the
+    headless browser, the same profile media is read through Instagram's
+    web profile-info API (same session; owner's own profile only).
+    Needs no video (the --video-url input is accepted but ignored; no
+    download happens).
   delete — open the ONE Reel URL given with --reel-url and delete it
     through the UI (••• menu -> Delete -> confirm), then verify it is
     gone (the URL no longer loads). Deletes ONLY that exact URL — never
@@ -112,6 +115,46 @@ def _goto_allowed(url):
     return bool(_ALLOWED_RE.match(url or ""))
 
 
+async def _newest_reel_via_api(page, username, log):
+    """Fallback (read-only): fetch the owner's own profile media via
+    Instagram's web profile-info API (same session, same browser
+    context) and return the newest Reel URL. The /reels/ PAGE grid does
+    not render its links in the headless browser (2026-11-19: the page
+    loads the profile header — '2 posts' — but no /reel/ links appear
+    even after 30s of polling + scrolling), so the same data is read
+    through the profile API instead. This is NOT a page navigation (the
+    allowlist governs page.goto only); it fetches ONLY the owner's own
+    profile media, to find the Reel this account just posted. No DMs,
+    no feed, no other account, no writes."""
+    url = ("https://www.instagram.com/api/v1/users/web_profile_info/"
+           f"?username={username}")
+    try:
+        resp = await page.context.request.get(
+            url, headers={"X-IG-App-ID": "936619743392459"})
+        if resp.status != 200:
+            log("newest_reel_api", False, f"web_profile_info HTTP {resp.status}")
+            return None
+        data = await resp.json()
+    except Exception as e:
+        log("newest_reel_api", False, f"web_profile_info failed: {type(e).__name__}")
+        return None
+    try:
+        edges = data["data"]["user"]["edge_owner_to_timeline_media"]["edges"]
+    except Exception:
+        log("newest_reel_api", False, "web_profile_info JSON has no media edges")
+        return None
+    for edge in edges or []:
+        node = edge.get("node") or {}
+        if node.get("__typename") in ("GraphVideo", "GraphSidecar") or node.get("is_video"):
+            code = node.get("shortcode")
+            if code:
+                cand = f"https://www.instagram.com/reel/{code}/"
+                log("newest_reel_api", True, f"newest Reel via profile API: {cand}")
+                return cand
+    log("newest_reel_api", False, "no video edge in profile media")
+    return None
+
+
 async def _newest_reel_link(page, username, log):
     """Read-only: open the owner's /reels/ page and return the FIRST
     /reel/<code>/ link (the newest Reel). The /reels/ page is inside the
@@ -157,7 +200,9 @@ async def _newest_reel_link(page, username, log):
             f"no /reel/ link on {username}/reels after 30s; page text: {body[:300]}")
     except Exception:
         log("newest_reel", False, "no /reel/ link found on the profile reels page")
-    return None
+    # The page grid does not render links in the headless browser — read
+    # the same profile media through the profile-info API instead.
+    return await _newest_reel_via_api(page, username, log)
 
 
 async def _verify_reel_url(page, url):
