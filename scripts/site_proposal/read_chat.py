@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Read-only Karlancer project chat (one-off check, 2026-11-20).
+"""Read-only project chat reader (Karlancer + ParsCoders).
 
 Reads the conversation for one project the user already bid on and reports
 every message (sender, text, timestamp) as JSON. NEVER sends a message,
 NEVER fills or submits any form, NEVER spends tokens.
 
 Reuses the proposal runner's session loading (scripts.site_proposal.runner:
-load_site_sessions / sanitize_cookies) so the saved SITE_SESSION_KARLANCER
+load_site_sessions / sanitize_cookies) so the saved SITE_SESSION_<SITE>
 cookies + localStorage are applied exactly like the proposal flow.
+For ParsCoders the login check reuses the proposal adapter's
+_detect_login_required (scripts.site_proposal.sites.parscoders).
 
 Usage (from the agw-workers checkout, PYTHONPATH=.):
   python3 -m scripts.site_proposal.read_chat --site karlancer \
       --project-url "https://www.karlancer.com/projects/<slug>" \
       --project-title "جذب ادمین پیگیری لید و پاسخگویی به مشتریان" \
-      --job-id chat-kar-341835-20261120 \
-      --results-dir hq-ai-results
+      --job-id chat-kar-341835-20261121 \
+      --results-dir chat-results
 
 Writes <results-dir>/jobs/<job-id>/result.json (+ chat.png screenshot).
 """
@@ -34,8 +36,21 @@ from scripts.site_proposal.runner import (  # noqa: E402
     sanitize_cookies,
 )
 
+try:
+    from scripts.site_proposal.sites.parscoders import (  # noqa: E402
+        _detect_login_required as _pars_detect_login_required,
+    )
+except Exception:  # noqa: BLE001
+    _pars_detect_login_required = None
+
 CHAT_LINK_TEXT = re.compile(r"گفتگو|چت|پیام|مکالمه|مشاهده.*گفتگو", re.I)
-TIME_RE = re.compile(r"\d{1,2}:\d{2}|\d{4}/\d{1,2}/\d{1,2}|۱۴۰[0-9۰-۹]|امروز|دیروز", re.I)
+NAV_LINK_TEXT = re.compile(r"پیشنهادهای من|پیشنهادهای ارسالی|پروژه‌های من|پیام|گفتگو|داشبورد|پنل کاربری", re.I)
+TIME_RE = re.compile(r"\d{1,2}:\d{2}|\d{4}/\d{1,2}/\d{1,2}|۱۴۰[0-9]|امروز|دیروز", re.I)
+
+SITE_BASE = {
+    "karlancer": "https://www.karlancer.com",
+    "parscoders": "https://parscoders.com",
+}
 
 
 async def _body(page):
@@ -57,6 +72,24 @@ async def _links(page):
         return res if isinstance(res, list) else []
     except Exception:
         return []
+
+
+def _is_chat_link(link):
+    text = link.get("text") or ""
+    href = link.get("href") or ""
+    return bool(CHAT_LINK_TEXT.search(text) or re.search(r"chat|message|conversation", href, re.I))
+
+
+def _project_id_from_url(project_url):
+    """Numeric project id from the URL path (e.g. 623370 from /project/623370/...)."""
+    try:
+        parts = urllib.parse.urlsplit(project_url).path.strip("/").split("/")
+        for part in parts:
+            if part.isdigit():
+                return part
+    except Exception:
+        pass
+    return ""
 
 
 async def _extract_messages(page):
@@ -96,17 +129,14 @@ async def _extract_messages(page):
         return []
 
 
-async def _find_chat_url(page, project_url, project_title):
-    """Discover the conversation URL for this project.
+async def _find_chat_url_karlancer(page, project_url, project_title):
+    """Karlancer discovery (unchanged from the 2026-11-20 version).
 
-    Strategy (all GET navigations / link inspections only):
-      1. /panel/bids -> find the bid card/row for this project, take its
-         chat/message links.
-      2. Any chat-ish link on /panel/bids.
-      3. Project page -> chat-ish links.
-      4. /panel/messages (if it exists / is not a login redirect).
-    Returns (chat_url_or_None, discovery_log).
+    1. /panel/bids -> bid card/row chat links.
+    2. Project page -> chat-ish links.
+    3. /panel/messages (and siblings).
     """
+    base = SITE_BASE["karlancer"]
     log = []
     slug = ""
     try:
@@ -116,38 +146,38 @@ async def _find_chat_url(page, project_url, project_title):
     title_frag = (project_title or "")[:20]
 
     # 1+2. bids page
-    await page.goto("https://www.karlancer.com/panel/bids", wait_until="domcontentloaded")
+    await page.goto(f"{base}/panel/bids", wait_until="domcontentloaded")
     await page.wait_for_timeout(4000)
     bids_body = await _body(page)
     log.append({"step": "bids", "url": page.url, "has_title": bool(title_frag and title_frag in bids_body)})
     links = await _links(page)
-    chat_links = [l for l in links if CHAT_LINK_TEXT.search(l["text"] or "") or re.search(r"chat|message|conversation", l["href"], re.I)]
+    chat_links = [l for l in links if _is_chat_link(l)]
     log.append({"step": "bids", "chat_links": chat_links[:20], "n_links": len(links)})
     if title_frag and title_frag in bids_body:
         # links near the project row: prefer a chat link whose href carries the slug
         for l in chat_links:
             if slug and slug in l["href"]:
-                return urllib.parse.urljoin("https://www.karlancer.com", l["href"]), log
+                return urllib.parse.urljoin(base, l["href"]), log
         if chat_links:
             # single conversation for this bid is the most likely chat link
             # only when the bids page shows exactly one chat link
             if len(chat_links) == 1:
-                return urllib.parse.urljoin("https://www.karlancer.com", chat_links[0]["href"]), log
+                return urllib.parse.urljoin(base, chat_links[0]["href"]), log
 
     # 3. project page
     await page.goto(project_url, wait_until="domcontentloaded")
     await page.wait_for_timeout(4000)
     links = await _links(page)
-    chat_links = [l for l in links if CHAT_LINK_TEXT.search(l["text"] or "") or re.search(r"chat|message|conversation", l["href"], re.I)]
+    chat_links = [l for l in links if _is_chat_link(l)]
     log.append({"step": "project", "url": page.url, "chat_links": chat_links[:20]})
     for l in chat_links:
         if l["href"] and not l["href"].startswith(("javascript:", "#")):
-            return urllib.parse.urljoin("https://www.karlancer.com", l["href"]), log
+            return urllib.parse.urljoin(base, l["href"]), log
 
     # 4. messages hub
-    for hub in ("https://www.karlancer.com/panel/messages",
-                "https://www.karlancer.com/panel/chat",
-                "https://www.karlancer.com/panel/conversations"):
+    for hub in (f"{base}/panel/messages",
+                f"{base}/panel/chat",
+                f"{base}/panel/conversations"):
         await page.goto(hub, wait_until="domcontentloaded")
         await page.wait_for_timeout(3000)
         b = await _body(page)
@@ -157,9 +187,101 @@ async def _find_chat_url(page, project_url, project_title):
             links = await _links(page)
             for l in links:
                 if slug and slug in l["href"]:
-                    return urllib.parse.urljoin("https://www.karlancer.com", l["href"]), log
+                    return urllib.parse.urljoin(base, l["href"]), log
             break
     return None, log
+
+
+async def _find_chat_url_parscoders(page, project_url, project_title):
+    """Parscoders discovery (new 2026-11-21).
+
+    1. Project page -> chat-ish links (also records the already-bid state).
+    2. Homepage nav harvest -> "my proposals / my projects / messages"
+       pages -> the row for this project -> its chat link.
+    3. Candidate message hubs.
+    """
+    base = SITE_BASE["parscoders"]
+    log = []
+    proj_id = _project_id_from_url(project_url)
+    title_frag = (project_title or "")[:20]
+
+    # 1. project page (already visited for the login check; revisit for a
+    #    clean read and harvest its links)
+    await page.goto(project_url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(4000)
+    body = await _body(page)
+    links = await _links(page)
+    chat_links = [l for l in links if _is_chat_link(l)]
+    log.append({"step": "project", "url": page.url,
+                "has_title": bool(title_frag and title_frag in body),
+                "already_bid_hint": bool(re.search(r"پیشنهاد شما|پیشنهاد ثبت|پیشنهاد داده", body)),
+                "chat_links": chat_links[:20], "n_links": len(links)})
+    for l in chat_links:
+        href = l.get("href") or ""
+        if href and not href.startswith(("javascript:", "#")):
+            if (proj_id and proj_id in href) or not proj_id:
+                return urllib.parse.urljoin(base, href), log
+    if chat_links:
+        # a chat link exists on the project page but carries no project id;
+        # take the first one (the page is scoped to this project)
+        return urllib.parse.urljoin(base, chat_links[0]["href"]), log
+
+    # 2. homepage nav harvest -> my-proposals / messages pages
+    await page.goto(base + "/", wait_until="domcontentloaded")
+    await page.wait_for_timeout(4000)
+    links = await _links(page)
+    nav_links = [l for l in links
+                 if NAV_LINK_TEXT.search(l.get("text") or "")
+                 and (l.get("href") or "").startswith(("/", base))]
+    log.append({"step": "home-nav", "url": page.url, "nav_links": nav_links[:20], "n_links": len(links)})
+    visited = set()
+    for l in nav_links[:4]:
+        href = urllib.parse.urljoin(base, l["href"])
+        if href in visited or href == base + "/":
+            continue
+        visited.add(href)
+        await page.goto(href, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+        b = await _body(page)
+        has = bool(title_frag and title_frag in b) or bool(proj_id and proj_id in b)
+        sub = await _links(page)
+        sub_chat = [x for x in sub if _is_chat_link(x)]
+        log.append({"step": "nav-page", "url": page.url, "has_project": has,
+                    "chat_links": sub_chat[:20]})
+        if has:
+            for x in sub_chat:
+                if proj_id and proj_id in (x.get("href") or ""):
+                    return urllib.parse.urljoin(base, x["href"]), log
+            if len(sub_chat) == 1:
+                return urllib.parse.urljoin(base, sub_chat[0]["href"]), log
+            # row found but no chat link on this page; keep looking
+            break
+
+    # 3. candidate message hubs
+    for hub in (f"{base}/user/messages",
+                f"{base}/panel/messages",
+                f"{base}/messages",
+                f"{base}/user/panel/messages"):
+        await page.goto(hub, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+        b = await _body(page)
+        has = bool(title_frag and title_frag in b) or bool(proj_id and proj_id in b)
+        log.append({"step": "hub", "url": page.url, "has_project": has,
+                    "is_login": "login" in page.url.lower() or bool(re.search(r"ورود|ثبت نام", b[:500])),
+                    "body_excerpt": b[:600]})
+        if has:
+            links = await _links(page)
+            for l in links:
+                if proj_id and proj_id in (l.get("href") or "") and _is_chat_link(l):
+                    return urllib.parse.urljoin(base, l["href"]), log
+            break
+    return None, log
+
+
+async def _find_chat_url(page, site, project_url, project_title):
+    if site == "parscoders":
+        return await _find_chat_url_parscoders(page, project_url, project_title)
+    return await _find_chat_url_karlancer(page, project_url, project_title)
 
 
 async def run(site, project_url, project_title, job_id, results_dir):
@@ -205,36 +327,67 @@ async def run(site, project_url, project_title, job_id, results_dir):
                         )
                     page = await context.new_page()
 
-                    # login check via dashboard (same signal as the proposal adapter)
-                    await page.goto("https://www.karlancer.com/panel/dashboard", wait_until="domcontentloaded")
-                    await page.wait_for_timeout(5000)
-                    dash = await _body(page)
-                    if "خروج" not in dash:
-                        result["status"] = "login_required"
-                        result["error_message"] = "Karlancer session expired (no logout link on dashboard)"
-                        result["dash_url"] = page.url
-                        result["dash_body_excerpt"] = dash[:1500]
-                        result["dash_has_login_form"] = bool(await page.locator("input[type='password']").count())
-                        try:
-                            await page.screenshot(path=str(jobs_dir / "dashboard.png"), full_page=True)
-                            result["screenshot_path"] = f"jobs/{job_id}/dashboard.png"
-                        except Exception:
-                            pass
-                        return result
-                    result["logged_in"] = True
+                    # --- login check (per site) ---
+                    if site == "parscoders":
+                        await page.goto(project_url, wait_until="domcontentloaded")
+                        await page.wait_for_timeout(5000)
+                        proj_body = await _body(page)
+                        login_required = False
+                        if _pars_detect_login_required is not None:
+                            try:
+                                login_required = await _pars_detect_login_required(page)
+                            except Exception:
+                                login_required = False
+                        else:
+                            login_required = bool(
+                                re.search(r"برای ثبت پیشنهاد وارد شوید|ورود به حساب کاربری", proj_body)
+                                or await page.locator("input[type='password']").count())
+                        if login_required:
+                            result["status"] = "login_required"
+                            result["error_message"] = "Parscoders session expired (login prompt on project page)"
+                            result["dash_url"] = page.url
+                            result["dash_body_excerpt"] = proj_body[:1500]
+                            result["dash_has_login_form"] = bool(await page.locator("input[type='password']").count())
+                            try:
+                                await page.screenshot(path=str(jobs_dir / "dashboard.png"), full_page=True)
+                                result["screenshot_path"] = f"jobs/{job_id}/dashboard.png"
+                            except Exception:
+                                pass
+                            return result
+                        result["logged_in"] = True
+                        result["project_body_excerpt"] = proj_body[:1500]
+                    else:
+                        # Karlancer: login check via dashboard (same signal as
+                        # the proposal adapter)
+                        await page.goto("https://www.karlancer.com/panel/dashboard", wait_until="domcontentloaded")
+                        await page.wait_for_timeout(5000)
+                        dash = await _body(page)
+                        if "خروج" not in dash:
+                            result["status"] = "login_required"
+                            result["error_message"] = "Karlancer session expired (no logout link on dashboard)"
+                            result["dash_url"] = page.url
+                            result["dash_body_excerpt"] = dash[:1500]
+                            result["dash_has_login_form"] = bool(await page.locator("input[type='password']").count())
+                            try:
+                                await page.screenshot(path=str(jobs_dir / "dashboard.png"), full_page=True)
+                                result["screenshot_path"] = f"jobs/{job_id}/dashboard.png"
+                            except Exception:
+                                pass
+                            return result
+                        result["logged_in"] = True
 
-                    chat_url, discovery = await _find_chat_url(page, project_url, project_title)
+                    chat_url, discovery = await _find_chat_url(page, site, project_url, project_title)
                     result["discovery"] = discovery
                     if not chat_url:
                         result["status"] = "not_found"
-                        result["error_message"] = "No conversation link found for this project (bids/project/messages checked)"
+                        result["error_message"] = "No conversation link found for this project (project page / nav / message hubs checked)"
                         return result
                     result["chat_url"] = chat_url
 
                     await page.goto(chat_url, wait_until="domcontentloaded")
                     await page.wait_for_timeout(5000)
                     # If the link opened a modal instead of a page, the URL
-                    # stays on the bids page; messages are still extractable.
+                    # stays on the listing page; messages are still extractable.
                     msgs = await _extract_messages(page)
                     body = await _body(page)
                     result["messages"] = msgs
@@ -260,8 +413,8 @@ async def run(site, project_url, project_title, job_id, results_dir):
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Read-only Karlancer project chat messages")
-    p.add_argument("--site", required=True, help="Site name (e.g. karlancer)")
+    p = argparse.ArgumentParser(description="Read-only project chat messages (karlancer / parscoders)")
+    p.add_argument("--site", required=True, help="Site name (karlancer or parscoders)")
     p.add_argument("--project-url", required=True, help="Target project URL")
     p.add_argument("--project-title", default="", help="Project title for bid matching")
     p.add_argument("--job-id", required=True, help="Unique job ID")
