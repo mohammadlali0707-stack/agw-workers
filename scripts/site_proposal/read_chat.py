@@ -35,12 +35,13 @@ from scripts.site_proposal.runner import (  # noqa: E402
 )
 
 CHAT_LINK_TEXT = re.compile(r"گفتگو|چت|پیام|مکالمه|مشاهده.*گفتگو", re.I)
-TIME_RE = re.compile(r"\d{1,2}:\d{2}|\d{4}/\d{1,2}/\d{1,2}|۱۴۰[0-9]|امروز|دیروز", re.I)
+TIME_RE = re.compile(r"\d{1,2}:\d{2}|\d{4}/\d{1,2}/\d{1,2}|۱۴۰[0-9۰-۹]|امروز|دیروز", re.I)
 
 
 async def _body(page):
     try:
-        return await page.evaluate("() => document.body.innerText")
+        res = await page.evaluate("() => document.body.innerText")
+        return res if isinstance(res, str) else ""
     except Exception:
         return ""
 
@@ -48,11 +49,12 @@ async def _body(page):
 async def _links(page):
     """All links on the page: [{href, text}]."""
     try:
-        return await page.evaluate(
+        res = await page.evaluate(
             """() => [...document.querySelectorAll('a[href]')].map(a => ({
                 href: a.getAttribute('href') || '',
                 text: (a.innerText || '').trim().slice(0, 120)}))"""
         )
+        return res if isinstance(res, list) else []
     except Exception:
         return []
 
@@ -88,7 +90,8 @@ async def _extract_messages(page):
       return out;
     }"""
     try:
-        return await page.evaluate(js)
+        res = await page.evaluate(js)
+        return res if isinstance(res, list) else []
     except Exception:
         return []
 
@@ -177,9 +180,9 @@ async def run(site, project_url, project_title, job_id, results_dir):
         (jobs_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         return result
 
-    from playwright.async_api import async_playwright
-
     try:
+        from playwright.async_api import async_playwright
+
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             try:
@@ -256,14 +259,18 @@ async def run(site, project_url, project_title, job_id, results_dir):
         (jobs_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description="Read-only Karlancer project chat messages")
+    p.add_argument("--site", required=True, help="Site name (e.g. karlancer)")
+    p.add_argument("--project-url", required=True, help="Target project URL")
+    p.add_argument("--project-title", default="", help="Project title for bid matching")
+    p.add_argument("--job-id", required=True, help="Unique job ID")
+    p.add_argument("--results-dir", default="hq-ai-results", help="Directory for output results")
+    return p.parse_args(argv)
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser()
-    p.add_argument("--site", required=True)
-    p.add_argument("--project-url", required=True)
-    p.add_argument("--project-title", default="")
-    p.add_argument("--job-id", required=True)
-    p.add_argument("--results-dir", default="hq-ai-results")
-    a = p.parse_args(argv)
+    a = parse_args(argv)
     res = asyncio.run(run(a.site, a.project_url, a.project_title, a.job_id, a.results_dir))
     print(json.dumps(res, ensure_ascii=False)[:3000])
     return 0
