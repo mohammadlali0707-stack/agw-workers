@@ -209,6 +209,14 @@ async def run(site, project_url, project_title, job_id, results_dir):
                     if "خروج" not in dash:
                         result["status"] = "login_required"
                         result["error_message"] = "Karlancer session expired (no logout link on dashboard)"
+                        result["dash_url"] = page.url
+                        result["dash_body_excerpt"] = dash[:1500]
+                        result["dash_has_login_form"] = bool(await page.locator("input[type='password']").count())
+                        try:
+                            await page.screenshot(path=str(jobs_dir / "dashboard.png"), full_page=True)
+                            result["screenshot_path"] = f"jobs/{job_id}/dashboard.png"
+                        except Exception:
+                            pass
                         return result
                     result["logged_in"] = True
 
