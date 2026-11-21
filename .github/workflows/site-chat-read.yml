@@ -1,8 +1,11 @@
 name: Site Chat Read
 
 # Read-only: open one project's conversation on a freelance site with the
-# saved site session and dump its messages to hq-ai-results. Never sends
-# anything, never fills or submits a form, never spends tokens.
+# saved site session and dump its messages as a workflow artifact.
+# Never sends anything, never fills or submits a form, never spends tokens.
+# NOTE: results are uploaded as an artifact (not pushed to hq-ai-results)
+# because the HQ_RESULTS_TOKEN secret no longer exists in this repo
+# (verified 2026-11-20); the checkout of hq-ai-results fails without it.
 
 on:
   workflow_dispatch:
@@ -41,13 +44,6 @@ jobs:
       - name: Checkout agw-workers
         uses: actions/checkout@v4
 
-      - name: Checkout hq-ai-results
-        uses: actions/checkout@v4
-        with:
-          repository: mohammadlali0707-stack/hq-ai-results
-          token: ${{ secrets.HQ_RESULTS_TOKEN }}
-          path: hq-ai-results
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -72,30 +68,13 @@ jobs:
             --project-url "${{ inputs.project_url }}" \
             --project-title "${{ inputs.project_title }}" \
             --job-id "${{ inputs.job_id }}" \
-            --results-dir hq-ai-results
+            --results-dir chat-results
 
-      - name: Commit and push results
+      - name: Upload result artifact
         if: always()
-        env:
-          JOB_ID_INPUT: ${{ inputs.job_id }}
-        run: |
-          cd hq-ai-results
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          [ -d "jobs/$JOB_ID_INPUT" ] && git add "jobs/$JOB_ID_INPUT"
-          if git diff --staged --quiet; then
-            echo "No changes to commit in hq-ai-results."
-            exit 0
-          fi
-          git commit -m "site-chat-read: job $JOB_ID_INPUT [skip ci]"
-          MAX_RETRIES=5
-          for i in $(seq 1 $MAX_RETRIES); do
-            echo "Push attempt $i of $MAX_RETRIES..."
-            if git pull --rebase origin main && git push origin HEAD:main; then
-              echo "Successfully pushed results to hq-ai-results."
-              exit 0
-            fi
-            sleep $((i * 2))
-          done
-          echo "Failed to push results to hq-ai-results after $MAX_RETRIES attempts."
-          exit 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-${{ inputs.job_id }}
+          path: chat-results/
+          if-no-files-found: error
+          retention-days: 30
