@@ -31,6 +31,11 @@ on:
         description: 'Unique job ID'
         required: true
         type: string
+      contact:
+        description: 'Contact name to open inside the messages hub (optional)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -68,6 +73,7 @@ jobs:
             --project-url "${{ inputs.project_url }}" \
             --project-title "${{ inputs.project_title }}" \
             --job-id "${{ inputs.job_id }}" \
+            --contact "${{ inputs.contact }}" \
             --results-dir chat-results
 
       - name: Upload result artifact
