@@ -284,7 +284,7 @@ async def _find_chat_url(page, site, project_url, project_title):
     return await _find_chat_url_karlancer(page, project_url, project_title)
 
 
-async def run(site, project_url, project_title, job_id, results_dir):
+async def run(site, project_url, project_title, job_id, results_dir, contact=""):
     jobs_dir = Path(results_dir) / "jobs" / job_id
     jobs_dir.mkdir(parents=True, exist_ok=True)
     result = {
@@ -386,6 +386,20 @@ async def run(site, project_url, project_title, job_id, results_dir):
 
                     await page.goto(chat_url, wait_until="domcontentloaded")
                     await page.wait_for_timeout(5000)
+                    # If a contact name was given, open that thread inside
+                    # the messages hub (read-only navigation; never types
+                    # or sends anything).
+                    result["contact"] = contact
+                    result["contact_opened"] = False
+                    if contact:
+                        try:
+                            await page.get_by_text(contact, exact=False).first.click(timeout=8000)
+                            await page.wait_for_timeout(4000)
+                            result["contact_opened"] = True
+                        except Exception as e:  # noqa: BLE001
+                            result.setdefault("discovery", []).append(
+                                {"step": "open-contact", "contact": contact,
+                                 "error": f"{type(e).__name__}: {e}"[:200]})
                     # If the link opened a modal instead of a page, the URL
                     # stays on the listing page; messages are still extractable.
                     msgs = await _extract_messages(page)
@@ -418,13 +432,14 @@ def parse_args(argv=None):
     p.add_argument("--project-url", required=True, help="Target project URL")
     p.add_argument("--project-title", default="", help="Project title for bid matching")
     p.add_argument("--job-id", required=True, help="Unique job ID")
+    p.add_argument("--contact", default="", help="Contact name to open inside the messages hub (optional)")
     p.add_argument("--results-dir", default="hq-ai-results", help="Directory for output results")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     a = parse_args(argv)
-    res = asyncio.run(run(a.site, a.project_url, a.project_title, a.job_id, a.results_dir))
+    res = asyncio.run(run(a.site, a.project_url, a.project_title, a.job_id, a.results_dir, contact=a.contact))
     print(json.dumps(res, ensure_ascii=False)[:3000])
     return 0
 
