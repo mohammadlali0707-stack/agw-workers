@@ -123,6 +123,11 @@ EDITOR_SELECTORS: List[str] = [
 ]
 
 AMOUNT_SELECTORS: List[str] = [
+    # Live modal DOM (623370, explore 2026-11-22): the amount input is
+    # name=bidAmount / id=init_message_bidAmount, label "مبلغ پیشنهاد".
+    # The older selectors below never matched it — amount stayed empty.
+    "input#init_message_bidAmount",
+    "input[name='bidAmount']",
     "input[name='amount']",
     "input[name='price']",
     "input[name='bid_amount']",
@@ -139,6 +144,10 @@ AMOUNT_SELECTORS: List[str] = [
 ]
 
 DAYS_SELECTORS: List[str] = [
+    # Live modal DOM (623370): days input is name=deadline /
+    # id=init_message_deadline, label "مهلت انجام", prefilled "10".
+    "input#init_message_deadline",
+    "input[name='deadline']",
     "input[name='delivery_days']",
     "input[name='days']",
     "input[name='duration']",
@@ -166,6 +175,10 @@ EXPAND_BUTTON_SELECTORS: List[str] = [
 ]
 
 SUBMIT_BUTTON_SELECTORS: List[str] = [
+    # Live modal DOM (623370): the form's own submit is #msg_submit_btn
+    # ("ارسال پیشنهاد/ توضیح"). Put it first: the generic "ارسال پیشنهاد"
+    # button also matches the page's open-modal button behind the modal.
+    "#msg_submit_btn",
     "button[type='submit']",
     "input[type='submit']",
     "button:has-text('ثبت پیشنهاد')",
@@ -372,6 +385,33 @@ def _num(s: str) -> Optional[int]:
     return int(m.group(0).replace(",", "")) if m else None
 
 
+# Markers that prove YOU have already bid on a project (shown by the project
+# page itself after a bid). This is the ONLY accepted proof of a submission.
+# The static counter "تا کنون N پیشنهاد ارسال شده" appears on EVERY project
+# page and must NEVER count: the old success regex matched it and reported
+# "submitted" twice (2026-11-17/18) without any bid being sent.
+ALREADY_BID_RE = r"پیشنهاد شما ثبت شده|قبلا پیشنهاد داده‌اید|ویرایش پیشنهاد"
+
+
+async def _confirm_submitted(page: Any, url: str) -> Tuple[bool, str]:
+    """Reload the project page fresh and check for already-bid markers.
+
+    Returns (confirmed, body_snippet). A fresh reload is required: the text
+    right after the submit click still contains the static proposal counter,
+    which the old regex mistook for a success message.
+    """
+    import re as _re
+    try:
+        await page.goto(url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(3000)
+        b = await _body(page)
+        if _re.search(ALREADY_BID_RE, b):
+            return True, b[:1200]
+        return False, b[:1200]
+    except Exception:
+        return False, ""
+
+
 class ParscodersAdapter:
     """Parscoders bid flow:
     project page -> 'ثبت پیشنهاد' button -> fill form (text, amount, days) -> submit.
@@ -513,6 +553,20 @@ class ParscodersAdapter:
             if not submit:
                 return {"status": "preview_ready", "filled_values": fv, "error_message": None}
 
+            # Hard gate (2026-11-22): never click submit with an empty amount
+            # or empty days. On 2026-11-17/18 the amount input matched no
+            # selector, so the form went in with an empty amount and the
+            # adapter still reported "submitted" off the static counter.
+            if submit:
+                amt_num = _num(str(fv.get("bid_amount") or ""))
+                if proposal_data.get("bid_amount") is not None and (amt_num is None or amt_num <= 0):
+                    return {"status": "form_error", "filled_values": fv,
+                            "error_message": "amount empty after fill (read-back empty) — refusing to submit"}
+                days_num = _num(str(fv.get("delivery_days") or ""))
+                if proposal_data.get("delivery_days") is not None and (days_num is None or days_num <= 0):
+                    return {"status": "form_error", "filled_values": fv,
+                            "error_message": "delivery days empty after fill (read-back empty) — refusing to submit"}
+
             # 4. Submit
             submit_btn = await _first_matching_locator(page, SUBMIT_BUTTON_SELECTORS)
             if not submit_btn:
@@ -523,10 +577,13 @@ class ParscodersAdapter:
             await page.wait_for_timeout(6000)
 
             fv["after_errors"] = await _errors(page)
-            b_after = await _body(page)
 
-            # Confirm submission
-            if _re.search(r"پیشنهاد (شما )?(با موفقیت )?(ارسال|ثبت) شد|پیشنهاد ثبت شده|با موفقیت ثبت شد", b_after):
+            # Confirm submission: ONLY a fresh reload of the project page
+            # showing already-bid markers counts. Never trust the text right
+            # after the click — the page's static proposal counter
+            # ("تا کنون N پیشنهاد ارسال شده") matches the old success regex.
+            confirmed, b_reload = await _confirm_submitted(page, url)
+            if confirmed:
                 return {"status": "submitted", "filled_values": fv, "error_message": None}
 
             # Check still on form
@@ -534,8 +591,8 @@ class ParscodersAdapter:
             return {
                 "status": "form_error",
                 "filled_values": fv,
-                "error_message": f"submission not confirmed (still_on_form={still_on_form}); errors={fv.get('after_errors',[])}",
-                "body": b_after[:1200],
+                "error_message": f"submission not confirmed on reload (still_on_form={still_on_form}); errors={fv.get('after_errors',[])}",
+                "body": b_reload[:1200],
             }
 
         except Exception as exc:
