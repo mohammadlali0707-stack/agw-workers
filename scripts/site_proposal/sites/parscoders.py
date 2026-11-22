@@ -162,6 +162,15 @@ DAYS_SELECTORS: List[str] = [
     "input#duration",
 ]
 
+VALID_DAYS_SELECTORS: List[str] = [
+    # Live modal DOM (623370): validity input is name=validDays /
+    # id=init_message_validDays, label "مدت اعتبار پیشنهاد". The site
+    # REJECTS the submit when it is empty: "مدت اعتبار پیشنهاد می‌تواند
+    # بین 3 تا 45 روز باشد" (T5, 2026-11-22). Default 7 days.
+    "input#init_message_validDays",
+    "input[name='validDays']",
+    "input[placeholder*='مدت اعتبار']",
+]
 EXPAND_BUTTON_SELECTORS: List[str] = [
     "button:has-text('ثبت پیشنهاد')",
     "button:has-text('ارسال پیشنهاد')",
@@ -602,6 +611,18 @@ class ParscodersAdapter:
                 await days_loc.fill("")
                 await days_loc.press_sequentially(str(int(proposal_data["delivery_days"])), delay=40)
                 fv["delivery_days"] = await days_loc.input_value()
+
+            # Proposal validity days (مدت اعتبار پیشنهاد): the site rejects
+            # the submit when this is empty ("می‌تواند بین 3 تا 45 روز باشد").
+            # Default 7 days; overridable via proposal_data["valid_days"].
+            valid_loc = await _first_matching_locator(page, VALID_DAYS_SELECTORS)
+            if valid_loc:
+                valid_days = int(proposal_data.get("valid_days") or 7)
+                valid_days = max(3, min(45, valid_days))
+                await valid_loc.click()
+                await valid_loc.fill("")
+                await valid_loc.press_sequentially(str(valid_days), delay=40)
+                fv["valid_days"] = await valid_loc.input_value()
 
             await page.wait_for_timeout(800)
             fv["errors"] = await _errors(page)
