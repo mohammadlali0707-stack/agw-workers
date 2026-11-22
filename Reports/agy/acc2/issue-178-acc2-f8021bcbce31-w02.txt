@@ -1,0 +1,75 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-178-acc2-f8021bcbce31-w02","commits":1,"files_changed":1,"checkout":"/home/runner/work/_temp/agent-repo-45024045892-1-run-agy"}}
+Worker committed 1 commit(s), 1 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Investigate Commits and Workflows**: Use [run_command](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy) to inspect git history for commits `816afe4` and `93dd262`, and read [.github/workflows/capture-parscoders-session.yml](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/.github/workflows/capture-parscoders-session.yml) and [.github/workflows/site-proposal.yml](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/.github/workflows/site-proposal.yml).
+2. **Read Team Board and CI Runs**: Run `python3 /tmp/hqteam.py read` for context, then use `gh run list` and `gh run view --log-failed` on workflows `capture-parscoders-session.yml` and `site-proposal.yml` to analyze past failure logs and post-fix runs.
+3. **Draft Audit Report**: Write a diagnostic markdown report under `Reports/audit/` documenting the failure analysis, verification of cron syntax (`816afe4`) and push retry logic (`93dd262`), and any recommended patch proposals for Notion AI (strictly under 400 lines).
+4. **Peer Review**: Run `python3 /tmp/hqteam.py review "audit report on CI failures and fix verification" --file <report-path>` and apply any necessary adjustments based on reviewer feedback.
+5. **Commit and Report Completion**: Stage and commit the report using `git add` and `git commit`, then notify the board using `python3 /tmp/hqteam.py post done "<one-line result>"`.
+
+Now executing Step 1 and checking repository context.
+I have launched the inspection of the failed post-fix runs (`45021348982`, `45021351245`, `45022010751`, `45022344925`) and will analyze the output once complete.
+### Diagnostic Audit Summary: CI Failure Logs for `capture-parscoders-session` and `site-proposal`
+
+A comprehensive diagnostic audit across fleet repositories for [.github/workflows/capture-parscoders-session.yml](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/.github/workflows/capture-parscoders-session.yml) and [.github/workflows/site-proposal.yml](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/.github/workflows/site-proposal.yml) has been completed. The audit report has been staged and committed to [Reports/audit/ci_failure_audit_capture_parscoders_and_site_proposal.md](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/Reports/audit/ci_failure_audit_capture_parscoders_and_site_proposal.md).
+
+---
+
+### Key Verification Findings
+
+#### 1. ParsCoders Session Capture Schedule (`capture-parscoders-session.yml`)
+- **Historical Defect:** Commit `345da74` introduced an unquoted cron line (`- cron: 0 6 * * *`) that underwent local shell glob expansion during file creation, injecting directory filenames into the YAML. Because GitHub Actions parses and validates workflow YAML on every push event to `main`, all 8 consecutive push events triggered startup failures (`startup_failure` / `X This run likely failed because of a workflow file issue` with no runner allocated, runs `45019033082` through `45021144888`).
+- **Fix Verification ([commit `816afe4`](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/.github/workflows/capture-parscoders-session.yml)):**
+  - Commit `816afe4` sanitized the cron entry to quoted string `- cron: '0 6 * * *'`.
+  - Workflow syntax passes `yamllint` and `pyyaml` checks cleanly.
+  - Manual dispatch run `45023040184` completed with status `✓ success` (elapsed: 1m38s), successfully renewing and setting `SITE_SESSION_PARSCODERS` in `mohammadlali0707-stack/agw-workers`.
+- **Verdict:** Fully resolved and verified.
+
+#### 2. Site Proposal Git Push Race Conditions (`site-proposal.yml`)
+- **Historical Defect:** Concurrent `site-proposal` runners push results to `mohammadlali0707-stack/hq-ai-results`. Prior to `93dd262`, failed push attempts retried `git pull --rebase origin main` without clearing active rebase state. In run `45020116085`:
+  1. Attempt 1 was rejected by a remote ref lock race (`cannot lock ref 'refs/heads/main'`).
+  2. Attempt 2 experienced an `add/add` conflict on `jobs/sp-adapter-dom-11220348/result.json` during rebase.
+  3. Attempts 3 through 5 immediately crashed with `fatal: Exiting because of an unresolved conflict` and `error: Pulling is not possible because you have unmerged files.`
+- **Fix Verification ([commit `93dd262`](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/.github/workflows/site-proposal.yml)):**
+  - Commit `93dd262` introduced `git rebase --abort 2>/dev/null || true` prior to every rebase attempt and added `-X theirs` (`git pull --rebase -X theirs origin main && git push origin HEAD:main`).
+  - Runs directly at `93dd262` (`45020781832`, `45021047507`) and later runs (`45022556050`, `45022782505`, `45023038459`) succeeded without any push race deadlocks or unmerged file errors.
+  - Subsequent intermittent failures (`45021348982`, `45022010751`, `45022344925`) were investigated and confirmed to stem from application-level DOM/data validations (ParsCoders `validDays` constraint, closed-project exit codes), which were subsequently addressed by application commits `995d228`, `e0061b6`, and `3c82c6a`.
+- **Verdict:** Fully resolved and verified.
+
+---
+
+### Workflow Remediation Proposal for Notion AI
+
+No direct edits were made to workflow files under `.github/workflows/`. For future concurrency hardening under high runner parallelism, the following non-breaking patch is documented in the audit report for Notion AI:
+
+```diff
+--- a/.github/workflows/site-proposal.yml
++++ b/.github/workflows/site-proposal.yml
+@@ -108,7 +108,8 @@ jobs:
+               echo "Successfully pushed results to hq-ai-results."
+               exit 0
+             fi
+-            sleep $((i * 2))
++            # Backoff with randomized jitter (2-4s, 4-7s, 6-9s, ...) to desynchronize concurrent pushes
++            sleep $(( i * 2 + RANDOM % 3 ))
+           done
+           echo "Failed to push results to hq-ai-results after $MAX_RETRIES attempts."
+           exit 1
+```
+
+---
+
+### Execution and Compliance Checklist
+
+- [x] Examined commit diffs `816afe4` and `93dd262` and workflow logs.
+- [x] Inspected failure runs and successful runs across all fleet repositories.
+- [x] Zero direct edits made to `.github/workflows/`.
+- [x] Audit report generated at [Reports/audit/ci_failure_audit_capture_parscoders_and_site_proposal.md](file:///home/runner/work/_temp/agent-repo-45024045892-1-run-agy/Reports/audit/ci_failure_audit_capture_parscoders_and_site_proposal.md) (151 lines, strictly under 400 lines).
+- [x] Second opinion review submitted via `python3 /tmp/hqteam.py review`.
+- [x] Report staged and committed to git (`commit 9ccb9d6`).
+- [x] Completion notice submitted via `python3 /tmp/hqteam.py post done`.
