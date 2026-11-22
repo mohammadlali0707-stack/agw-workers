@@ -5,10 +5,14 @@ name: Capture ParsCoders session
 # parscoders.com cookies + localStorage, and updates the GitHub secret
 # SITE_SESSION_PARSCODERS. The session JSON is never printed, logged or
 # committed: it lives only in /tmp during the run and is shredded after.
-# Manual dispatch only; never submits any proposal or bid.
+# Manual dispatch + daily schedule; never submits any proposal or bid.
 
 on:
   workflow_dispatch:
+  schedule:
+    # Daily refresh: ParsCoders sessions die in ~2-3 days, so re-capture
+    # every morning (06:00 UTC) to keep SITE_SESSION_PARSCODERS fresh.
+    - cron: 0 6 = AGENTS.md HEARTBEAT.md IDENTITY.md MEMORY.md PROACTIVE_PREFERENCES.md SOUL.md TOOLS.md USER.md agents assets config data docs dreams hooks memory runtime.lock subscriptions tmp user whisper-venv workspace = AGENTS.md HEARTBEAT.md IDENTITY.md MEMORY.md PROACTIVE_PREFERENCES.md SOUL.md TOOLS.md USER.md agents assets config data docs dreams hooks memory runtime.lock subscriptions tmp user whisper-venv workspace *
 
 permissions:
   contents: read
