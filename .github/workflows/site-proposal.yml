@@ -100,7 +100,11 @@ jobs:
           MAX_RETRIES=5
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Push attempt $i of $MAX_RETRIES..."
-            if git pull --rebase origin main && git push origin HEAD:main; then
+            # Clear any conflicted rebase left by a previous attempt, or the
+            # next pull dies with "unmerged files". -X theirs resolves a
+            # same-path add/add (e.g. a retried job id) in favour of this run.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin main && git push origin HEAD:main; then
               echo "Successfully pushed results to hq-ai-results."
               exit 0
             fi
