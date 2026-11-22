@@ -665,7 +665,8 @@ def main(argv: list[str] | None = None) -> int:
 
     Returns:
         0 on success or expected operational conditions (preview_ready, submitted,
-        rate_limited, login_required, captcha_detected; missing_proposal in preview mode),
+        rate_limited, login_required, captcha_detected, closed, already_bid;
+        missing_proposal in preview mode),
         preventing spurious CI workflow failure while accurately persisting status to result.json.
         1 on unexpected fatal failures or form_error in submit mode.
     """
@@ -681,9 +682,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     status = result.get("status")
     logger.info("Runner finished for job %s with status: %s", args.job_id, status)
-    # Expected operational conditions (login_required, rate_limited, captcha_detected)
-    # exit with code 0 in both preview and submit modes to prevent spurious CI workflow failure
-    if status in ("preview_ready", "submitted", "rate_limited", "login_required", "captcha_detected"):
+    # Expected operational conditions (login_required, rate_limited, captcha_detected,
+    # closed, already_bid) exit with code 0 in both preview and submit modes to
+    # prevent spurious CI workflow failure. Before this, "closed"/"already_bid"
+    # returned 1, so a correctly-detected closed project (2026-11-22 T3b on
+    # 621891) showed as a failed run and spammed a failure email + stuck-watch alert.
+    if status in ("preview_ready", "submitted", "rate_limited", "login_required", "captcha_detected", "closed", "already_bid"):
         return 0
     if status == "missing_proposal" and args.mode == "preview":
         return 0
