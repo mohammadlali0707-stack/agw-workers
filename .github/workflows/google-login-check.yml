@@ -12,20 +12,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: pip install -q playwright && python -m playwright install --with-deps chromium >/dev/null
+      - name: Set up Oracle exit (Xray)
+        env:
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+        run: |
+          set +e
+          curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip && unzip -qo /tmp/xray.zip -d /tmp/xray
+          printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
+          (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          sleep 3
+          echo "egress via proxy: $(curl -sf --max-time 15 --proxy http://127.0.0.1:10809 https://ifconfig.me)"
+          echo "xray started"
       - name: Check accounts
         env:
           GOOGLE_SITE_COOKIES: ${{ secrets.GOOGLE_SITE_COOKIES }}
           GOOGLE_SITE_COOKIES_MOMONA: ${{ secrets.GOOGLE_SITE_COOKIES_MOMONA }}
           GOOGLE_LOCK_TOKEN: ${{ secrets.ACC6_PAT }}
+          # Route Google traffic through the Oracle exit (Xray on
+          # 127.0.0.1:10809). Before this, logins ran direct from GitHub IPs.
+          GWEB_PROXY: http://127.0.0.1:10809
         run: |
           python - <<'PY'
-          import sys, re; sys.path.insert(0, "tools"); import google_login
+          import sys, re, os; sys.path.insert(0, "tools"); import google_login
           from playwright.sync_api import sync_playwright
+          proxy = {"server": os.environ["GWEB_PROXY"]} if os.environ.get("GWEB_PROXY") else None
           with sync_playwright() as p:
             bad = 0
             for name in google_login.ACCOUNTS:
               with google_login.session("google-login-check", account=name) as gl:
-                b = p.chromium.launch(); ctx = b.new_context(storage_state=gl.storage_state())
+                b = p.chromium.launch(proxy=proxy); ctx = b.new_context(storage_state=gl.storage_state())
                 pg = ctx.new_page(); pg.goto("https://accounts.google.com/AccountChooser?hl=en", timeout=60000); pg.wait_for_timeout(3000)
                 emails = set(re.findall(r"[a-z0-9.]+@gmail\.com", pg.content()))
                 pg.goto("https://myaccount.google.com/?hl=en", timeout=60000); ok = "myaccount.google.com" in pg.url and gl.account in emails
