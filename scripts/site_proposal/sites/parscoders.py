@@ -194,17 +194,25 @@ SUBMIT_BUTTON_SELECTORS: List[str] = [
 
 
 async def _first_matching_locator(page: Any, selectors: List[str]) -> Optional[Any]:
-    """Find the first visible locator from candidate selectors."""
+    """Find the first visible locator from candidate selectors.
+
+    Iterates ALL matches of each selector, not just .first: ParsCoders
+    duplicates some controls in the DOM (e.g. a hidden copy of the bid
+    form), so .first can be the hidden duplicate while a later match is
+    the visible one (2026-11-22 T2: the amount click timed out on the
+    hidden #init_message_bidAmount while the modal's own input sat visible).
+    """
     for sel in selectors:
         try:
             loc = page.locator(sel)
-            if await loc.count() > 0:
-                first = loc.first
+            cnt = await loc.count()
+            for i in range(cnt):
                 try:
-                    if await first.is_visible():
-                        return first
+                    cand = loc.nth(i)
+                    if await cand.is_visible():
+                        return cand
                 except Exception:
-                    pass
+                    continue
         except Exception:
             continue
     for sel in selectors:
@@ -236,6 +244,28 @@ async def _wait_visible_textarea(page: Any, tries: int = 15) -> Optional[Any]:
                 pass
         await page.wait_for_timeout(1000)
     return None
+
+
+async def _bid_form_open(page: Any, tries: int = 8) -> bool:
+    """True only if the bid modal itself is open: its amount input is visible.
+
+    The plain project page contains other visible editors (report form, chat
+    widget), so "a description field is visible" does NOT mean the bid form
+    is open (2026-11-22 T2 on 623370: the proposal text went into the wrong
+    editor while the bid modal never opened, then the amount click timed
+    out on the hidden input). The amount input #init_message_bidAmount
+    exists only inside the bid modal, so its visibility is the real signal.
+    """
+    for _ in range(max(1, tries)):
+        loc = await _first_matching_locator(page, AMOUNT_SELECTORS)
+        if loc is not None:
+            try:
+                if await loc.is_visible():
+                    return True
+            except Exception:
+                pass
+        await page.wait_for_timeout(1000)
+    return False
 
 
 async def _wait_visible_description(page: Any, tries: int = 15) -> Tuple[Optional[Any], bool]:
@@ -462,14 +492,18 @@ class ParscodersAdapter:
             if _re.search(r"پیشنهاد شما ثبت شده|قبلا پیشنهاد داده‌اید|ویرایش پیشنهاد", b):
                 return {"status": "already_bid", "filled_values": fv, "error_message": "already bid on this project"}
 
-            # Check project closed
-            if _re.search(r"پروژه (بسته|منقضی|به اتمام رسیده|غیرفعال)|مهلت (ارسال )?(پیشنهاد )?(تمام|به پایان)", b):
+            # Check project closed (wordings seen live 2026-11-22 on 621891:
+            # status badge "وضعیت پروژه: بسته" and "زمان مناقصه پایان یافته";
+            # the old regex missed both — "پروژه: بسته" has a colon in between).
+            if _re.search(r"پروژه (بسته|منقضی|به اتمام رسیده|غیرفعال)|وضعیت پروژه\s*:\s*بسته|زمان مناقصه پایان یافته|مناقصه پایان یافته|مهلت (ارسال )?(پیشنهاد )?(تمام|به پایان)", b):
                 return {"status": "closed", "filled_values": fv, "error_message": "project is closed"}
 
             # 2. Open the proposal form. If login is required, immediately return login_required
+            # The open signal is the bid modal's amount input, NOT any visible
+            # description field (the page has other editors — see _bid_form_open).
             expand_clicked = False
             desc_tries = 1 if wait_ms == 0 else 3
-            if not (await _wait_visible_description(page, tries=desc_tries))[0]:
+            if not await _bid_form_open(page, tries=desc_tries):
                 if await _detect_login_required(page):
                     return {"status": "login_required", "filled_values": {}, "error_message": "session expired or not logged in"}
 
@@ -478,8 +512,18 @@ class ParscodersAdapter:
                         loc = page.locator(sel)
                         if await loc.count() == 0:
                             continue
-                        first = loc.first
-                        if not await first.is_visible():
+                        # Click the first VISIBLE match, not just .first:
+                        # the page duplicates the bid button (header + mid-page).
+                        first = None
+                        for i in range(await loc.count()):
+                            try:
+                                cand = loc.nth(i)
+                                if await cand.is_visible():
+                                    first = cand
+                                    break
+                            except Exception:
+                                continue
+                        if first is None:
                             continue
                         await first.scroll_into_view_if_needed()
                         await first.click()
@@ -489,7 +533,7 @@ class ParscodersAdapter:
                             await page.wait_for_timeout(1000)
                         if await _detect_login_required(page):
                             return {"status": "login_required", "filled_values": {}, "error_message": "login required after expand"}
-                        if (await _wait_visible_description(page, tries=1 if wait_ms == 0 else 8))[0]:
+                        if await _bid_form_open(page, tries=1 if wait_ms == 0 else 8):
                             break
                     except Exception:
                         continue
@@ -505,11 +549,23 @@ class ParscodersAdapter:
             if not text_loc:
                 if await _detect_login_required(page):
                     return {"status": "login_required", "filled_values": {}, "error_message": "login required: proposal form not accessible"}
+                # No bid button anywhere on an OPEN project means we already
+                # bid (the closed check above already ruled out a closed
+                # project). Before this, it misreported as a form error.
+                if not expand_clicked:
+                    return {"status": "already_bid", "filled_values": fv,
+                            "error_message": "no bid button on an open project — already bid"}
                 diag = await _form_diagnostics(page)
                 b2 = await _body(page)
                 return {"status": "form_error", "filled_values": fv,
                         "error_message": f"proposal form did not open (expand_clicked={expand_clicked}); {diag}",
                         "body": b2[:1500]}
+
+            # Guard: the description must belong to the bid modal, not to
+            # another visible editor on the page (report form / chat widget).
+            if not await _bid_form_open(page, tries=3):
+                return {"status": "form_error", "filled_values": fv,
+                        "error_message": "bid form did not open (description found outside the bid modal)"}
 
             proposal_text = str(proposal_data.get("proposal_text", ""))
             if is_editor:
