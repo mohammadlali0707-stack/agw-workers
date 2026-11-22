@@ -60,7 +60,11 @@ def main():
 
     with google_login.session("capture-parscoders", account="momona") as gl:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            # Route through the Oracle exit when GWEB_PROXY is set
+            # (capture workflow starts Xray on 127.0.0.1:10809).
+            _proxy = os.environ.get("GWEB_PROXY", "")
+            _launch_kw = {"proxy": {"server": _proxy}} if _proxy else {}
+            browser = pw.chromium.launch(headless=True, **_launch_kw)
             try:
                 context = browser.new_context(viewport={"width": 1280, "height": 800})
                 context.add_cookies(gl.cookies())
