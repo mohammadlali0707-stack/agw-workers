@@ -40,7 +40,22 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
+      - name: Set up Oracle exit (Xray)
+        env:
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+        run: |
+          set +e
+          curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip && unzip -qo /tmp/xray.zip -d /tmp/xray
+          printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
+          (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          sleep 3
+          echo "egress via proxy: $(curl -sf --max-time 15 --proxy http://127.0.0.1:10809 https://ifconfig.me)"
+          echo "xray started"
+
       - name: Capture ParsCoders session
+        env:
+          # Route Google/site traffic through the Oracle exit (Xray on 127.0.0.1:10809).
+          GWEB_PROXY: http://127.0.0.1:10809
         run: python3 scripts/site_proposal/capture_parscoders.py
 
       - name: Update SITE_SESSION_PARSCODERS secret
