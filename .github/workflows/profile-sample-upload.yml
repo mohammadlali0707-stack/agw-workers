@@ -102,21 +102,35 @@ jobs:
           SITE_SESSION_KARLANCER: ${{ secrets.SITE_SESSION_KARLANCER }}
           SITE_SESSION_PARSCODERS: ${{ secrets.SITE_SESSION_PARSCODERS }}
           PYTHONPATH: .
+          # Workflow inputs via step-level env (never inline ${{ inputs.* }} in a
+          # run: body — the YAML lint gate rejects those as untrusted expressions).
+          SITE_INPUT: ${{ inputs.site }}
+          SAMPLE_URL_INPUT: ${{ inputs.sample_url }}
+          TITLE_INPUT: ${{ inputs.title }}
+          DESCRIPTION_INPUT: ${{ inputs.description }}
+          SKILLS_INPUT: ${{ inputs.skills }}
+          MODE_INPUT: ${{ inputs.mode }}
+          JOB_ID_INPUT: ${{ inputs.job_id }}
+          PROFILE_URL_INPUT: ${{ inputs.profile_url }}
+          SCREENSHOT_INPUT: ${{ inputs.screenshot }}
+          SERVICE_TITLE_INPUT: ${{ inputs.service_title }}
+          PRICE_INPUT: ${{ inputs.price }}
+          DELIVERY_DAYS_INPUT: ${{ inputs.delivery_days }}
         run: |
           python3 -m scripts.site_proposal.upload_sample \
-            --site "${{ inputs.site }}" \
-            --sample-url "${{ inputs.sample_url }}" \
-            --title "${{ inputs.title }}" \
-            --description "${{ inputs.description }}" \
-            --skills "${{ inputs.skills }}" \
-            --mode "${{ inputs.mode }}" \
-            --job-id "${{ inputs.job_id }}" \
+            --site "$SITE_INPUT" \
+            --sample-url "$SAMPLE_URL_INPUT" \
+            --title "$TITLE_INPUT" \
+            --description "$DESCRIPTION_INPUT" \
+            --skills "$SKILLS_INPUT" \
+            --mode "$MODE_INPUT" \
+            --job-id "$JOB_ID_INPUT" \
             --results-dir hq-ai-results \
-            --profile-url "${{ inputs.profile_url }}" \
-            --screenshot "${{ inputs.screenshot }}" \
-            --service-title "${{ inputs.service_title }}" \
-            --price "${{ inputs.price }}" \
-            --delivery-days "${{ inputs.delivery_days }}"
+            --profile-url "$PROFILE_URL_INPUT" \
+            --screenshot "$SCREENSHOT_INPUT" \
+            --service-title "$SERVICE_TITLE_INPUT" \
+            --price "$PRICE_INPUT" \
+            --delivery-days "$DELIVERY_DAYS_INPUT"
 
       - name: Commit and push results
         if: always()
@@ -136,7 +150,11 @@ jobs:
           MAX_RETRIES=5
           for i in $(seq 1 $MAX_RETRIES); do
             echo "Push attempt $i of $MAX_RETRIES..."
-            if git pull --rebase origin main && git push origin HEAD:main; then
+            # Clear any conflicted rebase left by a previous attempt, or the
+            # next pull dies with "unmerged files". -X theirs resolves a
+            # same-path add/add (e.g. a retried job id) in favour of this run.
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin main && git push origin HEAD:main; then
               echo "Successfully pushed results to hq-ai-results."
               exit 0
             fi
