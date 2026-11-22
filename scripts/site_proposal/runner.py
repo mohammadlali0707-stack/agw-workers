@@ -541,7 +541,11 @@ async def run_proposal(
 
     try:
         async with _playwright_context() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            # Route through the Oracle exit when GWEB_PROXY is set
+            # (site-proposal workflow starts Xray on 127.0.0.1:10809).
+            _proxy = os.environ.get("GWEB_PROXY", "")
+            _launch_kw = {"proxy": {"server": _proxy}} if _proxy else {}
+            browser = await pw.chromium.launch(headless=True, **_launch_kw)
             try:
                 context = await browser.new_context(viewport={"width": 1280, "height": 800})
                 try:
