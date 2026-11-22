@@ -12,7 +12,7 @@ on:
   schedule:
     # Daily refresh: ParsCoders sessions die in ~2-3 days, so re-capture
     # every morning (06:00 UTC) to keep SITE_SESSION_PARSCODERS fresh.
-    - cron: 0 6 = AGENTS.md HEARTBEAT.md IDENTITY.md MEMORY.md PROACTIVE_PREFERENCES.md SOUL.md TOOLS.md USER.md agents assets config data docs dreams hooks memory runtime.lock subscriptions tmp user whisper-venv workspace = AGENTS.md HEARTBEAT.md IDENTITY.md MEMORY.md PROACTIVE_PREFERENCES.md SOUL.md TOOLS.md USER.md agents assets config data docs dreams hooks memory runtime.lock subscriptions tmp user whisper-venv workspace *
+    - cron: '0 6 * * *'
 
 permissions:
   contents: read
