@@ -44,6 +44,14 @@ jobs:
   site-chat-read:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Workflow inputs via env (never inline ${{ inputs.* }} in a run: body
+      # — the YAML lint gate rejects those as untrusted expressions).
+      SITE_INPUT: ${{ inputs.site }}
+      PROJECT_URL_INPUT: ${{ inputs.project_url }}
+      PROJECT_TITLE_INPUT: ${{ inputs.project_title }}
+      JOB_ID_INPUT: ${{ inputs.job_id }}
+      CONTACT_INPUT: ${{ inputs.contact }}
 
     steps:
       - name: Checkout agw-workers
@@ -69,18 +77,18 @@ jobs:
           PYTHONPATH: .
         run: |
           python3 -m scripts.site_proposal.read_chat \
-            --site "${{ inputs.site }}" \
-            --project-url "${{ inputs.project_url }}" \
-            --project-title "${{ inputs.project_title }}" \
-            --job-id "${{ inputs.job_id }}" \
-            --contact "${{ inputs.contact }}" \
+            --site "$SITE_INPUT" \
+            --project-url "$PROJECT_URL_INPUT" \
+            --project-title "$PROJECT_TITLE_INPUT" \
+            --job-id "$JOB_ID_INPUT" \
+            --contact "$CONTACT_INPUT" \
             --results-dir chat-results
 
       - name: Upload result artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: chat-${{ inputs.job_id }}
+          name: chat-${{ env.JOB_ID_INPUT }}
           path: chat-results/
           if-no-files-found: error
           retention-days: 30
