@@ -70,4 +70,9 @@ jobs:
           GEMINI_WEB_COOKIES: ${{ secrets[format('GEMINI_WEB_COOKIES_ACC{0}', inputs.acc)] }}
           COOKIE_PAT: ${{ secrets[format('ACC{0}_PAT', inputs.acc)] }}
           PUB_REPO: ${{ github.repository }}
+          # Route Gemini website traffic through the Oracle exit (Xray on
+          # 127.0.0.1:10809, started in the step above). Before this, the
+          # warm worker ran with proxy="" and its traffic went direct from
+          # the GitHub runner IP while Xray sat idle beside it.
+          GWEB_PROXY: http://127.0.0.1:10809
         run: python3 tools/hqwarm.py
