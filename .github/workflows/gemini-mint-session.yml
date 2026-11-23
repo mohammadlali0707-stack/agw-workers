@@ -102,6 +102,8 @@ jobs:
           MINT_ACCOUNT: ${{ inputs.account }}
           MINT_MODE: ${{ inputs.mode }}
           MINT_POLL_SECS: '2400'
+          MINT_RESULTS_DIR: hq-ai-results
+          MINT_RUN_ID: ${{ github.run_id }}
         run: python3 tools/gemini_mint.py
 
       - name: Seal fresh session into secret
