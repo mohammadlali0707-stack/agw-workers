@@ -7,8 +7,10 @@ Runs ONLY on GitHub Actions (never on the VPS). Flow:
      noVNC URL is written to /tmp/novnc-url.txt and NEVER printed in the
      log (this repo is PUBLIC, so run logs are public; the URL is a live
      capability to the desktop where the owner types his Google password).
-     The workflow publishes the URL file to the PRIVATE hq-ai-results repo
-     and Muse hands the URL to the owner in chat.
+     The script publishes the URL to the PRIVATE hq-ai-results repo the
+     moment the tunnel is up, so the owner can log in while the login poll
+     runs; the workflow's later publish step is only a no-op safety net.
+     Muse hands the URL to the owner in chat.
   2. Launch real Google Chrome (headed) under Xvfb at gemini.google.com,
      routed through GWEB_PROXY (Oracle exit) when set.
   3. dry_run: verify the tunnel URL answers HTTP 200, the browser page
@@ -176,6 +178,68 @@ def start_desktop():
     return full_url
 
 
+def publish_novnc_url_early():
+    """Publish the noVNC URL to the private results repo NOW, while the
+    login poll is still ahead of us. The workflow's later publish step
+    runs only after this mint step ends, which in login mode is after the
+    owner has logged in (or the 40-minute poll times out) -- far too late:
+    the owner needs the URL to log in at all. That timing bug killed the
+    first real login run (45157009008, cancelled). Never logs the URL
+    itself. Fail-open: on failure it warns and the workflow publish step
+    remains as fallback."""
+    results_dir = os.environ.get("MINT_RESULTS_DIR", "hq-ai-results").strip()
+    run_id = (os.environ.get("MINT_RUN_ID", "") or
+              os.environ.get("RUN_ID_INPUT", "")).strip()
+    if not run_id:
+        log("WARNING: no run id (MINT_RUN_ID/RUN_ID_INPUT); "
+            "cannot publish noVNC URL early")
+        return False
+    if not os.path.isfile(URL_FILE):
+        log("WARNING: noVNC URL file missing; cannot publish early")
+        return False
+    jobdir = os.path.join(results_dir, "jobs",
+                          f"gemini-mint-{ACCOUNT}-{run_id}")
+    rel_jobdir = os.path.join("jobs", f"gemini-mint-{ACCOUNT}-{run_id}")
+    try:
+        os.makedirs(jobdir, exist_ok=True)
+        shutil.copyfile(URL_FILE, os.path.join(jobdir, "novnc-url.txt"))
+        subprocess.run(["git", "config", "user.name", "github-actions[bot]"],
+                       cwd=results_dir, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email",
+                        "github-actions[bot]@users.noreply.github.com"],
+                       cwd=results_dir, check=True, capture_output=True)
+        subprocess.run(["git", "add", rel_jobdir],
+                       cwd=results_dir, check=True, capture_output=True)
+        staged = subprocess.run(["git", "diff", "--staged", "--quiet"],
+                                cwd=results_dir)
+        if staged.returncode == 0:
+            log("noVNC URL already published (nothing new to commit)")
+            return True
+        subprocess.run(
+            ["git", "commit", "-m",
+             f"gemini-mint: {ACCOUNT} run {run_id} noVNC URL [skip ci]"],
+            cwd=results_dir, check=True, capture_output=True)
+        for i in range(1, 6):
+            subprocess.run(["git", "rebase", "--abort"],
+                           cwd=results_dir, capture_output=True)
+            pull = subprocess.run(
+                ["git", "pull", "--rebase", "-X", "theirs", "origin", "main"],
+                cwd=results_dir, capture_output=True)
+            push = subprocess.run(["git", "push", "origin", "HEAD:main"],
+                                  cwd=results_dir, capture_output=True)
+            if pull.returncode == 0 and push.returncode == 0:
+                log("noVNC URL published early to private results repo")
+                return True
+            time.sleep(i * 2)
+        log("WARNING: early noVNC URL publish failed after 5 attempts; "
+            "the workflow publish step remains as fallback")
+        return False
+    except Exception as e:
+        log(f"WARNING: early noVNC URL publish failed: "
+            f"{type(e).__name__}: {e}")
+        return False
+
+
 def start_chrome():
     chrome = shutil.which("google-chrome") or "/usr/bin/google-chrome"
     if not os.path.isfile(chrome):
@@ -296,6 +360,10 @@ def main():
     log(f"gemini-mint account={ACCOUNT} mode={MODE} poll={POLL_SECS}s")
     check_proxy()
     novnc_url = start_desktop()
+    # Publish the URL NOW: the workflow's publish step only runs after
+    # this mint step ends, which in login mode is far too late (the owner
+    # needs the URL to log in while the poll below runs).
+    publish_novnc_url_early()
     log("desktop ready; browser starting")
     from playwright.sync_api import sync_playwright
     browser = None
