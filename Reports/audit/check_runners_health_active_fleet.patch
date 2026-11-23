@@ -1,0 +1,16 @@
+--- a/Tools/check_runners_health.py
++++ b/Tools/check_runners_health.py
+@@ -70,10 +70,10 @@
+     except Exception as exc:
+         return False, f"YAML parse error in {wf_path}: {exc}"
+ 
+-    # 2. Check 27 runner slot selection
+-    has_27_calc = "RANDOM % 9" in content and "RANDOM % 3" in content
++    # 2. Check runner slot selection (supports 9x3=27 full pool or active Pro accounts subset e.g. ALLOWED=(0 2 4 5 6 8))
++    has_27_calc = ("RANDOM % 9" in content or "RANDOM % ${#ALLOWED[@]}" in content) and "RANDOM % 3" in content
+     if not has_27_calc:
+-        return False, "Swarm runner selection does not calculate 9x3=27 slots"
++        return False, "Swarm runner selection does not calculate valid runner slots"
+ 
+     # 3. Check model is Gemini 3.8 Flash High
+     if "gemini-3.8-flash-high" not in content:

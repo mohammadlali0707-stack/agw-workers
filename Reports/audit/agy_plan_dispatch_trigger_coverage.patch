@@ -1,0 +1,15 @@
+--- a/.github/workflows/agy-plan-dispatch.yml
++++ b/.github/workflows/agy-plan-dispatch.yml
+@@ -34,8 +34,10 @@
+     timeout-minutes: 5
+     if: >
+       github.event_name == 'workflow_dispatch' ||
+-      contains(github.event.comment.body, '@agy-plan-approved') ||
+-      contains(github.event.comment.body, '@sonnet-plan-approved')
++      (github.event_name == 'issue_comment' && (
++        contains(github.event.comment.body, '@agy-plan-approved') ||
++        contains(github.event.comment.body, '@sonnet-plan-approved')
++      ))
+     outputs:
+       match: ${{ steps.check.outputs.match }}
+       model: ${{ steps.check.outputs.model }}
