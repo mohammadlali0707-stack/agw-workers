@@ -35,18 +35,30 @@ async def writeback(c, orig):
         print("rotate failed", type(e).__name__, file=sys.stderr)
     new = dict(orig); new.update(_jar(c))
     if not new.get("__Secure-1PSID") or new == orig: return "unchanged"
+    # owner 2026-11-23: the per-account PATs (ACCn_PAT) have no Secrets
+    # permission on the central repo, so the public-key call 403s; fall back
+    # to RES_PAT (ACC6_PAT), which has secrets write. Try the per-account
+    # token first (least privilege) and record the HTTP status on failure.
     try:
         from nacl import encoding, public
         import base64 as b64
-        repo, tok, idx = os.environ["PUB_REPO"], os.environ.get("COOKIE_PAT") or os.environ["RES_PAT"], os.environ["ACC_IDX"]
-        H = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"}
-        k = json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=H), timeout=60).read())
-        enc = b64.b64encode(public.SealedBox(public.PublicKey(k["key"].encode(), encoding.Base64Encoder())).encrypt(json.dumps(new).encode())).decode()
-        urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/GEMINI_WEB_COOKIES_ACC{idx}",
-            data=json.dumps({"encrypted_value": enc, "key_id": k["key_id"]}).encode(), method="PUT", headers=H), timeout=60)
-        return "saved"
+        repo, idx = os.environ["PUB_REPO"], os.environ["ACC_IDX"]
+        toks = [t for t in (os.environ.get("COOKIE_PAT"), os.environ.get("RES_PAT")) if t]
+        last = None
+        for tok in toks:
+            H = {"Authorization": "Bearer " + tok, "Accept": "application/vnd.github+json"}
+            try:
+                k = json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/public-key", headers=H), timeout=60).read())
+                enc = b64.b64encode(public.SealedBox(public.PublicKey(k["key"].encode(), encoding.Base64Encoder())).encrypt(json.dumps(new).encode())).decode()
+                urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/secrets/GEMINI_WEB_COOKIES_ACC{idx}",
+                    data=json.dumps({"encrypted_value": enc, "key_id": k["key_id"]}).encode(), method="PUT", headers=H), timeout=60)
+                return "saved"
+            except Exception as e:
+                last = e
+                print("writeback retry", type(e).__name__, getattr(e, "code", ""), file=sys.stderr)
+        return (f"save failed {type(last).__name__} {getattr(last, 'code', '')}".strip() if last else "save failed")
     except Exception as e:
-        return f"save failed {type(e).__name__}"
+        return f"save failed {type(e).__name__} {getattr(e, 'code', '')}".strip()
 def fetch_ref(r, i):
     p = f"/tmp/ref{i}" + os.path.splitext(r.split("?")[0])[1][:6]
     if r.startswith("repo:"):
