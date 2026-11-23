@@ -22,8 +22,15 @@ Runs ONLY on GitHub Actions (never on the VPS). Flow:
      /tmp/gemini-session-<acc>.json (0600, never printed). The workflow
      step then seals it with `gh secret set GEMINI_WEB_COOKIES_ACC<idx>`
      and shreds the file.
-If a captcha appears, stop and report it (never try to solve one).
-If the poll times out, exit non-zero and do NOT touch the secret.
+If a Google challenge (captcha) appears, do NOT exit and NEVER try to
+solve it: the owner is sitting at the browser precisely to solve it
+himself. Log it plainly, keep polling, and pause the login countdown
+while the challenge is on screen (extra wait capped, so the run still
+ends inside the 55-minute job timeout). If the poll times out, exit
+non-zero and do NOT touch the secret.
+A tunnel watchdog runs during the login poll: if the cloudflared tunnel
+dies, it restarts it, publishes the fresh URL early to the private
+results repo (never in the log), and keeps waiting.
 Cookie values are never printed; they are masked in the log.
 """
 import json
@@ -49,6 +56,12 @@ NOVNC_RE = re.compile(r"https://[A-Za-z0-9-]+\.trycloudflare\.com")
 
 PROCS = []       # subprocess.Popen handles, killed on cleanup
 LOG_FILES = []   # open log file handles, closed on cleanup
+CHALLENGE_EXTRA_MAX = 600  # max extra poll seconds while a challenge is visible
+TUNNEL_CHECK_EVERY = 4     # poll iterations between tunnel health checks
+CF_PROC = None             # cloudflared Popen handle (restartable)
+CF_LOG = "/tmp/cloudflared.log"
+WS_PROC = None             # websockify Popen handle (restartable)
+WS_CMD = None              # websockify argv, for restart
 
 
 def log(msg):
@@ -130,6 +143,29 @@ def novnc_root():
     fail("noVNC download did not contain vnc.html")
 
 
+def _launch_cloudflared(logfile):
+    """Start cloudflared and wait up to 90s for its public URL.
+    Returns (proc, url) with url None on timeout. Never logs the URL."""
+    cf = "/tmp/cloudflared"
+    if not (os.path.isfile(cf) and os.access(cf, os.X_OK)):
+        fail("cloudflared binary missing at /tmp/cloudflared")
+    proc = run_bg([cf, "tunnel", "--url", "http://localhost:6080",
+                   "--no-autoupdate"], logfile)
+    url = None
+    end = time.time() + 90
+    while time.time() < end:
+        try:
+            with open(logfile, "r", errors="replace") as f:
+                m = NOVNC_RE.search(f.read())
+            if m:
+                url = m.group(0)
+                break
+        except OSError:
+            pass
+        time.sleep(2)
+    return proc, url
+
+
 def start_desktop():
     run_bg(["Xvfb", DISPLAY, "-screen", "0", "1280x800x24", "-ac"],
            "/tmp/xvfb.log")
@@ -142,31 +178,16 @@ def start_desktop():
     if not wait_port("127.0.0.1", 5900, timeout=20):
         fail("x11vnc did not come up")
     log("x11vnc up on 127.0.0.1:5900")
+    global WS_PROC, WS_CMD, CF_PROC
     root = novnc_root()
     ws = shutil.which("websockify")
-    cmd = ([ws] if ws else [sys.executable, "-m", "websockify"]) + [
+    WS_CMD = ([ws] if ws else [sys.executable, "-m", "websockify"]) + [
         "--web", root, "6080", "localhost:5900"]
-    run_bg(cmd, "/tmp/websockify.log")
+    WS_PROC = run_bg(WS_CMD, "/tmp/websockify.log")
     if not wait_port("127.0.0.1", 6080, timeout=20):
         fail("websockify/noVNC did not come up")
     log("noVNC up on 127.0.0.1:6080")
-    cf = "/tmp/cloudflared"
-    if not (os.path.isfile(cf) and os.access(cf, os.X_OK)):
-        fail("cloudflared binary missing at /tmp/cloudflared")
-    run_bg([cf, "tunnel", "--url", "http://localhost:6080", "--no-autoupdate"],
-           "/tmp/cloudflared.log")
-    url = None
-    end = time.time() + 90
-    while time.time() < end:
-        try:
-            with open("/tmp/cloudflared.log", "r", errors="replace") as f:
-                m = NOVNC_RE.search(f.read())
-            if m:
-                url = m.group(0)
-                break
-        except OSError:
-            pass
-        time.sleep(2)
+    CF_PROC, url = _launch_cloudflared(CF_LOG)
     if not url:
         fail("cloudflared tunnel did not produce a URL within 90s")
     full_url = url + "/vnc.html"
@@ -240,6 +261,104 @@ def publish_novnc_url_early():
         return False
 
 
+def _tunnel_url_ok(url):
+    """True if the public noVNC URL serves the noVNC page right now."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status == 200 and b"noVNC" in r.read()
+    except Exception:
+        return False
+
+
+def _kill_proc(proc):
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
+def restart_websockify():
+    """Relaunch websockify if its local port went down. Returns True if
+    the noVNC port is listening afterwards."""
+    global WS_PROC
+    log("TUNNEL WATCH: restarting websockify")
+    _kill_proc(WS_PROC)
+    WS_PROC = run_bg(WS_CMD, "/tmp/websockify-restart.log")
+    return wait_port("127.0.0.1", 6080, timeout=20)
+
+
+def restart_tunnel():
+    """cloudflared died (or its tunnel went stale): relaunch it, get the
+    fresh URL, save it, and re-publish it early to the private repo.
+    Never logs the URL. Returns the new full URL, or None on failure."""
+    global CF_PROC
+    log("TUNNEL WATCH: tunnel is down; restarting cloudflared")
+    _kill_proc(CF_PROC)
+    logfile = "/tmp/cloudflared-restart.log"
+    try:
+        open(logfile, "w").close()
+    except OSError:
+        pass
+    CF_PROC, url = _launch_cloudflared(logfile)
+    if not url:
+        log("TUNNEL WATCH: restarted cloudflared produced no URL")
+        return None
+    full_url = url + "/vnc.html"
+    with open(URL_FILE, "w") as f:
+        f.write(full_url + "\n")
+    if publish_novnc_url_early():
+        log("TUNNEL WATCH: fresh tunnel URL published early to the "
+            "private repo; owner needs the new link from Muse")
+        return full_url
+    log("TUNNEL WATCH: fresh tunnel up but early publish failed; "
+        "the workflow publish step remains as fallback")
+    return full_url
+
+
+def check_tunnel(novnc_url):
+    """Periodic tunnel health check during the login poll. Returns
+    (ok, url_to_use): ok is True if the public URL serves (or was
+    revived), url_to_use is the current URL (a fresh one after a
+    restart). Never logs any URL."""
+    global CF_PROC
+    # Local noVNC first: if websockify died, the tunnel has nothing to serve.
+    if not wait_port("127.0.0.1", 6080, timeout=3):
+        log("TUNNEL WATCH: local noVNC port 6080 is down")
+        if not restart_websockify():
+            log("TUNNEL WATCH: websockify restart failed")
+            return False, novnc_url
+    # cloudflared process itself gone?
+    try:
+        cf_dead = CF_PROC is not None and CF_PROC.poll() is not None
+    except Exception:
+        cf_dead = True
+    if cf_dead:
+        log("TUNNEL WATCH: cloudflared process is gone")
+        new_url = restart_tunnel()
+        return new_url is not None, new_url or novnc_url
+    # Public fetch, two attempts 10s apart: a single blip must not force
+    # a restart (and a new URL) on the owner.
+    for attempt in (1, 2):
+        if _tunnel_url_ok(novnc_url):
+            return True, novnc_url
+        log(f"TUNNEL WATCH: public URL check failed (attempt {attempt}/2)")
+        time.sleep(10)
+    log("TUNNEL WATCH: public URL down on both attempts; restarting tunnel")
+    new_url = restart_tunnel()
+    return new_url is not None, new_url or novnc_url
+
+
 def start_chrome():
     chrome = shutil.which("google-chrome") or "/usr/bin/google-chrome"
     if not os.path.isfile(chrome):
@@ -249,6 +368,7 @@ def start_chrome():
            "--remote-debugging-port=9222",
            "--user-data-dir=" + CHROME_PROFILE,
            "--no-first-run", "--disable-features=Translate",
+           "--disable-blink-features=AutomationControlled",
            "--window-size=1280,800"]
     if PROXY:
         cmd.append("--proxy-server=" + PROXY)
@@ -326,7 +446,9 @@ def captcha_present(page):
         text = (page.content() or "").lower()
     except Exception:
         return False
-    return ("not a robot" in text) or ("i'm not a robot" in text)
+    return (("not a robot" in text) or ("i'm not a robot" in text)
+            or ("verify it's you" in text)
+            or ("unusual traffic" in text))
 
 
 def cleanup():
@@ -404,26 +526,75 @@ def main():
                 log("RESULT dry_run_ok tunnel=200 novnc=yes vnc=yes")
                 return 0
             # ---- login mode: wait for the owner to sign in ----
+            # Warm-up: let the browser arrive at Gemini via google.com
+            # first, like an ordinary session, then settle briefly.
+            try:
+                page.goto("https://www.google.com",
+                          wait_until="domcontentloaded", timeout=30000)
+                time.sleep(8)
+                page.goto("https://gemini.google.com",
+                          wait_until="domcontentloaded", timeout=60000)
+                log("browser warmed up via google.com; on gemini.google.com")
+            except Exception as e:
+                log(f"warm-up navigation failed (non-fatal): "
+                    f"{type(e).__name__}; continuing on the current page")
             log("WAITING FOR LOGIN: open the noVNC URL Muse hands you in chat, "
                 "sign in to Gemini with this account, then leave the tab open. "
-                "Do not close the browser window.")
+                "Do not close the browser window. If Google shows a challenge, "
+                "solve it in the browser yourself -- the wait continues while "
+                "you do, and nothing here touches the challenge.")
             deadline = time.time() + POLL_SECS
             last_banner = 0.0
+            last_iter = time.time()
+            challenge_active = False
+            challenge_extra = 0
+            tunnel_ok = True
+            iteration = 0
             while time.time() < deadline:
-                if time.time() - last_banner > 300:
-                    left = int(deadline - time.time())
+                iteration += 1
+                now = time.time()
+                dt = max(0.0, now - last_iter)
+                last_iter = now
+                if now - last_banner > 300:
+                    left = int(deadline - now)
                     log(f"still waiting for login ({left}s left); "
                         "the noVNC URL is the one Muse handed you in chat")
-                    last_banner = time.time()
+                    last_banner = now
                 try:
                     closed = page.is_closed()
                 except Exception:
                     closed = True
                 if closed:
                     fail("browser page was closed", code=5)
-                if captcha_present(page):
-                    fail("CAPTCHA_DETECTED: Google showed a challenge; "
-                         "stopping without touching the secret", code=3)
+                # A challenge is the owner's job, not the script's: wait
+                # for him to solve it, and pause the countdown while it is
+                # on screen (extra wait capped by CHALLENGE_EXTRA_MAX, so
+                # the run still ends inside the 55-minute job timeout).
+                in_challenge = captcha_present(page)
+                if in_challenge and not challenge_active:
+                    log("CHALLENGE: Google is showing a sign-in challenge. "
+                        "Owner: please solve it in the browser -- the wait "
+                        "continues and the countdown is paused while the "
+                        "challenge is on screen. Nothing here touches it.")
+                    challenge_active = True
+                elif not in_challenge and challenge_active:
+                    log("challenge cleared; countdown resumed")
+                    challenge_active = False
+                if in_challenge and challenge_extra < CHALLENGE_EXTRA_MAX:
+                    add = min(dt, CHALLENGE_EXTRA_MAX - challenge_extra)
+                    deadline += add
+                    challenge_extra += add
+                # Tunnel watchdog: every few iterations, make sure the
+                # owner can still reach the desktop; revive it if not.
+                if iteration % TUNNEL_CHECK_EVERY == 0:
+                    ok, novnc_url = check_tunnel(novnc_url)
+                    if ok and not tunnel_ok:
+                        log("tunnel is serving again")
+                    elif not ok and tunnel_ok:
+                        log("TUNNEL WATCH: tunnel is down and could not be "
+                            "restarted; the login wait continues -- the owner "
+                            "needs a fresh link from Muse")
+                    tunnel_ok = ok
                 cookies = google_cookies(ctx)
                 try:
                     url = page.url or ""
