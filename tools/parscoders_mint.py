@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mint a fresh ParsCoders website session inside a GitHub runner's own headed
+"""Mint a fresh ParsCoders session inside a GitHub runner's own headed
 browser, with the owner typing the login himself through a remote view.
 
 Runs ONLY on GitHub Actions (never on the VPS). Flow:
@@ -16,19 +16,20 @@ Runs ONLY on GitHub Actions (never on the VPS). Flow:
   3. dry_run: verify the tunnel URL answers HTTP 200, the browser page
      loaded, save a screenshot, exit success WITHOUT writing any secret.
   4. login: poll up to MINT_POLL_SECS for a signed-in ParsCoders session
-     (parscoders.com cookies present AND the dashboard loads, showing
-     the account name محمد لعلی). When found, export parscoders.com
+     (parscoders.com cookies present AND the tab off /login AND the
+     dashboard markers visible). When found, export the parscoders.com
      cookies + localStorage as {"cookies": [...], "localStorage": {...}}
-     (the exact shape scripts/site_proposal/capture_parscoders.py and
-     the site-proposal runner expect) to /tmp/parscoders-session.json
-     (0600, never printed). The workflow step then seals it with
-     `gh secret set SITE_SESSION_PARSCODERS` and shreds the file.
+     (the exact shape scripts/site_proposal/capture_parscoders.py writes)
+     to /tmp/parscoders-session.json (0600, never printed). The workflow
+     step then seals it with `gh secret set SITE_SESSION_PARSCODERS`
+     and shreds the file.
 If a challenge (captcha) appears, do NOT exit and NEVER try to solve
 it: the owner is sitting at the browser precisely to solve it himself.
-Log it plainly, keep polling, and pause the login countdown while the
-challenge is on screen (extra wait capped, so the run still ends inside
-the 55-minute job timeout). If the poll times out, exit non-zero and do
-NOT touch the secret.
+NOTE: the ParsCoders login page always embeds a reCAPTCHA iframe; that
+alone is NOT a challenge. Only an actual challenge page counts. Log it plainly, keep polling, and pause the login countdown
+while the challenge is on screen (extra wait capped, so the run still
+ends inside the 55-minute job timeout). If the poll times out, exit
+non-zero and do NOT touch the secret.
 A tunnel watchdog runs during the login poll: if the cloudflared tunnel
 dies, it restarts it, publishes the fresh URL early to the private
 results repo (never in the log), and keeps waiting.
@@ -45,8 +46,8 @@ import tarfile
 import time
 import urllib.request
 
-ACCOUNT = os.environ.get("MINT_ACCOUNT", "parscoders")
-MODE = os.environ.get("MINT_MODE", "login")
+ACCOUNT = "parscoders"  # fixed: this mint is ParsCoders only
+MODE = os.environ.get("MINT_MODE", "dry_run")
 POLL_SECS = int(os.environ.get("MINT_POLL_SECS", "2400") or "2400")
 PROXY = os.environ.get("GWEB_PROXY", "").strip()
 DISPLAY = ":99"
@@ -425,13 +426,13 @@ def connect_browser(pw, chrome_proc):
 
 
 def parscoders_cookies(ctx):
-    """Full cookie dicts for parscoders.com only (shape the site-proposal
-    runner expects: {"cookies": [...], "localStorage": {...}})."""
+    """Full cookie dicts for parscoders.com (the shape the site-proposal
+    runner consumes), plus the page's localStorage."""
     out = []
     try:
         for c in ctx.cookies():
             d = (c.get("domain") or "").lstrip(".").lower()
-            if d == "parscoders.com" or d.endswith(".parscoders.com"):
+            if (d == "parscoders.com" or d.endswith(".parscoders.com")) and c.get("value"):
                 out.append({k: c[k] for k in (
                     "name", "value", "domain", "path", "expires",
                     "httpOnly", "secure", "sameSite") if k in c})
@@ -440,28 +441,40 @@ def parscoders_cookies(ctx):
     return out
 
 
-def is_logged_in(page, ctx):
-    """True when the ParsCoders dashboard loads as the owner: session
-    cookies present, not on /login, and the page shows a logged-in
-    marker (dashboard text, logout, or the account name)."""
-    cookies = parscoders_cookies(ctx)
+def parscoders_local_storage(page):
+    try:
+        return page.evaluate(
+            "() => Object.fromEntries(Object.entries(localStorage))") or {}
+    except Exception:
+        return {}
+
+
+DASH_MARKERS = ("داشبورد", "حساب در یک نگاه", "محمد لعلی", "خروج")
+
+
+def logged_in(page, cookies):
+    """True when the browser is signed in to ParsCoders: cookies exist,
+    the tab is off /login, and a dashboard marker is visible."""
     if not cookies:
         return False
     try:
         url = page.url or ""
     except Exception:
-        url = ""
+        return False
     if "/login" in url or "/auth" in url:
+        return False
+    if not url.startswith("https://parscoders.com"):
         return False
     try:
         body = page.inner_text("body") or ""
     except Exception:
         body = ""
-    return ("داشبورد" in body or "حساب در یک نگاه" in body
-            or "خروج" in body or "محمد لعلی" in body or "محمد لالی" in body)
+    return any(m in body for m in DASH_MARKERS)
 
 
 def captcha_present(page):
+    # The login page ALWAYS embeds a reCAPTCHA iframe: that alone is not a
+    # challenge. Only a real challenge page counts.
     try:
         url = page.url or ""
     except Exception:
@@ -472,9 +485,10 @@ def captcha_present(page):
         text = (page.content() or "").lower()
     except Exception:
         return False
-    return (("not a robot" in text) or ("i'm not a robot" in text)
-            or ("verify it's you" in text)
-            or ("unusual traffic" in text))
+    return (("verify it's you" in text)
+            or ("unusual traffic" in text)
+            or ("are you a robot" in text)
+            or ("تایید کنید که ربات نیستید" in text))
 
 
 def cleanup():
@@ -500,12 +514,10 @@ def cleanup():
 
 
 def main():
-    if ACCOUNT != "parscoders":
-        fail(f"unknown account {ACCOUNT!r}; expected 'parscoders'")
     if MODE not in ("dry_run", "login"):
         fail(f"unknown mode {MODE!r}")
     session_file = "/tmp/parscoders-session.json"
-    log(f"parscoders-mint account={ACCOUNT} mode={MODE} poll={POLL_SECS}s")
+    log(f"parscoders-mint mode={MODE} poll={POLL_SECS}s")
     check_proxy()
     novnc_url = start_desktop()
     # Publish the URL NOW: the workflow's publish step only runs after
@@ -552,12 +564,12 @@ def main():
                 log("RESULT dry_run_ok tunnel=200 novnc=yes vnc=yes")
                 return 0
             # ---- login mode: wait for the owner to sign in ----
-            # Warm-up: arrive at ParsCoders like an ordinary session,
-            # then settle on the login page briefly.
+            # Warm-up: visit the ParsCoders home page first, like an
+            # ordinary session, then settle on the login page.
             try:
                 page.goto("https://parscoders.com",
-                          wait_until="domcontentloaded", timeout=30000)
-                time.sleep(8)
+                          wait_until="domcontentloaded", timeout=60000)
+                time.sleep(5)
                 page.goto("https://parscoders.com/login",
                           wait_until="domcontentloaded", timeout=60000)
                 log("browser warmed up; on parscoders.com/login")
@@ -565,11 +577,10 @@ def main():
                 log(f"warm-up navigation failed (non-fatal): "
                     f"{type(e).__name__}; continuing on the current page")
             log("WAITING FOR LOGIN: open the noVNC URL Muse hands you in chat, "
-                "sign in to ParsCoders with your own account, then leave the "
-                "tab open on the dashboard. Do not close the browser window. "
-                "If a challenge (captcha) appears, solve it in the browser "
-                "yourself -- the wait continues while you do, and nothing "
-                "here touches the challenge.")
+                "sign in to ParsCoders yourself, then leave the tab open. "
+                "Do not close the browser window. If a challenge appears, "
+                "solve it in the browser yourself -- the wait continues while "
+                "you do, and nothing here touches the challenge.")
             deadline = time.time() + POLL_SECS
             last_banner = 0.0
             last_iter = time.time()
@@ -623,12 +634,8 @@ def main():
                             "needs a fresh link from Muse")
                     tunnel_ok = ok
                 cookies = parscoders_cookies(ctx)
-                if is_logged_in(page, ctx):
-                    try:
-                        local_storage = page.evaluate(
-                            "() => Object.fromEntries(Object.entries(localStorage))")
-                    except Exception:
-                        local_storage = {}
+                if logged_in(page, cookies):
+                    local_storage = parscoders_local_storage(page)
                     session = {"cookies": cookies,
                                "localStorage": local_storage or {}}
                     fd = os.open(session_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -636,15 +643,10 @@ def main():
                         json.dump(session, f)
                     for c in cookies:
                         mask(c.get("value", ""))
-                    try:
-                        body = page.inner_text("body") or ""
-                    except Exception:
-                        body = ""
-                    name = ("محمد لعلی" if "محمد لعلی" in body else
-                            "محمد لالی" if "محمد لالی" in body else "unknown")
                     log(f"RESULT ok cookies={len(cookies)} "
+                        f"names={','.join(sorted(c['name'] for c in cookies))} "
                         f"localStorage_keys={len(local_storage or {})} "
-                        f"account_name={name} file={session_file}")
+                        f"file={session_file}")
                     return 0
                 time.sleep(15)
             fail("login_timeout: no signed-in ParsCoders session within "
