@@ -1,18 +1,15 @@
 name: ParsCoders mint session
 
-# Mints a fresh ParsCoders website session inside a GitHub runner's own headed
+# Mints a fresh ParsCoders session inside a GitHub runner's own headed
 # browser. The owner types the ParsCoders login himself through a remote view
-# (noVNC over a cloudflared tunnel); the fresh cookies are sealed into
-# SITE_SESSION_PARSCODERS. Never the owner's Chrome cookies.
+# (noVNC over a cloudflared tunnel); the fresh cookies + localStorage are
+# sealed into SITE_SESSION_PARSCODERS. Never the owner's Chrome cookies.
 # Modes: dry_run (prove the remote view, seal nothing) / login (real mint).
 # Manual dispatch only. Cookie values are never printed, logged or committed.
 # NOTE: this repo is PUBLIC, so run logs are public. The live noVNC URL is
 # NEVER printed in the log; it is written to the PRIVATE hq-ai-results repo
-# (jobs/parscoders-mint-<run_id>/novnc-url.txt) and Muse hands it to the
-# owner in chat. Temp files are shredded at the end of every run.
-# This is the mint pattern (owner logs in himself), NOT the capture workflow
-# (capture-parscoders-session.yml) which signs in with a shared Google
-# account. Do not confuse the two.
+# (jobs/parscoders-mint-<run_id>/novnc-url.txt) and Muse hands it to
+# the owner in chat. Temp files are shredded at the end of every run.
 
 on:
   workflow_dispatch:
@@ -26,7 +23,7 @@ on:
           - dry_run
           - login
 
-run-name: mint parscoders ${{ inputs.mode }}
+run-name: parscoders-mint ${{ inputs.mode }}
 
 permissions:
   contents: read
@@ -84,15 +81,15 @@ jobs:
 
       - name: Record current secret timestamp
         run: |
-          echo "SECRET_NAME=SITE_SESSION_PARSCODERS" >> "$GITHUB_ENV"
-          before="$(gh api "repos/${SECRET_REPO}/actions/secrets/SITE_SESSION_PARSCODERS" --jq .updated_at 2>/dev/null || echo none)"
+          secret="SITE_SESSION_PARSCODERS"
+          echo "SECRET_NAME=${secret}" >> "$GITHUB_ENV"
+          before="$(gh api "repos/${SECRET_REPO}/actions/secrets/${secret}" --jq .updated_at 2>/dev/null || echo none)"
           echo "SECRET_BEFORE=${before}" >> "$GITHUB_ENV"
-          echo "secret SITE_SESSION_PARSCODERS updated_at before: ${before}"
+          echo "secret ${secret} updated_at before: ${before}"
 
       - name: Mint session in runner browser
         env:
           GWEB_PROXY: http://127.0.0.1:10809
-          MINT_ACCOUNT: parscoders
           MINT_MODE: ${{ inputs.mode }}
           MINT_POLL_SECS: '2400'
           MINT_RESULTS_DIR: hq-ai-results
