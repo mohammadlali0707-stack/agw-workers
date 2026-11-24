@@ -441,11 +441,18 @@ def load_acc1_cookies(ctx):
     shape gemini_mint.py seals. Cookie values are never printed.
     Cookies are added ONE AT A TIME: a single bad cookie must not kill
     the whole batch, and each rejection is logged by cookie NAME only
-    (never the value) so the exact bad field is visible. The domain is
-    sent WITHOUT the leading dot -- CDP's Storage.setCookies rejects
-    ".google.com" ("Invalid cookie fields") in current Chrome builds.
-    Fail hard only if zero cookies load -- a fresh unsigned-in browser
-    would silently violate the owner's requirement."""
+    (never the value) so the exact bad field is visible. Conversion is
+    the VERIFIED one (pool-check agent: reproduced locally with the
+    byte-identical error, fixed conversion verified in real Chromium):
+    the sealed secrets are a flat {name: value} dict and all accounts
+    contain the same three __Host- cookies (__Host-1PLSID,
+    __Host-3PLSID, __Host-GAPS). Chromium rejects __Host- cookies that
+    carry a Domain attribute -- and rejects the whole add_cookies call
+    -- so __Host- cookies go in with url only (no domain, no path;
+    url+path together also fails). All other cookies go in with
+    domain ".google.com" + path "/". Fail hard only if zero cookies
+    load -- a fresh unsigned-in browser would silently violate the
+    owner's requirement."""
     raw = os.environ.get("ACC1_COOKIES_JSON", "").strip()
     if not raw:
         fail("ACC1_COOKIES_JSON is empty: the ACC1 Google session was not "
@@ -470,8 +477,12 @@ def load_acc1_cookies(ctx):
             log(f"ACC1 cookie skipped (bad value chars): {name}")
             rejected.append(name)
             continue
-        cookie = {"name": name, "value": value,
-                  "domain": "google.com", "path": "/", "secure": True}
+        if name.startswith("__Host-"):
+            cookie = {"name": name, "value": value,
+                      "url": "https://google.com", "secure": True}
+        else:
+            cookie = {"name": name, "value": value,
+                      "domain": ".google.com", "path": "/", "secure": True}
         try:
             ctx.add_cookies([cookie])
             loaded.append(name)
