@@ -2167,53 +2167,26 @@ async def inspect_actions(page, home, out_dir, args):
     except Exception:
         body = ""
     res["list_body"] = body[:12000]
-    # Tag each row's actions button with an index so we can click it.
+    # Read each row's dropdown-menu links straight from the DOM
+    # (they exist hidden until the ⋮ menu opens; no clicking needed).
     rows = await page.evaluate("""() => {
         const out = [];
         const trs = [...document.querySelectorAll('table tbody tr')];
         trs.forEach((tr, i) => {
             const cells = [...tr.querySelectorAll('td')].map(td => (td.innerText || '').trim());
-            const btns = [...tr.querySelectorAll('button, a')];
-            const act = btns[btns.length - 1];
-            if (act) act.setAttribute('data-muse-row', String(i));
-            out.push({row: i, cells: cells, has_button: !!act,
-                      button_text: act ? (act.innerText || '').trim().slice(0, 40) : ''});
+            const items = [...tr.querySelectorAll('a.dropdown-item, .dropdown-menu a')].map(a => ({
+                text: (a.innerText || '').trim().slice(0, 60),
+                title: (a.getAttribute('title') || '').trim().slice(0, 60),
+                href: a.getAttribute('href') || '',
+                cls: (a.getAttribute('class') || '').slice(0, 60),
+            }));
+            out.push({row: i, cells: cells, menu_items: items});
         });
         return out;
     }""")
     res["rows"] = rows
-    menus = []
-    for r in rows:
-        i = r["row"]
-        entry = {"row": i, "title": (r.get("cells") or [""])[1] if len(r.get("cells") or []) > 1 else "", "menu_items": [], "error": None}
-        try:
-            await page.locator(f'[data-muse-row="{i}"]').click(timeout=15000)
-            await page.wait_for_timeout(1200)
-            items = await page.evaluate("""() => {
-                const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };
-                const out = [];
-                document.querySelectorAll('a, button').forEach(el => {
-                    if (!vis(el)) return;
-                    const t = (el.innerText || '').trim();
-                    if (!t) return;
-                    out.push({text: t.slice(0, 80), href: el.getAttribute('href') || '',
-                              cls: (el.getAttribute('class') || '').slice(0, 80)});
-                });
-                return out;
-            }""")
-            # Keep only items that look like row-menu actions (not page chrome).
-            keywords = ["مشاهده", "ویرایش", "غیر", "فعال", "حذف", "ارسال", "انتشار", "پیش‌نویس", "پیش نویس"]
-            entry["menu_items"] = [it for it in items if any(k in it["text"] for k in keywords)]
-            entry["all_visible_buttons"] = len(items)
-            await page.screenshot(path=os.path.join(out_dir, f"actions_row_{i}.png"))
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(800)
-        except Exception as e:  # noqa: BLE001 - record and continue
-            entry["error"] = f"{type(e).__name__}: {e}"
-        menus.append(entry)
-    res["menus"] = menus
     res["ok"] = True
-    res["note"] = "inspect-actions only: menus opened and closed, nothing clicked inside them, nothing changed"
+    res["note"] = "inspect-actions only: DOM read, nothing clicked, nothing changed"
     return res
 
 
