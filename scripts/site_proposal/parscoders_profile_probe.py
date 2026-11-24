@@ -85,6 +85,83 @@ def sanitize_cookies(cookies, default_domain=None):
     return sanitized
 
 
+def probe_portfolio(page, out_dir):
+    """Read-only listing of the user's portfolio samples at /resume/portfolio/.
+
+    Returns {url, logged_in_hint, samples: [{title, show_url, edit_url,
+    card_text}], add_links, buttons, page_text}. GET navigation only, no
+    form fills, no clicks on submit buttons. Titles/links come from the
+    actual logged-in list page — nothing guessed.
+    """
+    url = SITE + "/resume/portfolio/"
+    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(3000)
+    try:
+        page.evaluate("() => { window.scrollTo(0, document.body.scrollHeight); }")
+        page.wait_for_timeout(1200)
+        page.evaluate("() => { window.scrollTo(0, 0); }")
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+    try:
+        page.screenshot(path=str(out_dir / "portfolio.png"))
+    except Exception:
+        pass
+    data = page.evaluate(
+        """() => {
+            const out = {samples: [], add_links: [], buttons: []};
+            const seen = new Set();
+            for (const a of document.querySelectorAll('a[href*="/show/"]')) {
+                const href = a.getAttribute('href') || '';
+                if (!href.includes('portfolio')) continue;
+                if (seen.has(href)) continue;
+                seen.add(href);
+                let card = a.closest('div');
+                for (let i = 0; i < 6 && card; i++) {
+                    const t = (card.innerText || '').trim();
+                    if (t.length > 30) break;
+                    card = card.parentElement;
+                }
+                let edit_url = '';
+                if (card) {
+                    for (const x of card.querySelectorAll('a[href]')) {
+                        const h = (x.getAttribute('href') || '');
+                        const tx = (x.innerText || '');
+                        if (/edit|ویرایش/i.test(h + ' ' + tx)) { edit_url = h; break; }
+                    }
+                }
+                out.samples.push({
+                    title: (a.innerText || '').trim().slice(0, 150),
+                    show_url: href,
+                    edit_url: edit_url,
+                    card_text: card ? (card.innerText || '').trim().slice(0, 600) : '',
+                });
+            }
+            for (const a of document.querySelectorAll('a[href]')) {
+                const href = (a.getAttribute('href') || '');
+                const tx = (a.innerText || '').trim().slice(0, 80);
+                if (href.includes('/resume/portfolio') && !href.includes('/show/')) {
+                    out.add_links.push({href, text: tx});
+                }
+            }
+            out.buttons = [...document.querySelectorAll('button')]
+                .filter(e => e.offsetParent !== null)
+                .map(e => (e.innerText || '').trim().slice(0, 80)).filter(Boolean).slice(0, 40);
+            out.page_text = (document.body.innerText || '').slice(0, 4000);
+            return out;
+        }""")
+    body_text = ""
+    try:
+        body_text = page.locator("body").inner_text(timeout=10000)
+    except Exception:
+        pass
+    data["url"] = url
+    data["final_url"] = page.url
+    data["on_login_page"] = "/login" in page.url
+    data["has_display_name"] = "محمد لعلی" in (body_text or "")
+    return data
+
+
 def main():
     job_id = os.environ.get("PROBE_JOB_ID", "manual")
     results_root = Path(os.environ.get("PROBE_RESULTS_DIR", "hq-ai-results"))
@@ -260,6 +337,14 @@ def main():
                         result["email_found_on"] = page.url
                     if result["display_name"] is None and "محمد لعلی" in searchable:
                         result["display_name"] = "محمد لعلی"
+                # 4. Portfolio listing: /resume/portfolio/ — read-only.
+                try:
+                    result["portfolio"] = probe_portfolio(page, out_dir)
+                    print(f"portfolio samples={len(result['portfolio'].get('samples', []))} "
+                          f"url={result['portfolio'].get('final_url')}")
+                except Exception as e:
+                    result["portfolio"] = {"error": f"{type(e).__name__}: {e}"}
+                    print(f"portfolio probe failed ({type(e).__name__}: {e})")
             finally:
                 context.close()
         finally:
