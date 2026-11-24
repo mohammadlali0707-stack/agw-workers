@@ -2190,6 +2190,104 @@ async def inspect_actions(page, home, out_dir, args):
     return res
 
 
+async def dump_portfolio_rows(page):
+    """Read the /resume/portfolio/ table rows: cells + row menu links."""
+    return await page.evaluate("""() => {
+        const out = [];
+        const trs = [...document.querySelectorAll('table tbody tr')];
+        trs.forEach((tr, i) => {
+            const cells = [...tr.querySelectorAll('td')].map(td => (td.innerText || '').trim());
+            const items = [...tr.querySelectorAll('a.dropdown-item, .dropdown-menu a')].map(a => ({
+                text: (a.innerText || '').trim().slice(0, 60),
+                title: (a.getAttribute('title') || '').trim().slice(0, 60),
+                href: a.getAttribute('href') || '',
+            }));
+            out.push({row: i, cells: cells, menu_items: items});
+        });
+        return out;
+    }""")
+
+
+def _find_row(rows, title, sample_id=""):
+    """Find a portfolio row by exact title, or by sample id in its disable href."""
+    for r in rows:
+        cells = r.get("cells", [])
+        t = cells[1] if len(cells) > 1 else ""
+        dis = [it for it in r.get("menu_items", []) if "disable" in (it.get("href") or "")]
+        if sample_id:
+            if dis and ("/" + sample_id + "/disable") in dis[0]["href"]:
+                return r, dis[0]["href"]
+        elif t == title and dis:
+            return r, dis[0]["href"]
+    return None, None
+
+
+async def deactivate_sample(page, home, out_dir, args):
+    """Deactivate one portfolio sample (user-ordered).
+
+    --title is the exact sample title; use "title|id" when the title is
+    ambiguous (two rows share «رصد لحظه‌ای آگهی»). Finds the row's
+    /resume/portfolio/<id>/disable link, navigates to it (confirming if
+    a confirmation page appears), then re-lists and records the new status.
+    """
+    res = {}
+    title, sample_id = args.title, ""
+    if "|" in args.title:
+        title, sample_id = [p.strip() for p in args.title.split("|", 1)]
+    res["title"] = title
+    res["sample_id"] = sample_id
+    list_url = home.rstrip("/") + "/resume/portfolio/"
+    await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    res["logged_in"] = await detect_logged_in(page, await collect_links(page))
+    rows = await dump_portfolio_rows(page)
+    target, disable_href = _find_row(rows, title, sample_id)
+    if not target:
+        res["ok"] = False
+        res["error"] = "target row/disable link not found"
+        res["rows_seen"] = rows
+        return res
+    res["status_before"] = target["cells"][5] if len(target["cells"]) > 5 else ""
+    res["disable_url"] = _abs_url(home, disable_href)
+    await page.goto(res["disable_url"], wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    await page.screenshot(path=os.path.join(out_dir, "after_disable.png"))
+    res["disable_landed_url"] = page.url
+    try:
+        res["disable_page_text"] = (await page.inner_text("body"))[:2000]
+    except Exception:
+        res["disable_page_text"] = ""
+    txt = res["disable_page_text"]
+    if any(w in txt for w in ["مطمئن", "تایید می‌کنید", "تایید میکنید", "آیا می‌خواهید"]):
+        clicked = await page.evaluate("""() => {
+            const btns = [...document.querySelectorAll('button, a, input[type=submit]')].filter(e => e.offsetParent !== null);
+            for (const b of btns) {
+                const t = (b.innerText || b.value || '').trim();
+                if (/^(بله|تایید|تأیید|غیرفعال|غیر فعال)/.test(t)) { b.click(); return t; }
+            }
+            return null;
+        }""")
+        res["confirm_clicked"] = clicked
+        await page.wait_for_timeout(2500)
+        await page.screenshot(path=os.path.join(out_dir, "after_confirm.png"))
+        res["after_confirm_url"] = page.url
+    await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    await page.screenshot(path=os.path.join(out_dir, "list_after.png"))
+    rows2 = await dump_portfolio_rows(page)
+    res["rows_after"] = rows2
+    after, _ = _find_row(rows2, title, sample_id)
+    if after is None:
+        res["status_after"] = "ROW GONE from list"
+        res["ok"] = True
+        res["note"] = "row no longer on the list after disable"
+    else:
+        res["status_after"] = after["cells"][5] if len(after["cells"]) > 5 else ""
+        res["ok"] = res["status_after"] != res["status_before"]
+        res["note"] = "status changed after disable" if res["ok"] else "status UNCHANGED after disable"
+    return res
+
+
 async def verify_portfolio(page, home, out_dir, args):
     """Verify the new samples on the ParsCoders portfolio list. Read-only.
 
@@ -2366,6 +2464,12 @@ async def main_async(args):
                 ia = await inspect_actions(page, home, out_dir, args)
                 result.update(ia)
                 result["ok"] = bool(ia.get("ok"))
+                return save()
+            if args.mode == "deactivate":
+                # Deactivate one portfolio sample (user-ordered).
+                da = await deactivate_sample(page, home, out_dir, args)
+                result.update(da)
+                result["ok"] = bool(da.get("ok"))
                 return save()
             profile_url = args.profile_url
             info = {}
@@ -2676,7 +2780,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag", "verify", "inspect-actions"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag", "verify", "inspect-actions", "deactivate"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
