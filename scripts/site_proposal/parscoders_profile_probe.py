@@ -162,6 +162,72 @@ def probe_portfolio(page, out_dir):
     return data
 
 
+def probe_sample_details(page, out_dir, samples):
+    """Read-only detail probe for each portfolio sample.
+
+    For every sample from the list page: visit its show page (confirm what
+    the sample actually is — title + description text) and GET the guessed
+    edit URL /resume/portfolio/<id>/edit, dumping its forms with current
+    field values. GET only, no fills, no submits. If the edit URL is not
+    the real edit page, the dumped forms/title make that visible.
+    """
+    details = []
+    for s in samples or []:
+        show = s.get("show_url") or ""
+        m = re.search(r"/show/(\d+)/", show)
+        sid = m.group(1) if m else ""
+        entry = {"show_url": show, "sample_id": sid}
+        try:
+            page.goto(urljoin(SITE + "/", show.lstrip("/")),
+                      wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(2000)
+            entry["show_title"] = page.title()
+            try:
+                entry["show_text"] = page.locator("body").inner_text(timeout=8000)[:3000]
+            except Exception:
+                entry["show_text"] = ""
+            try:
+                entry["show_links"] = page.evaluate(
+                    """() => [...document.querySelectorAll('a[href]')].map(a => ({
+                        href: a.getAttribute('href') || '',
+                        text: (a.innerText || '').trim().slice(0, 60)
+                    })).filter(l => /edit|ویرایش|portfolio/i.test(l.href + ' ' + l.text)).slice(0, 20)""")
+            except Exception:
+                entry["show_links"] = []
+        except Exception as e:
+            entry["show_error"] = f"{type(e).__name__}: {e}"
+        if sid:
+            edit_url = f"{SITE}/resume/portfolio/{sid}/edit"
+            entry["edit_url_tried"] = edit_url
+            try:
+                page.goto(edit_url, wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(2000)
+                entry["edit_final_url"] = page.url
+                entry["edit_title"] = page.title()
+                entry["edit_forms"] = page.evaluate(
+                    """() => [...document.querySelectorAll('form')].map(f => ({
+                        action: f.action || '', method: f.method || '',
+                        fields: [...f.querySelectorAll('input, textarea, select')].map(el => ({
+                            tag: el.tagName.toLowerCase(),
+                            type: el.getAttribute('type') || '',
+                            name: el.getAttribute('name') || '', id: el.id || '',
+                            value: (el.value || '').slice(0, 300)
+                        })),
+                        buttons: [...f.querySelectorAll('button, input[type=submit]')].map(b => ({
+                            text: ((b.innerText || b.value || '').trim().slice(0, 60)),
+                            id: b.id || '', type: b.getAttribute('type') || ''
+                        }))
+                    }))""")
+                try:
+                    entry["edit_body_text"] = page.locator("body").inner_text(timeout=8000)[:2000]
+                except Exception:
+                    entry["edit_body_text"] = ""
+            except Exception as e:
+                entry["edit_error"] = f"{type(e).__name__}: {e}"
+        details.append(entry)
+    return details
+
+
 def main():
     job_id = os.environ.get("PROBE_JOB_ID", "manual")
     results_root = Path(os.environ.get("PROBE_RESULTS_DIR", "hq-ai-results"))
@@ -345,6 +411,14 @@ def main():
                 except Exception as e:
                     result["portfolio"] = {"error": f"{type(e).__name__}: {e}"}
                     print(f"portfolio probe failed ({type(e).__name__}: {e})")
+                # 5. Sample details: show pages + edit-form probe (read-only).
+                try:
+                    result["sample_details"] = probe_sample_details(
+                        page, out_dir, result["portfolio"].get("samples", []))
+                    print(f"sample_details={len(result['sample_details'])}")
+                except Exception as e:
+                    result["sample_details"] = {"error": f"{type(e).__name__}: {e}"}
+                    print(f"sample details probe failed ({type(e).__name__}: {e})")
             finally:
                 context.close()
         finally:
