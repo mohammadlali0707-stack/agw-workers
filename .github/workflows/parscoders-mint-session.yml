@@ -89,6 +89,7 @@ jobs:
 
       - name: Mint session in runner browser
         env:
+          ACC1_COOKIES_JSON: ${{ secrets.GEMINI_WEB_COOKIES_ACC1 }}
           GWEB_PROXY: http://127.0.0.1:10809
           MINT_MODE: ${{ inputs.mode }}
           MINT_POLL_SECS: '2400'
