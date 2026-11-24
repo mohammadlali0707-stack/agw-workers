@@ -438,10 +438,14 @@ def load_acc1_cookies(ctx):
     fresh in this browser. The session arrives via the ACC1_COOKIES_JSON
     env var (the workflow injects ${{ secrets.GEMINI_WEB_COOKIES_ACC1 }});
     it is a flat {name: value} dict of .google.com cookies, the exact
-    shape gemini_mint.py seals. Cookie values are never printed. Fail
-    hard if the env var is missing/empty/invalid or no cookies load --
-    a fresh unsigned-in browser would silently violate the owner's
-    requirement."""
+    shape gemini_mint.py seals. Cookie values are never printed.
+    Cookies are added ONE AT A TIME: a single bad cookie must not kill
+    the whole batch, and each rejection is logged by cookie NAME only
+    (never the value) so the exact bad field is visible. The domain is
+    sent WITHOUT the leading dot -- CDP's Storage.setCookies rejects
+    ".google.com" ("Invalid cookie fields") in current Chrome builds.
+    Fail hard only if zero cookies load -- a fresh unsigned-in browser
+    would silently violate the owner's requirement."""
     raw = os.environ.get("ACC1_COOKIES_JSON", "").strip()
     if not raw:
         fail("ACC1_COOKIES_JSON is empty: the ACC1 Google session was not "
@@ -454,18 +458,33 @@ def load_acc1_cookies(ctx):
         fail("ACC1_COOKIES_JSON is not a non-empty object")
     for v in flat.values():
         mask(str(v))
-    cookies = [{"name": name, "value": str(value),
-                "domain": ".google.com", "path": "/", "secure": True}
-               for name, value in flat.items() if value]
-    if not cookies:
-        fail("ACC1_COOKIES_JSON held no usable cookies")
-    try:
-        ctx.add_cookies(cookies)
-    except Exception as e:
-        fail(f"adding ACC1 Google cookies to the browser failed: "
-             f"{type(e).__name__}: {e}")
-    log(f"ACC1 Google session pre-loaded: {len(cookies)} cookies")
-    return len(cookies)
+    loaded, rejected = [], []
+    for name, value in flat.items():
+        if not isinstance(name, str) or not name.strip():
+            rejected.append("<empty-name>")
+            continue
+        if not isinstance(value, str) or not value:
+            rejected.append(name)
+            continue
+        if any(ord(ch) < 0x21 or ch in ";," for ch in value):
+            log(f"ACC1 cookie skipped (bad value chars): {name}")
+            rejected.append(name)
+            continue
+        cookie = {"name": name, "value": value,
+                  "domain": "google.com", "path": "/", "secure": True}
+        try:
+            ctx.add_cookies([cookie])
+            loaded.append(name)
+        except Exception as e:
+            log(f"ACC1 cookie rejected by the browser: {name}: "
+                f"{type(e).__name__}: {e}")
+            rejected.append(name)
+    log(f"ACC1 Google session pre-loaded: {len(loaded)} cookies "
+        f"({','.join(sorted(loaded))}); rejected: {rejected}")
+    if not loaded:
+        fail("no ACC1 Google cookies could be loaded into the browser; "
+             "refusing to open a fresh unsigned-in browser")
+    return len(loaded)
 
 
 def parscoders_cookies(ctx):
