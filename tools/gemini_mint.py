@@ -474,8 +474,8 @@ def cleanup():
 
 
 def main():
-    if ACCOUNT not in ("acc0", "acc2", "acc4", "acc5", "acc6", "acc8"):
-        fail(f"unknown account {ACCOUNT!r}; expected acc0/acc2/acc4/acc5/acc6/acc8")
+    if ACCOUNT not in ("acc0", "acc1", "acc2", "acc4", "acc5", "acc6", "acc8"):
+        fail(f"unknown account {ACCOUNT!r}; expected acc0/acc1/acc2/acc4/acc5/acc6/acc8")
     if MODE not in ("dry_run", "login"):
         fail(f"unknown mode {MODE!r}")
     session_file = f"/tmp/gemini-session-{ACCOUNT}.json"
