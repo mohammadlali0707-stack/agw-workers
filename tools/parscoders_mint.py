@@ -13,6 +13,12 @@ Runs ONLY on GitHub Actions (never on the VPS). Flow:
      Muse hands the URL to the owner in chat.
   2. Launch real Google Chrome (headed) under Xvfb at parscoders.com/login,
      routed through GWEB_PROXY (Oracle exit) when set.
+  2b. BEFORE opening ParsCoders, the sealed ACC1 Google session
+     (GEMINI_WEB_COOKIES_ACC1) is pre-loaded into the browser context
+     and proven on accounts.google.com, so the browser is ALREADY signed
+     in to Google ACC1 when it opens parscoders.com/login. The owner
+     never signs in to Google fresh in this browser; the ParsCoders
+     login uses ACC1's Gmail via Google sign-in.
   3. dry_run: verify the tunnel URL answers HTTP 200, the browser page
      loaded, save a screenshot, exit success WITHOUT writing any secret.
   4. login: poll up to MINT_POLL_SECS for a signed-in ParsCoders session
@@ -425,6 +431,43 @@ def connect_browser(pw, chrome_proc):
     return browser, ctx, page
 
 
+def load_acc1_cookies(ctx):
+    """Pre-load the sealed ACC1 Google session into this browser context,
+    so the runner browser is ALREADY signed in to Google ACC1 before it
+    opens parscoders.com/login. The owner must NOT sign in to Google
+    fresh in this browser. The session arrives via the ACC1_COOKIES_JSON
+    env var (the workflow injects ${{ secrets.GEMINI_WEB_COOKIES_ACC1 }});
+    it is a flat {name: value} dict of .google.com cookies, the exact
+    shape gemini_mint.py seals. Cookie values are never printed. Fail
+    hard if the env var is missing/empty/invalid or no cookies load --
+    a fresh unsigned-in browser would silently violate the owner's
+    requirement."""
+    raw = os.environ.get("ACC1_COOKIES_JSON", "").strip()
+    if not raw:
+        fail("ACC1_COOKIES_JSON is empty: the ACC1 Google session was not "
+             "injected; refusing to open a fresh unsigned-in browser")
+    try:
+        flat = json.loads(raw)
+    except Exception as e:
+        fail(f"ACC1_COOKIES_JSON is not valid JSON: {type(e).__name__}")
+    if not isinstance(flat, dict) or not flat:
+        fail("ACC1_COOKIES_JSON is not a non-empty object")
+    for v in flat.values():
+        mask(str(v))
+    cookies = [{"name": name, "value": str(value),
+                "domain": ".google.com", "path": "/", "secure": True}
+               for name, value in flat.items() if value]
+    if not cookies:
+        fail("ACC1_COOKIES_JSON held no usable cookies")
+    try:
+        ctx.add_cookies(cookies)
+    except Exception as e:
+        fail(f"adding ACC1 Google cookies to the browser failed: "
+             f"{type(e).__name__}: {e}")
+    log(f"ACC1 Google session pre-loaded: {len(cookies)} cookies")
+    return len(cookies)
+
+
 def parscoders_cookies(ctx):
     """Full cookie dicts for parscoders.com (the shape the site-proposal
     runner consumes), plus the page's localStorage."""
@@ -542,6 +585,39 @@ def main():
                 log(f"browser page: url={page.url} title={page.title()!r}")
             except Exception:
                 log("browser page: url/title unreadable")
+            # ACC1 FIRST: the browser must already be signed in to Google
+            # ACC1 before it ever opens ParsCoders. Pre-load the sealed
+            # ACC1 session, then prove it on accounts.google.com.
+            load_acc1_cookies(ctx)
+            try:
+                page.goto("https://accounts.google.com",
+                          wait_until="domcontentloaded", timeout=60000)
+                time.sleep(3)
+                acc_url = page.url or ""
+                content = (page.content() or "").lower()
+                try:
+                    body_text = (page.inner_text("body") or "").lower()
+                except Exception:
+                    body_text = ""
+                if "challenge" in acc_url.lower():
+                    log("ACC1 session loaded; Google shows a challenge -- "
+                        "owner: solve it in the browser if it appears")
+                elif ('type="password"' in content
+                        or ('type="email"' in content
+                            and "choose an account" not in body_text
+                            and "sign out" not in body_text
+                            and "myaccount.google.com" not in acc_url)):
+                    fail("ACC1 Google session did not take: "
+                         "accounts.google.com still asks for sign-in; "
+                         "secret untouched", code=6)
+                else:
+                    log("ACC1 Google session active in browser")
+            except SystemExit:
+                raise
+            except Exception as e:
+                log(f"ACC1 session check inconclusive "
+                    f"({type(e).__name__}); continuing -- the ParsCoders "
+                    "Google button will show whether ACC1 is signed in")
             if MODE == "dry_run":
                 # Verify the public tunnel answers from outside the runner.
                 try:
@@ -578,6 +654,8 @@ def main():
                     f"{type(e).__name__}; continuing on the current page")
             log("WAITING FOR LOGIN: open the noVNC URL Muse hands you in chat, "
                 "sign in to ParsCoders yourself, then leave the tab open. "
+                "Google is already signed in as ACC1 -- pick that account "
+                "on the Google button; do not sign in to Google fresh. "
                 "Do not close the browser window. If a challenge appears, "
                 "solve it in the browser yourself -- the wait continues while "
                 "you do, and nothing here touches the challenge.")
