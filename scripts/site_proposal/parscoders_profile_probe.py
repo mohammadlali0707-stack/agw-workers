@@ -34,6 +34,8 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 # Candidate profile/account pages, in the order to try them.
 CANDIDATES = [
+    "/user-info/update",
+    "/user-info",
     "/profile",
     "/user",
     "/account",
@@ -155,7 +157,10 @@ def main():
                     login_visible = False
                 on_login_page = "/login" in page.url
                 has_name = "محمد لعلی" in body_text or "محمد لعلی" in header_text
-                result["logged_in"] = (not on_login_page) and (not login_visible) and has_name
+                # Logged in = header shows the account name + dashboard link and
+                # we were not bounced to /login. (A login link can exist hidden
+                # in the DOM, so its mere presence is not a logged-out signal.)
+                result["logged_in"] = (not on_login_page) and has_name
                 result["header_text"] = header_text.strip()[:500] if header_text else None
                 result["display_name"] = "محمد لعلی" if has_name else None
                 result["pages"].append({
@@ -166,10 +171,10 @@ def main():
                 print(f"home title={title!r} url={page.url} on_login={on_login_page} "
                       f"login_link={login_visible} has_name={has_name}")
 
-                # 2. Discover profile links from the header/nav.
+                # 2. Discover profile links from the header/nav/sidebar.
                 discovered = []
                 try:
-                    for a in page.locator("header a, nav a").all():
+                    for a in page.locator("header a, nav a, aside a").all():
                         href = a.get_attribute("href") or ""
                         if href and PROFILE_HREF_RE.search(href):
                             abs_url = urljoin(SITE + "/", href)
@@ -203,28 +208,57 @@ def main():
                         page.screenshot(path=str(shot))
                     except Exception:
                         shot = None
+                    # Scroll through the page so lazy content renders, then
+                    # collect BOTH visible text AND form field values: an email
+                    # sitting in an <input value="..."> never appears in
+                    # innerText, so text-only extraction misses it.
+                    try:
+                        page.evaluate(
+                            "() => { window.scrollTo(0, document.body.scrollHeight); }")
+                        page.wait_for_timeout(1200)
+                        page.evaluate("() => { window.scrollTo(0, 0); }")
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        pass
                     text = ""
                     try:
                         text = page.locator("body").inner_text(timeout=10000)
                     except Exception:
                         pass
-                    emails = sorted(set(EMAIL_RE.findall(text or "")))
+                    field_text = ""
+                    try:
+                        field_text = page.evaluate(
+                            """() => {
+                                const vals = [];
+                                document.querySelectorAll('input, textarea, select').forEach(el => {
+                                    if (el.type === 'password') return;
+                                    const v = (el.value || '').trim();
+                                    if (v) vals.push(v);
+                                    const ph = (el.getAttribute('placeholder') || '').trim();
+                                    if (ph) vals.push(ph);
+                                });
+                                return vals.join('\\n');
+                            }""")
+                    except Exception:
+                        field_text = ""
+                    searchable = (text or "") + "\n" + (field_text or "")
+                    emails = sorted(set(EMAIL_RE.findall(searchable)))
                     # Masked emails (m***@gmail.com) still count as a sighting.
-                    masked = sorted(set(re.findall(r"[A-Za-z0-9._%+-]\*{2,}[A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+", text or "")))
+                    masked = sorted(set(re.findall(r"[A-Za-z0-9._%+-]\*{2,}[A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+", searchable)))
                     entry = {
                         "url": target, "final_url": page.url, "title": page.title(),
                         "on_login_page": "/login" in page.url,
-                        "has_display_name": "محمد لعلی" in (text or ""),
+                        "has_display_name": "محمد لعلی" in searchable,
                         "emails": emails, "masked_emails": masked,
                         "screenshot": shot.name if shot else None,
                     }
                     result["pages"].append(entry)
                     print(f"page {target} -> {page.url} emails={len(emails)} "
-                          f"masked={len(masked)} name={'محمد لعلی' in (text or '')}")
+                          f"masked={len(masked)} name={'محمد لعلی' in searchable}")
                     if emails and result["email"] is None:
                         result["email"] = emails[0]
                         result["email_found_on"] = page.url
-                    if result["display_name"] is None and "محمد لعلی" in (text or ""):
+                    if result["display_name"] is None and "محمد لعلی" in searchable:
                         result["display_name"] = "محمد لعلی"
             finally:
                 context.close()
