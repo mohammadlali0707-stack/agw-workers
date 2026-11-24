@@ -1,0 +1,155 @@
+name: Instagram mint session
+
+# Mints a fresh Instagram session inside a GitHub runner's own headed
+# browser. The owner types the Instagram login himself through a remote view
+# (noVNC over a cloudflared tunnel); the fresh cookies + localStorage are
+# sealed into INSTAGRAM_WEB_COOKIES. Never the owner's Chrome cookies.
+# The sealed Facebook session IS pre-loaded, so the owner can use
+# Instagram's "Log in with Facebook"; the Instagram login itself is
+# typed/clicked by hand in the browser.
+# Modes: dry_run (prove the remote view, seal nothing) / login (real mint).
+# Manual dispatch only. Cookie values are never printed, logged or committed.
+# NOTE: this repo is PUBLIC, so run logs are public. The live noVNC URL is
+# NEVER printed in the log; it is written to the PRIVATE hq-ai-results repo
+# (jobs/instagram-mint-<run_id>/novnc-url.txt) and Muse hands it to
+# the owner in chat. Temp files are shredded at the end of every run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry_run proves the remote view; login mints and seals'
+        required: true
+        default: 'dry_run'
+        type: choice
+        options:
+          - dry_run
+          - login
+
+run-name: instagram-mint ${{ inputs.mode }}
+
+permissions:
+  contents: read
+
+jobs:
+  mint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      MODE_INPUT: ${{ inputs.mode }}
+      RUN_ID_INPUT: ${{ github.run_id }}
+      GH_TOKEN: ${{ secrets.ACC6_PAT }}
+      SECRET_REPO: mohammadlali0707-stack/agw-workers
+      RESULTS_REPO: mohammadlali0707-stack/hq-ai-results
+    steps:
+      - name: Checkout agw-workers
+        uses: actions/checkout@v4
+
+      - name: Checkout hq-ai-results (private, for the noVNC URL)
+        uses: actions/checkout@v4
+        with:
+          repository: mohammadlali0707-stack/hq-ai-results
+          token: ${{ secrets.ACC6_PAT || secrets.GITHUB_TOKEN }}
+          path: hq-ai-results
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install desktop, VNC and browser
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11vnc novnc websockify
+          curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb
+          sudo apt-get install -y -qq /tmp/chrome.deb
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /tmp/cloudflared
+          chmod +x /tmp/cloudflared
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install --with-deps chromium
+          echo "install done"
+
+      - name: Set up Oracle exit (Xray)
+        env:
+          XRAY_CONFIG: ${{ secrets.XRAY_CONFIG }}
+        run: |
+          set +e
+          curl -sSL https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip -o /tmp/xray.zip && unzip -qo /tmp/xray.zip -d /tmp/xray
+          printf '%s' "$XRAY_CONFIG" > /tmp/xray/config.json
+          (/tmp/xray/xray run -c /tmp/xray/config.json > /tmp/xray.log 2>&1 &)
+          sleep 3
+          echo "egress via proxy: $(curl -sf --max-time 15 --proxy http://127.0.0.1:10809 https://ifconfig.me)"
+          echo "xray started"
+
+      - name: Record current secret timestamp
+        run: |
+          secret="INSTAGRAM_WEB_COOKIES"
+          echo "SECRET_NAME=${secret}" >> "$GITHUB_ENV"
+          before="$(gh api "repos/${SECRET_REPO}/actions/secrets/${secret}" --jq .updated_at 2>/dev/null || echo none)"
+          echo "SECRET_BEFORE=${before}" >> "$GITHUB_ENV"
+          echo "secret ${secret} updated_at before: ${before}"
+
+      - name: Mint session in runner browser
+        env:
+          GWEB_PROXY: http://127.0.0.1:10809
+          FACEBOOK_SESSION: ${{ secrets.FACEBOOK_WEB_COOKIES }}
+          MINT_MODE: ${{ inputs.mode }}
+          MINT_POLL_SECS: '2400'
+          MINT_RESULTS_DIR: hq-ai-results
+          MINT_RUN_ID: ${{ github.run_id }}
+        run: python3 tools/instagram_mint.py
+
+      - name: Seal fresh session into secret
+        if: success() && env.MODE_INPUT == 'login'
+        run: |
+          test -f /tmp/instagram-session.json || { echo "session file missing"; exit 1; }
+          gh secret set "${SECRET_NAME}" --repo "${SECRET_REPO}" < /tmp/instagram-session.json
+          after="$(gh api "repos/${SECRET_REPO}/actions/secrets/${SECRET_NAME}" --jq .updated_at)"
+          echo "secret ${SECRET_NAME} updated_at after: ${after}"
+          if [ "${after}" = "${SECRET_BEFORE}" ]; then echo "secret updated_at did not advance"; exit 1; fi
+          echo "sealed ${SECRET_NAME}"
+
+      - name: Publish noVNC URL to private results repo
+        if: always()
+        run: |
+          test -f /tmp/novnc-url.txt || { echo "no noVNC URL file (browser/tunnel never came up)"; exit 0; }
+          jobdir="jobs/instagram-mint-${RUN_ID_INPUT}"
+          mkdir -p "hq-ai-results/${jobdir}"
+          cp /tmp/novnc-url.txt "hq-ai-results/${jobdir}/novnc-url.txt"
+          cd hq-ai-results
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${jobdir}"
+          if git diff --staged --quiet; then
+            echo "No changes to commit in hq-ai-results."
+            exit 0
+          fi
+          git commit -m "instagram-mint: run ${RUN_ID_INPUT} noVNC URL [skip ci]"
+          MAX_RETRIES=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Push attempt $i of $MAX_RETRIES..."
+            git rebase --abort 2>/dev/null || true
+            if git pull --rebase -X theirs origin main && git push origin HEAD:main; then
+              echo "noVNC URL published to private results repo."
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          echo "WARNING: failed to push noVNC URL to hq-ai-results after $MAX_RETRIES attempts."
+          exit 0
+
+      - name: Upload dry-run screenshot
+        if: success() && env.MODE_INPUT == 'dry_run'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mint-dry-run-shot
+          path: /tmp/mint-shot.png
+          if-no-files-found: warn
+
+      - name: Shred session files and browser profile
+        if: always()
+        run: |
+          shred -u /tmp/instagram-session.json 2>/dev/null || rm -f /tmp/instagram-session.json
+          rm -rf /tmp/chrome-profile /tmp/novnc /tmp/novnc-url.txt
+          echo "shredded"
