@@ -228,6 +228,76 @@ def probe_sample_details(page, out_dir, samples):
     return details
 
 
+def probe_actions_menu(page, out_dir):
+    """Read-only: open /resume/portfolio/, find the اقدامات (actions) control
+    for the «ربات 120635» row, click its dropdown toggle, and dump the menu
+    items (text/href/onclick). Also dumps every portfolio anchor on the page
+    (visible or hidden). No submits, no deletes, no disables clicked — only
+    opening a menu and reading the DOM.
+    """
+    url = SITE + "/resume/portfolio/"
+    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(3000)
+    out = {"url": url, "final_url": page.url}
+    out["all_portfolio_anchors"] = page.evaluate(
+        """() => [...document.querySelectorAll('a[href*="portfolio"]')].map(a => ({
+            href: a.getAttribute('href') || '',
+            text: (a.innerText || '').trim().slice(0, 60),
+            visible: !!(a.offsetParent !== null),
+            cls: (a.getAttribute('class') || '').slice(0, 80)
+        }))""")
+    out["row_controls"] = page.evaluate(
+        """() => {
+            const rows = [...document.querySelectorAll('tr')];
+            const row = rows.find(r => (r.innerText || '').includes('ربات 120635'));
+            if (!row) return {found: false};
+            const ctrls = [...row.querySelectorAll('a, button, [role="button"], [data-toggle], [data-bs-toggle]')].map(e => ({
+                tag: e.tagName.toLowerCase(), href: e.getAttribute('href') || '',
+                text: (e.innerText || '').trim().slice(0, 60),
+                cls: (e.getAttribute('class') || '').slice(0, 120),
+                attrs: [...e.attributes].map(a => a.name + '=' + (a.value || '').slice(0, 80)).join(' ')
+            }));
+            return {found: true, controls: ctrls, row_html: row.outerHTML.slice(0, 4000)};
+        }""")
+    try:
+        clicked = page.evaluate(
+            """() => {
+                const rows = [...document.querySelectorAll('tr')];
+                const row = rows.find(r => (r.innerText || '').includes('ربات 120635'));
+                if (!row) return 'no row';
+                const t = row.querySelector('[data-bs-toggle="dropdown"], [data-toggle="dropdown"], .dropdown-toggle, button.dropdown-toggle');
+                if (t) { t.click(); return 'clicked toggle: ' + t.tagName + ' ' + (t.getAttribute('class') || ''); }
+                const cells = row.querySelectorAll('td');
+                const last = cells[cells.length - 1];
+                const b = last ? last.querySelector('a, button') : null;
+                if (b) { b.click(); return 'clicked last-cell control'; }
+                return 'no toggle found';
+            }""")
+        out["toggle_clicked"] = clicked
+        page.wait_for_timeout(2000)
+        out["open_menu_items"] = page.evaluate(
+            """() => {
+                const menus = [...document.querySelectorAll('.dropdown-menu.show, .dropdown-menu')].filter(m => m.offsetParent !== null);
+                const items = [];
+                for (const m of menus) {
+                    for (const e of m.querySelectorAll('a, button, li, [role="menuitem"]')) {
+                        items.push({tag: e.tagName.toLowerCase(),
+                            href: e.getAttribute('href') || '',
+                            text: (e.innerText || '').trim().slice(0, 80),
+                            onclick: (e.getAttribute('onclick') || '').slice(0, 120)});
+                    }
+                }
+                return items;
+            }""")
+        try:
+            page.screenshot(path=str(out_dir / "actions-menu.png"))
+        except Exception:
+            pass
+    except Exception as e:
+        out["toggle_error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 def main():
     job_id = os.environ.get("PROBE_JOB_ID", "manual")
     results_root = Path(os.environ.get("PROBE_RESULTS_DIR", "hq-ai-results"))
@@ -419,6 +489,13 @@ def main():
                 except Exception as e:
                     result["sample_details"] = {"error": f"{type(e).__name__}: {e}"}
                     print(f"sample details probe failed ({type(e).__name__}: {e})")
+                # 6. Actions menu: what the اقدامات control offers (read-only).
+                try:
+                    result["actions_menu"] = probe_actions_menu(page, out_dir)
+                    print(f"actions_menu toggle={result['actions_menu'].get('toggle_clicked')}")
+                except Exception as e:
+                    result["actions_menu"] = {"error": f"{type(e).__name__}: {e}"}
+                    print(f"actions menu probe failed ({type(e).__name__}: {e})")
             finally:
                 context.close()
         finally:
