@@ -2149,6 +2149,74 @@ async def kar_profile_probe(page, home, out_dir):
     return res
 
 
+async def inspect_actions(page, home, out_dir, args):
+    """Read-only probe of the portfolio list row actions.
+
+    For every sample row, opens its «اقدامات» (⋮) menu, records the menu
+    items (text + href) and takes a screenshot. Changes NOTHING.
+    """
+    res = {}
+    list_url = home.rstrip("/") + "/resume/portfolio/"
+    await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    res["list_url"] = page.url
+    links = await collect_links(page)
+    res["logged_in"] = await detect_logged_in(page, links)
+    try:
+        body = await page.inner_text("body")
+    except Exception:
+        body = ""
+    res["list_body"] = body[:12000]
+    # Tag each row's actions button with an index so we can click it.
+    rows = await page.evaluate("""() => {
+        const out = [];
+        const trs = [...document.querySelectorAll('table tbody tr')];
+        trs.forEach((tr, i) => {
+            const cells = [...tr.querySelectorAll('td')].map(td => (td.innerText || '').trim());
+            const btns = [...tr.querySelectorAll('button, a')];
+            const act = btns[btns.length - 1];
+            if (act) act.setAttribute('data-muse-row', String(i));
+            out.push({row: i, cells: cells, has_button: !!act,
+                      button_text: act ? (act.innerText || '').trim().slice(0, 40) : ''});
+        });
+        return out;
+    }""")
+    res["rows"] = rows
+    menus = []
+    for r in rows:
+        i = r["row"]
+        entry = {"row": i, "title": (r.get("cells") or [""])[1] if len(r.get("cells") or []) > 1 else "", "menu_items": [], "error": None}
+        try:
+            await page.locator(f'[data-muse-row="{i}"]').click(timeout=15000)
+            await page.wait_for_timeout(1200)
+            items = await page.evaluate("""() => {
+                const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };
+                const out = [];
+                document.querySelectorAll('a, button').forEach(el => {
+                    if (!vis(el)) return;
+                    const t = (el.innerText || '').trim();
+                    if (!t) return;
+                    out.push({text: t.slice(0, 80), href: el.getAttribute('href') || '',
+                              cls: (el.getAttribute('class') || '').slice(0, 80)});
+                });
+                return out;
+            }""")
+            # Keep only items that look like row-menu actions (not page chrome).
+            keywords = ["مشاهده", "ویرایش", "غیر", "فعال", "حذف", "ارسال", "انتشار", "پیش‌نویس", "پیش نویس"]
+            entry["menu_items"] = [it for it in items if any(k in it["text"] for k in keywords)]
+            entry["all_visible_buttons"] = len(items)
+            await page.screenshot(path=os.path.join(out_dir, f"actions_row_{i}.png"))
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(800)
+        except Exception as e:  # noqa: BLE001 - record and continue
+            entry["error"] = f"{type(e).__name__}: {e}"
+        menus.append(entry)
+    res["menus"] = menus
+    res["ok"] = True
+    res["note"] = "inspect-actions only: menus opened and closed, nothing clicked inside them, nothing changed"
+    return res
+
+
 async def verify_portfolio(page, home, out_dir, args):
     """Verify the new samples on the ParsCoders portfolio list. Read-only.
 
@@ -2319,6 +2387,12 @@ async def main_async(args):
                 vp = await verify_portfolio(page, home, out_dir, args)
                 result.update(vp)
                 result["ok"] = bool(vp.get("ok"))
+                return save()
+            if args.mode == "inspect-actions":
+                # Portfolio row-actions probe (read-only).
+                ia = await inspect_actions(page, home, out_dir, args)
+                result.update(ia)
+                result["ok"] = bool(ia.get("ok"))
                 return save()
             profile_url = args.profile_url
             info = {}
@@ -2629,7 +2703,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag", "verify"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag", "verify", "inspect-actions"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
