@@ -2149,6 +2149,75 @@ async def kar_profile_probe(page, home, out_dir):
     return res
 
 
+async def verify_portfolio(page, home, out_dir, args):
+    """Verify the new samples on the ParsCoders portfolio list. Read-only.
+
+    Goes to /resume/portfolio/ (logged-in list), dumps every sample row
+    (title, status, show-page link), then opens each sample's show page
+    and checks the description contains the expected live-bot link.
+    The expected list comes from --description as a JSON array:
+    [{"title": "...", "link": "https://t.me/..."}, ...].
+    Submits NOTHING and changes NOTHING.
+    """
+    res = {}
+    list_url = home.rstrip("/") + "/resume/portfolio/"
+    await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    await page.screenshot(path=os.path.join(out_dir, "portfolio_list.png"))
+    res["list_url"] = page.url
+    links = await collect_links(page)
+    res["logged_in"] = await detect_logged_in(page, links)
+    try:
+        body = await page.inner_text("body")
+    except Exception:
+        body = ""
+    res["list_body"] = body[:12000]
+    shows = []
+    seen = set()
+    for l in links:
+        href = (l.get("href") or "")
+        if "/resume/portfolio/show/" in href:
+            absu = _abs_url(home, href)
+            if absu not in seen:
+                seen.add(absu)
+                shows.append({"href": absu, "text": (l.get("text") or "").strip()[:120]})
+    res["show_links"] = shows
+    try:
+        expected = json.loads(args.description) if (args.description or "").strip().startswith("[") else []
+    except Exception:
+        expected = []
+    res["expected_count"] = len(expected)
+    # Visit every show page; record which expected titles/links appear there.
+    show_pages = []
+    for s in shows:
+        entry = {"show_url": s["href"], "link_text": s["text"]}
+        try:
+            await page.goto(s["href"], wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(1500)
+            sbody = await page.inner_text("body")
+            entry["body"] = sbody[:4000]
+            entry["titles_found"] = [e.get("title") for e in expected if e.get("title") and e["title"] in sbody]
+            entry["links_found"] = [e.get("link") for e in expected if e.get("link") and e["link"] in sbody]
+        except Exception as e:  # noqa: BLE001 - record and continue
+            entry["error"] = f"{type(e).__name__}: {e}"
+        show_pages.append(entry)
+    res["show_pages"] = show_pages
+    checks = []
+    for e in expected:
+        title, link = e.get("title", ""), e.get("link", "")
+        on_list = bool(title) and title in body
+        pages_with_title = [p["show_url"] for p in show_pages if title in p.get("titles_found", [])]
+        pages_with_link = [p["show_url"] for p in show_pages if link in p.get("links_found", [])]
+        checks.append({"title": title, "link": link, "on_list": on_list,
+                       "show_pages_with_title": pages_with_title,
+                       "show_pages_with_link": pages_with_link,
+                       "link_verified": bool(pages_with_link)})
+    res["checks"] = checks
+    res["ok"] = bool(checks) and all(c["on_list"] and c["link_verified"] for c in checks)
+    res["note"] = "verify only: structure recorded, nothing submitted, nothing changed"
+    return res
+
+
 async def main_async(args):
     result = {"ok": False, "mode": args.mode, "site": args.site, "submitted": False,
               "job_id": args.job_id, "sample_url": args.sample_url}
@@ -2244,6 +2313,12 @@ async def main_async(args):
                                         "https://www.karlancer.com/projects/طراحی-ربات-اتوماسیون-نوبتگیری-تعویض-پلاک-2564e9r3o8n0")
                 result.update(kp)
                 result["ok"] = True
+                return save()
+            if args.mode == "verify":
+                # ParsCoders portfolio verification (read-only).
+                vp = await verify_portfolio(page, home, out_dir, args)
+                result.update(vp)
+                result["ok"] = bool(vp.get("ok"))
                 return save()
             profile_url = args.profile_url
             info = {}
@@ -2554,7 +2629,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag", "verify"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
