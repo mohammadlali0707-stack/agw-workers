@@ -63,9 +63,13 @@ Modes:
     return its URL, verified to load and carrying the caption marker
     "Succession" PLUS a Part 2 marker ("Get Rennie" / "keep you posted"
     — so the recovered URL is proven to be the Part 2 Reel, never the
-    older Part 1 Reel). Used when a post succeeded but no URL came back
-    (the 2026-11-19 Part 2 case: Share clicked, no URL in 180s, Reel
-    live). Submits NOTHING — read-only. It tries, in order: the /reels/
+    older Part 1 Reel) — OR, when --caption is supplied, the FULL
+    expected caption (first line + ≥4 of 5 word lines + ≥80% of lines;
+    a bare marker is not enough since 2026-11-25, when the Part 5 post
+    URL turned out to be a stranger's feed post). Used when a post
+    succeeded but no URL came back (the 2026-11-19 Part 2 case: Share
+    clicked, no URL in 180s, Reel live), and to find a posted Reel's
+    real shortcode after the fact. Submits NOTHING — read-only. It tries, in order: the /reels/
     page grid (with a response listener that captures the grid's own
     GraphQL data even when the grid never renders, plus a Reels-tab
     click variant), the web profile-info API, the GraphQL profile-feed
@@ -717,6 +721,109 @@ async def _verify_reel_url(page, url, must_contain=None, log=None):
             f"{url} loads={loads} marker={marker} "
             f"body[:300]={_bt} html_has_caption={'caption' in (html or '')}")
     return loads, marker
+
+
+def _norm_ws(text):
+    """Collapse all whitespace to single spaces (for caption matching)."""
+    return " ".join((text or "").split())
+
+
+async def _verify_reel_caption(page, url, caption, log=None):
+    """Load a Reel URL and check it carries the FULL expected caption.
+    Returns (loads, full_match, detail): loads = the page is a live
+    Reel page; full_match = the page body contains the caption's first
+    line, at least 4 of its 5 word lines, and >=80% of its substantive
+    lines. A bare 'Succession' marker is NOT enough — any Succession
+    Reel would pass it (and the 2026-11-25 Part 5 post URL was a
+    stranger's feed post, which also had no caption check at all).
+    detail carries matched/total counts so a failure says exactly how
+    far off the caption was. Never raises."""
+    detail = {"matched": 0, "total": 0, "first_line": False,
+              "word_lines": 0, "hashtags": False, "excerpt": ""}
+    if not _goto_allowed(url):
+        return False, False, detail
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(3000)
+        # Expand a collapsed caption ("...more") if one is shown.
+        try:
+            more = page.locator("span:text-is('more')").first
+            if await more.count() and await more.is_visible(timeout=2000):
+                await more.click(timeout=3000)
+                await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+        body = await _body_text(page, limit=20000)
+    except Exception:
+        return False, False, detail
+    loads = "Sorry, this page isn't available" not in body
+    detail["excerpt"] = (body or "")[:300].replace("\n", " | ")
+    if not loads:
+        return False, False, detail
+    norm_body = _norm_ws(body)
+    lines = [ln.strip() for ln in (caption or "").splitlines()
+             if len(ln.strip()) >= 15]
+    detail["total"] = len(lines)
+    matched = 0
+    for ln in lines:
+        if _norm_ws(ln) in norm_body:
+            matched += 1
+    detail["matched"] = matched
+    if lines:
+        detail["first_line"] = _norm_ws(lines[0]) in norm_body
+    word_lines = [ln for ln in lines
+                  if re.match(r"^[1-5]\.\s", ln)]
+    detail["word_lines"] = sum(1 for ln in word_lines
+                               if _norm_ws(ln) in norm_body)
+    detail["hashtags"] = "#Succession" in norm_body
+    full = (loads and detail["first_line"]
+            and detail["word_lines"] >= 4
+            and detail["total"] > 0
+            and matched >= 0.8 * detail["total"])
+    if log is not None:
+        log("verify_caption", bool(full),
+            f"{url} loads={loads} matched={matched}/{detail['total']} "
+            f"first_line={detail['first_line']} "
+            f"word_lines={detail['word_lines']}/5 "
+            f"hashtags={detail['hashtags']}")
+    return loads, full, detail
+
+
+async def _confirm_posted_reel(page, username, caption, out_dir, log):
+    """The ONLY source of a posted Reel's URL: the owner's /reels/
+    page, newest first, with the FULL uploaded caption verified per
+    candidate. NEVER the home feed, NEVER the share dialog (it carries
+    no link — the 2026-11-25 Part 5 URL came from the feed post behind
+    the dialog). Retries the /reels/ read 3x (45s apart) in case the
+    grid lags the publish. Returns the verified URL, or None."""
+    if not username:
+        return None
+    for attempt in range(3):
+        try:
+            cands = await _newest_reel_link(page, username, log)
+        except Exception:
+            cands = []
+        for cand in (cands or [])[:3]:
+            loads, full, detail = await _verify_reel_caption(
+                page, cand, caption, log)
+            if loads and full:
+                try:
+                    await page.screenshot(
+                        path=os.path.join(out_dir, "confirmed_reel.png"))
+                except Exception:
+                    pass
+                log("confirm_reel", True,
+                    f"posted Reel verified on the profile: {cand}")
+                return cand
+            log("confirm_candidate", False,
+                f"{cand} is not the just-posted Reel "
+                f"(loads={loads}, caption {detail.get('matched')}/"
+                f"{detail.get('total')})")
+        if attempt < 2:
+            log("confirm_retry", True,
+                "no candidate matched yet — waiting 45s for the grid")
+            await page.wait_for_timeout(45000)
+    return None
 
 
 def _goto_profile_allowed(url, username):
@@ -2143,18 +2250,25 @@ async def run_probe(page, video_path, caption, out_dir, log):
     return res
 
 
-async def run_recover(page, username, out_dir, log):
+async def run_recover(page, username, out_dir, log, expected_caption=""):
     """Read-only recovery: find the newest Reel on the logged-in profile
-    and verify it loads and carries the caption marker 'Succession' plus
-    a Part 2 marker (so the URL is proven to be the Part 2 Reel, never
-    the older Part 1 Reel). Used when a post succeeded but no URL came
-    back (the 2026-11-19 Part 2 case: Share clicked, no URL in 180s,
-    Reel live). Submits NOTHING — it only reads pages and the candidate
-    Reel page. Tries, in order: the /reels/ page (grid + Reels-tab
-    variant + network capture), the feed/user timeline API, the
-    notifications inbox, the mobile web profile, and 'Your activity'.
-    Returns {"ok", "status", "post_url", ...} with status "recovered"
-    on success, "recover_failed" otherwise."""
+    and verify it is the Reel the caller expects. When an expected
+    caption is supplied (recover dispatched with --caption), the
+    candidate must carry the FULL caption — a 'Succession' marker alone
+    is not enough (2026-11-25: the Part 5 post URL was a stranger's
+    feed post because the share dialog carries no link). Without a
+    caption, falls back to the legacy Part 2 markers (words 6-10, so
+    the URL is proven to be the Part 2 Reel, never the older Part 1
+    Reel). Used when a post succeeded but no URL came back (the
+    2026-11-19 Part 2 case: Share clicked, no URL in 180s, Reel live),
+    and to find a posted Reel's real shortcode after the fact.
+    Submits NOTHING — it only reads pages and the candidate Reel page.
+    Tries, in order: the /reels/ page (grid + Reels-tab variant +
+    network capture), the feed/user timeline API, the notifications
+    inbox, the mobile web profile, and 'Your activity'.
+    Returns {"ok", "status", "post_url", "caption_verified",
+    "caption_match", ...} with status "recovered" on success,
+    "recover_failed" otherwise."""
     # Part 2 identity markers (words 6-10 caption): the recovered URL
     # must be THIS Reel, not the older Part 1 Reel — a delete can never
     # target the wrong post.
@@ -2176,30 +2290,48 @@ async def run_recover(page, username, out_dir, log):
     if not candidates:
         return {"ok": False, "status": "recover_failed",
                 "error_message": "no Reel link found on the profile reels page"}
-    # Try each candidate in order (newest first): the first that loads
-    # AND carries the Part 2 caption markers is the wrong Part 2 Reel.
-    # A candidate that fails verification is logged, never deleted.
+    # Try each candidate in order (newest first). With an expected
+    # caption, the first candidate whose page carries the FULL caption
+    # wins; without one, the first that loads AND carries the Part 2
+    # caption markers wins. A candidate that fails verification is
+    # logged, never deleted.
     newest = None
+    verified = {"caption_verified": False, "caption_match": None}
     for cand in candidates:
-        loads, marker = await _verify_reel_url(page, cand,
-                                               must_contain=part2_markers,
-                                               log=log)
-        if loads and marker:
-            newest = cand
-            break
-        log("recover_candidate", False,
-            f"{cand} did not verify as Part 2 (loads={loads}, marker={marker})")
+        if (expected_caption or "").strip():
+            loads, full, detail = await _verify_reel_caption(
+                page, cand, expected_caption, log)
+            if loads and full:
+                newest = cand
+                verified = {"caption_verified": True,
+                            "caption_match": detail}
+                break
+            log("recover_candidate", False,
+                f"{cand} caption did not fully match "
+                f"(loads={loads}, matched={detail.get('matched')}/"
+                f"{detail.get('total')})")
+        else:
+            loads, marker = await _verify_reel_url(page, cand,
+                                                   must_contain=part2_markers,
+                                                   log=log)
+            if loads and marker:
+                newest = cand
+                break
+            log("recover_candidate", False,
+                f"{cand} did not verify as Part 2 (loads={loads}, marker={marker})")
     if not newest:
+        want = ("full caption match" if (expected_caption or "").strip()
+                else "the Part 2 Reel")
         return {"ok": False, "status": "recover_failed",
                 "error_message": f"{len(candidates)} candidate(s) found but "
-                                 f"none verified as the Part 2 Reel: {candidates}"}
+                                 f"none verified as {want}: {candidates}"}
     try:
         await page.screenshot(path=os.path.join(out_dir, "recovered.png"))
     except Exception:
         pass
     log("recovered", True, f"newest Reel verified: {newest}")
     return {"ok": True, "status": "recovered", "post_url": newest,
-            "error": None, "error_message": None}
+            "error": None, "error_message": None, **verified}
 
 
 async def _dump_more_candidates(page, log):
@@ -2886,11 +3018,13 @@ async def run_post(page, video_path, caption, out_dir, log, username=None):
     The caption is pasted VERBATIM from the caller — never generated,
     reworded, or invented here. An empty caption is refused by the caller
     before any browser work; this is a second check.
-    Confirmation (2026-11-19 fix): after Share the wait is 300s (was
-    180s — the Part 2 post succeeded but returned no URL in 180s). If
-    still no URL, fall back to reading the newest Reel from the owner's
-    /reels/ page and verify it loads and carries the 'Succession'
-    caption marker, instead of reporting post_failed.
+    Confirmation (2026-11-19 fix, hardened 2026-11-25): after Share the
+    wait is 300s for the confirmation text (was 180s — the Part 2 post
+    succeeded but returned no URL in 180s). The post URL is NEVER taken
+    from this page: the share dialog carries no link, and the links
+    behind it belong to the home feed (2026-11-25: that grabbed
+    @iamishachopra's post for Part 5). Instead the URL comes from the
+    owner's /reels/ page with the FULL uploaded caption verified.
     After the URL is verified, the Reel is also shared to Facebook from
     the published Reel page (Share dialog -> Facebook; owner order
     2026-11-25). Best-effort: a Facebook failure is recorded, never
@@ -2936,58 +3070,33 @@ async def run_post(page, video_path, caption, out_dir, log, username=None):
         return {"ok": False, "status": "post_failed",
                 "error_message": "no Share button on the caption screen"}
     log("share_clicked", True, f"Share clicked via {hit}; waiting for publish confirmation")
-    # Wait for the shared confirmation and capture the post URL.
-    # 300s (was 180s): the 2026-11-19 Part 2 post succeeded but returned
-    # no URL within 180s, so the runner reported post_failed on a live Reel.
+    # Wait for the shared confirmation (up to 300s). The confirmation
+    # dialog carries NO link — NEVER take a URL from this page: the
+    # links in the DOM behind the dialog belong to the home feed
+    # (2026-11-25: this grabbed @iamishachopra's post for Part 5).
+    confirmed = False
     deadline = time.time() + 300
-    post_url = None
     while time.time() < deadline:
         await page.wait_for_timeout(3000)
         body = await _body_text(page, limit=2000)
         if "shared" in body.lower() or "Your reel" in body:
-            try:
-                links = await page.evaluate(
-                    "() => [...document.querySelectorAll('a[href]')]"
-                    ".map(a => a.getAttribute('href') || '')"
-                    ".filter(h => h.includes('/p/') || h.includes('/reel/'))")
-                for href in links or []:
-                    cand = "https://www.instagram.com" + href if href.startswith("/") else href
-                    if _goto_allowed(cand):
-                        post_url = cand
-                        break
-            except Exception:
-                pass
-            if post_url:
-                break
-            # Confirmation shown but no link yet; keep waiting a little.
-            if time.time() > deadline - 30:
-                break
+            confirmed = True
+            break
+    log("share_confirmed", confirmed,
+        "publish confirmation seen" if confirmed else
+        "no confirmation text in 300s — verifying from the profile anyway")
     try:
         await page.screenshot(path=os.path.join(out_dir, "published.png"))
     except Exception:
         pass
+    # The ONLY source of the post URL: the owner's /reels/ page, with
+    # the FULL uploaded caption verified. Never the home feed.
+    post_url = await _confirm_posted_reel(page, username, caption, out_dir, log)
     if not post_url:
-        # Fallback (2026-11-19): Share may have succeeded without a URL
-        # (the Part 2 case). Read the newest Reel from the owner's
-        # /reels/ page instead of reporting post_failed on a live Reel.
-        log("confirm_fallback", True,
-            "no URL in 300s after Share — reading newest Reel from the profile")
-        cands = await _newest_reel_link(page, username, log) if username else []
-        for cand in cands:
-            loads, marker = await _verify_reel_url(page, cand)
-            if loads and marker:
-                post_url = cand
-                log("confirm_fallback", True,
-                    f"recovered the posted Reel from the profile: {post_url}")
-                break
-            log("confirm_fallback", False,
-                f"newest Reel {cand} did not verify "
-                f"(loads={loads}, marker={marker})")
-        if not post_url:
-            return {"ok": False, "status": "post_failed",
-                    "error_message": "Share clicked but no published post URL "
-                                     "appeared in 300s, and no verifiable newest "
-                                     "Reel was found on the profile"}
+        return {"ok": False, "status": "post_failed",
+                "error_message": "Share clicked but the posted Reel could "
+                                 "not be verified on the owner's /reels/ page "
+                                 "(full caption match required)"}
     # Verify the post URL loads.
     if not _goto_allowed(post_url):
         return {"ok": False, "status": "post_failed",
@@ -3201,11 +3310,14 @@ async def amain(args):
                                       error_message="the home page did not yield a profile username, so recover has no profile to read (refusing to open a bogus URL).")
                     if args.mode == "recover":
                         rec = await run_recover(page, login["username"],
-                                                out_dir, log)
+                                                out_dir, log,
+                                                expected_caption=args.caption or "")
                         if rec.get("ok"):
                             return finish("recovered", error=None,
                                           error_message=None,
-                                          post_url=rec.get("post_url"))
+                                          post_url=rec.get("post_url"),
+                                          caption_verified=rec.get("caption_verified"),
+                                          caption_match=rec.get("caption_match"))
                         return finish("recover_failed", error="recover failed",
                                       error_message=rec.get("error_message", "unknown"))
                     if args.mode == "delete":
