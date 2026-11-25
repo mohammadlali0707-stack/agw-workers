@@ -2783,6 +2783,104 @@ async def run_probe_fb(page, reel_url, out_dir, log):
     return fb
 
 
+async def _share_to_facebook(page, out_dir, log):
+    """Best-effort post-publish cross-post (owner order 2026-11-25):
+    on the just-published Reel's page, open the Share dialog and pick
+    the Facebook option. Returns {"shared": bool, "detail": str}.
+    NEVER raises and NEVER fails the Reel post: a missing control or
+    an unclear confirmation is recorded, not fatal. The probe_fb probe
+    (2026-11-25) proved the Facebook option exists in this dialog;
+    what happens AFTER picking it (a Facebook confirm dialog, or an
+    immediate share) is observed here and recorded with screenshots,
+    so the first live run's evidence settles the exact flow."""
+    res = {"shared": False, "detail": ""}
+    try:
+        # Open the Share dialog (paper-plane button on the Reel page).
+        # Clicking Share only OPENS the dialog; nothing is sent yet.
+        share_clicked = False
+        for sel in ("[aria-label='Share']", "svg[aria-label='Share']"):
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() and await loc.is_visible(timeout=5000):
+                    await loc.click(timeout=5000)
+                    share_clicked = True
+                    break
+            except Exception:
+                continue
+        if not share_clicked:
+            res["detail"] = "no Share button on the published Reel page"
+            log("facebook_share", False, res["detail"])
+            return res
+        await page.wait_for_timeout(2000)
+        try:
+            await page.screenshot(path=os.path.join(out_dir, "fb_share_dialog.png"))
+        except Exception:
+            pass
+        dlg = await _dialog_text(page) or ""
+        if "facebook" not in dlg.lower():
+            res["detail"] = ("Share dialog opened but has no Facebook "
+                             "option: " + dlg[:200])
+            log("facebook_share", False, res["detail"])
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return res
+        # Pick the Facebook option. (The probe never clicked it; this is
+        # the ordered cross-post action.)
+        hit = await _click_visible_text(page, ("Facebook",), timeout_ms=5000)
+        if not hit:
+            res["detail"] = "Facebook option visible but not clickable"
+            log("facebook_share", False, res["detail"])
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return res
+        log("facebook_share", True,
+            "Facebook option picked; waiting for confirmation")
+        await page.wait_for_timeout(3000)
+        try:
+            await page.screenshot(path=os.path.join(out_dir, "fb_shared.png"))
+        except Exception:
+            pass
+        after = await _dialog_text(page) or await _body_text(page, limit=1500)
+        # A Facebook confirm dialog may ask once more. Only click inside
+        # a dialog that itself mentions Facebook.
+        dlg2 = await _dialog_text(page) or ""
+        if "facebook" in dlg2.lower():
+            for confirm in ("Share", "Post"):
+                try:
+                    loc = page.locator(
+                        f"[role='dialog'] button:has-text('{confirm}')").first
+                    if await loc.count() and await loc.is_visible(timeout=3000):
+                        await loc.click(timeout=5000)
+                        log("facebook_share", True,
+                            f"Facebook confirmation clicked ({confirm})")
+                        await page.wait_for_timeout(3000)
+                        break
+                except Exception:
+                    continue
+            after = await _dialog_text(page) or await _body_text(page, limit=1500)
+        low = after.lower()
+        if any(w in low for w in ("shared", "your reel was shared",
+                                  "post shared")):
+            res["shared"] = True
+            res["detail"] = "Facebook share confirmed: " + after[:200]
+        else:
+            # No explicit success text: record as unclear, not failed —
+            # the first live run's screenshots settle the exact flow.
+            res["shared"] = False
+            res["detail"] = ("Facebook picked; no explicit confirmation "
+                             "text seen: " + after[:200])
+        log("facebook_share", res["shared"], res["detail"][:300])
+        return res
+    except Exception as e:
+        res["detail"] = f"exception: {type(e).__name__}"
+        log("facebook_share", False, res["detail"])
+        return res
+
+
 async def run_post(page, video_path, caption, out_dir, log, username=None):
     """Full publish flow. ONLY called when dry_run is false and mode is post.
     The caption is pasted VERBATIM from the caller — never generated,
@@ -2792,7 +2890,11 @@ async def run_post(page, video_path, caption, out_dir, log, username=None):
     180s — the Part 2 post succeeded but returned no URL in 180s). If
     still no URL, fall back to reading the newest Reel from the owner's
     /reels/ page and verify it loads and carries the 'Succession'
-    caption marker, instead of reporting post_failed."""
+    caption marker, instead of reporting post_failed.
+    After the URL is verified, the Reel is also shared to Facebook from
+    the published Reel page (Share dialog -> Facebook; owner order
+    2026-11-25). Best-effort: a Facebook failure is recorded, never
+    fatal to the post."""
     if not (caption or "").strip():
         return {"ok": False, "status": "post_failed",
                 "error_message": "no caption supplied — refusing to post "
@@ -2900,7 +3002,13 @@ async def run_post(page, video_path, caption, out_dir, log, username=None):
     except Exception as e:
         return {"ok": False, "status": "post_failed",
                 "error_message": f"could not load the published URL: {type(e).__name__}"}
-    return {"ok": True, "status": "posted", "post_url": post_url}
+    # Cross-post to Facebook (owner order 2026-11-25): the published
+    # Reel page's Share dialog has a Facebook option (proven by the
+    # probe_fb probe). Best-effort ONLY — a Facebook failure never
+    # fails the Reel post, which is already verified above.
+    fb_share = await _share_to_facebook(page, out_dir, log)
+    return {"ok": True, "status": "posted", "post_url": post_url,
+            "facebook_shared": fb_share}
 
 
 # ---------------------------------------------------------------------------
@@ -3146,7 +3254,8 @@ async def amain(args):
                                             out_dir, log, login["username"])
                     if posted.get("ok"):
                         return finish("posted", error=None, error_message=None,
-                                      post_url=posted.get("post_url"))
+                                      post_url=posted.get("post_url"),
+                                      facebook_shared=posted.get("facebook_shared"))
                     return finish(posted.get("status", "post_failed"),
                                   error="post failed",
                                   error_message=posted.get("error_message", "unknown"))
