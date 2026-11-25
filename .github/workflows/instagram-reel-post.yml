@@ -16,8 +16,8 @@ name: Instagram Reel Post
 #
 # SAFETY: mode=probe (default) submits NOTHING. mode=post publishes ONLY
 # when dry_run is false. mode=recover only READS the profile (finds the
-# newest Reel). mode=delete with dry_run=true only INSPECTS (verifies the
-# Delete option is present, deletes nothing); a live delete needs
+# newest Reel). mode=probe_fb only INSPECTS one published Reel page for a
+# Share-to-Facebook control (read-only, shares nothing). mode=delete with dry_run=true only INSPECTS (verifies the Delete option is present, deletes nothing); a live delete needs
 # dry_run=false AND an explicit dispatch. The default dispatch
 # (probe + dry_run=true) can never post or delete anything, even with a
 # valid session.
@@ -35,7 +35,7 @@ on:
         type: string
         default: ''
       mode:
-        description: 'probe (verify login + inspect uploader, submit nothing), post (publish), recover (find the newest Reel on the profile, read-only), or delete (delete the reel_url Reel; dry_run=true inspects only)'
+        description: 'probe (verify login + inspect uploader, submit nothing), post (publish), recover (find the newest Reel on the profile, read-only), probe_fb (inspect one published Reel page for a Share-to-Facebook control; read-only), or delete (delete the reel_url Reel; dry_run=true inspects only)'
         required: true
         type: choice
         default: 'probe'
@@ -43,9 +43,10 @@ on:
           - probe
           - post
           - recover
+          - probe_fb
           - delete
       reel_url:
-        description: 'Delete mode only: the exact instagram.com/reel/... URL to delete. Nothing else is ever deleted.'
+        description: 'Delete / probe_fb mode only: the exact instagram.com/reel/... URL to delete (delete) or inspect (probe_fb). Nothing else is ever deleted.'
         required: false
         type: string
         default: ''
