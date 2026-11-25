@@ -15,7 +15,11 @@ PRIVACY RULE (user order, 2026-11-18 — non-negotiable):
   URL is never lost), (4) delete mode (user order 2026-11-19): open the
   ONE specific Reel URL it is told to delete and delete ONLY that Reel —
   never anything else, never a whole profile, never DMs/feed. Delete NEVER
-  runs automatically: it needs an explicit job dispatch. It navigates to
+  runs automatically: it needs an explicit job dispatch.
+  (5) probe_fb mode (2026-11-25): open the ONE specific published Reel
+  URL it is told to inspect and look for a 'Share to Facebook' control
+  on that Reel's page — read-only, nothing is shared or changed.
+  It navigates to
   no other Instagram page — see _goto_allowed() for the enforced allowlist
   (home, the create dialog, the published post URL for verification, the
   owner's /reels/ page, and the single Reel URL given to delete mode).
@@ -78,6 +82,16 @@ Modes:
     needs dry_run=false AND an explicit dispatch (never automatic).
     Needs no video (the --video-url input is accepted but ignored).
 
+  probe_fb — inspect ONE already-published Reel URL (the owner's own
+    post) for a 'Share to Facebook' control on the web Reel page: the
+    share (paper-plane) button's dialog and the ••• more-options menu.
+    Read-only: it never clicks anything labelled Facebook, never
+    shares anything, never publishes. WHY this mode exists: the web
+    uploader itself has NO 'Share to Facebook' toggle — proven by the
+    2026-11-25 probe (caption screen + Advanced settings checked,
+    present=false) — so cross-posting cannot be enabled at upload
+    time on web; the published Reel page is the only runner-drivable
+    place it could live. Needs --reel-url.
   dry_run (default true) is a second, independent gate: even mode=post
   refuses to publish while dry_run is true.
 
@@ -2664,6 +2678,111 @@ async def run_delete(page, reel_url, out_dir, log, dry_run=True):
             "error": None, "error_message": None}
 
 
+async def run_probe_fb(page, reel_url, out_dir, log):
+    """PROBE ONLY: open one already-published Reel URL (the owner's own
+    post — the same URL class the post flow opens to verify a publish)
+    and inspect whether the web Reel page offers a 'Share to Facebook'
+    control, via the share (paper-plane) button's dialog and the
+    more-options (•••) menu. Inspects only: it NEVER clicks anything
+    labelled Facebook, never shares anything, never publishes.
+    Returns a dict for result.json: present (bool), location
+    ('share_dialog' / 'more_menu' / None), the texts seen, screenshots."""
+    fb = {"reel_url": reel_url, "present": False, "on": None,
+          "location": None, "share_button_found": False,
+          "more_button_found": False, "share_dialog_text": "",
+          "more_menu_text": "", "page_text": "", "mentions": []}
+    if not _goto_allowed(reel_url):
+        fb["error"] = "reel URL outside the navigation allowlist"
+        return fb
+    try:
+        await page.goto(reel_url, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(5000)
+    except Exception:
+        fb["error"] = "could not load the Reel URL"
+        return fb
+    try:
+        await page.screenshot(path=os.path.join(out_dir, "fb_reel_page.png"))
+    except Exception:
+        pass
+    fb["page_text"] = await _body_text(page, limit=2000)
+    if "Sorry, this page isn't available" in fb["page_text"]:
+        fb["error"] = "Reel page is not available (does not load)"
+        return fb
+    # 1. Share (paper-plane) button -> dialog. Clicking Share only OPENS
+    # the share dialog; nothing is sent until an option inside is picked,
+    # and this probe never picks one.
+    share_clicked = False
+    for sel in ("[aria-label='Share']", "svg[aria-label='Share']"):
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() and await loc.is_visible(timeout=3000):
+                await loc.click(timeout=5000)
+                share_clicked = True
+                break
+        except Exception:
+            continue
+    fb["share_button_found"] = share_clicked
+    if share_clicked:
+        await page.wait_for_timeout(2000)
+        try:
+            await page.screenshot(path=os.path.join(out_dir, "fb_share_dialog.png"))
+        except Exception:
+            pass
+        fb["share_dialog_text"] = (await _dialog_text(page)
+                                   or await _body_text(page, limit=1500))
+        if "facebook" in fb["share_dialog_text"].lower():
+            fb["present"] = True
+            fb["location"] = "share_dialog"
+            log("facebook_share", True, "Facebook option in the Share dialog")
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(1000)
+        except Exception:
+            pass
+    # 2. More-options (•••) menu.
+    if not fb["present"]:
+        more_clicked = False
+        for sel in ("[aria-label='More options']", "svg[aria-label='More options']"):
+            try:
+                loc = page.locator(sel).first
+                if await loc.count() and await loc.is_visible(timeout=3000):
+                    await loc.click(timeout=5000)
+                    more_clicked = True
+                    break
+            except Exception:
+                continue
+        fb["more_button_found"] = more_clicked
+        if more_clicked:
+            await page.wait_for_timeout(2000)
+            try:
+                await page.screenshot(path=os.path.join(out_dir, "fb_more_menu.png"))
+            except Exception:
+                pass
+            fb["more_menu_text"] = (await _dialog_text(page)
+                                    or await _menu_text(page)
+                                    or await _body_text(page, limit=1500))
+            if "facebook" in fb["more_menu_text"].lower():
+                fb["present"] = True
+                fb["location"] = "more_menu"
+                log("facebook_share", True,
+                    "Facebook option in the more-options menu")
+            try:
+                await page.keyboard.press("Escape")
+                await page.wait_for_timeout(1000)
+            except Exception:
+                pass
+    if not fb["present"]:
+        log("facebook_share", True,
+            "no Share-to-Facebook control on the published Reel page "
+            "(share dialog + more menu checked)")
+    fb["mentions"] = [ln.strip()[:120]
+                      for txt in (fb.get("share_dialog_text", ""),
+                                  fb.get("more_menu_text", ""))
+                      for ln in txt.splitlines()
+                      if "facebook" in ln.lower()][:10]
+    return fb
+
+
 async def run_post(page, video_path, caption, out_dir, log, username=None):
     """Full publish flow. ONLY called when dry_run is false and mode is post.
     The caption is pasted VERBATIM from the caller — never generated,
@@ -2814,7 +2933,8 @@ async def amain(args):
         # recovered Reel URL, a deleted Reel, and a delete-option
         # inspection are successes too.
         result["ok"] = status in ("probe_ok", "posted", "recovered",
-                                  "deleted", "delete_option_found")
+                                  "deleted", "delete_option_found",
+                                  "probe_fb_ok")
         result.update(extra)
         try:
             path = save_result(args.results_dir, args.job_id, result, mask)
@@ -2861,7 +2981,7 @@ async def amain(args):
         return finish("dry_run",
                       error="dry_run is on — refusing to post",
                       error_message="Dispatch with dry_run=false and mode=post to publish.")
-    if args.mode not in ("probe", "post", "recover", "delete"):
+    if args.mode not in ("probe", "post", "recover", "delete", "probe_fb"):
         return finish("error", error="bad mode",
                       error_message=f"unknown mode {args.mode!r}")
 
@@ -2873,6 +2993,14 @@ async def amain(args):
         return finish("error", error="no Reel URL to delete",
                       error_message="Delete mode needs --reel-url (the exact "
                       "instagram.com/reel/... URL). It deletes ONLY that URL.")
+
+    # ---- gate 2a2: probe_fb needs the exact Reel URL to inspect. ----
+    if args.mode == "probe_fb" and not (args.reel_url or "").strip():
+        log("probe_fb_gate", False, "no --reel-url supplied — refusing")
+        return finish("error", error="no Reel URL to inspect",
+                      error_message="probe_fb needs --reel-url (the exact "
+                      "instagram.com/reel/... URL of an already-published "
+                      "Reel). It inspects ONLY that URL.")
 
     # ---- gate 2b: a real post needs a caption handed to it. The poster
     # pastes the caption verbatim and never invents one, so an empty
@@ -2887,7 +3015,7 @@ async def amain(args):
     # ---- download the video (probe/post only). Recover and delete need
     # no video: they only read pages / delete one given Reel URL. ----
     video_path = os.path.join("/tmp", f"ig-{args.job_id}.mp4")
-    if args.mode in ("recover", "delete"):
+    if args.mode in ("recover", "delete", "probe_fb"):
         result["video_bytes"] = 0
         result["video_seconds"] = None
         log("download", True, f"mode={args.mode}: no video needed, skipping download")
@@ -2982,6 +3110,19 @@ async def amain(args):
                                           note=dele.get("note"))
                         return finish("delete_failed", error="delete failed",
                                       error_message=dele.get("error_message", "unknown"))
+                    if args.mode == "probe_fb":
+                        pfb = await run_probe_fb(page, args.reel_url or "",
+                                                 out_dir, log)
+                        if pfb.get("error"):
+                            return finish("probe_fb_failed",
+                                          error="probe_fb failed",
+                                          error_message=pfb.get("error"),
+                                          facebook_share=pfb)
+                        return finish("probe_fb_ok", error=None,
+                                      error_message=None,
+                                      facebook_share=pfb,
+                                      note="probe only: nothing was shared "
+                                           "or published")
                     if args.mode == "probe":
                         probe = await run_probe(page, video_path,
                                                 args.caption or "", out_dir, log)
@@ -3031,13 +3172,17 @@ def main(argv=None):
                          "workflow input; recover/delete accept it but ignore it.")
     ap.add_argument("--caption", default="")
     ap.add_argument("--job-id", "--job_id", required=True, dest="job_id")
-    ap.add_argument("--mode", choices=["probe", "post", "recover", "delete"],
+    ap.add_argument("--mode", choices=["probe", "post", "recover", "delete",
+                                      "probe_fb"],
                     default="probe",
                     help="probe (inspect only), post (publish), recover (find the "
-                         "newest Reel on the profile), delete (delete --reel-url).")
+                         "newest Reel on the profile), delete (delete --reel-url), "
+                         "probe_fb (inspect one published Reel page for a "
+                         "Share-to-Facebook control; read-only).")
     ap.add_argument("--reel-url", "--reel_url", dest="reel_url", default="",
-                    help="Delete mode only: the exact instagram.com/reel/... URL "
-                         "to delete. Nothing else is ever deleted.")
+                    help="Delete / probe_fb mode: the exact instagram.com/reel/... "
+                         "URL. Delete removes ONLY that Reel; probe_fb inspects "
+                         "ONLY that Reel's page.")
     ap.add_argument("--dry-run", "--dry_run", dest="dry_run", default="true",
                     choices=["true", "false"],
                     help="true (default): never publish. false + mode=post: publish. "
