@@ -2222,6 +2222,26 @@ def _find_row(rows, title, sample_id=""):
     return None, None
 
 
+def _find_row_edit(rows, title, sample_id=""):
+    """Find a portfolio row by sample id in any menu href, or by exact title
+    when the row is a draft (cells[5] == 'پیش نویس').
+
+    Two rows share «رصد لحظه‌ای آگهی» (61735 deactivated Pro draft vs
+    61732 draft) — always pass title|id for that one.
+    """
+    for r in rows:
+        cells = r.get("cells", [])
+        t = cells[1] if len(cells) > 1 else ""
+        st = cells[5] if len(cells) > 5 else ""
+        edit = [it for it in r.get("menu_items", []) if "update-new" in (it.get("href") or "")]
+        if sample_id:
+            hit = any(("/" + sample_id + "/") in (it.get("href") or "") for it in r.get("menu_items", []))
+            if hit:
+                return r, (edit[0]["href"] if edit else "")
+        elif t == title and st == "پیش نویس" and edit:
+            return r, edit[0]["href"]
+    return None, None
+
 async def deactivate_sample(page, home, out_dir, args):
     """Deactivate one portfolio sample (user-ordered).
 
@@ -2287,6 +2307,111 @@ async def deactivate_sample(page, home, out_dir, args):
         res["note"] = "status changed after disable" if res["ok"] else "status UNCHANGED after disable"
     return res
 
+
+
+
+async def publish_sample(page, home, out_dir, args):
+    """Publish one draft portfolio sample (user-ordered 2026-11-24).
+
+    --title is the exact sample title; use "title|id" when the title is
+    ambiguous (two rows share «رصد لحظه‌ای آگهی»). Finds the row's
+    /resume/portfolio/<id>/update-new link, opens the edit form, clicks the
+    publish button (#app_bundle_portfolio_publish), then re-lists and records
+    the new status. Refuses to touch a row that is not a draft.
+    """
+    res = {}
+    title, sample_id = args.title, ""
+    if "|" in args.title:
+        title, sample_id = [p.strip() for p in args.title.split("|", 1)]
+    res["title"] = title
+    res["sample_id"] = sample_id
+    list_url = home.rstrip("/") + "/resume/portfolio/"
+    await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    res["logged_in"] = await detect_logged_in(page, await collect_links(page))
+    rows = await dump_portfolio_rows(page)
+    target, edit_href = _find_row_edit(rows, title, sample_id)
+    if not target:
+        res["ok"] = False
+        res["error"] = "target row/edit link not found"
+        res["rows_seen"] = rows
+        return res
+    res["status_before"] = target["cells"][5] if len(target["cells"]) > 5 else ""
+    if res["status_before"] != "پیش نویس":
+        res["ok"] = False
+        res["error"] = f"refusing: status is {res['status_before']!r}, not a draft"
+        return res
+    if not edit_href:
+        res["ok"] = False
+        res["error"] = "draft row has no edit (update-new) link"
+        return res
+    res["edit_url"] = _abs_url(home, edit_href)
+    await page.goto(res["edit_url"], wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    await page.screenshot(path=os.path.join(out_dir, "edit_before.png"))
+    res["edit_landed_url"] = page.url
+    res["buttons_before"] = await publish_button_state(page)
+    try:
+        res["edit_page_text"] = (await page.inner_text("body"))[:2000]
+    except Exception:
+        res["edit_page_text"] = ""
+    if not res["buttons_before"].get("publish_exists"):
+        # Same reveal aid as probe: the create form hides #formInputsParent
+        # until an image is attached; the edit page should already show it,
+        # but reveal it via JS and re-check before giving up.
+        await page.evaluate("() => { const p = document.querySelector('#formInputsParent'); if (p) p.classList.remove('d-none'); }")
+        await page.wait_for_timeout(1500)
+        res["buttons_after_reveal"] = await publish_button_state(page)
+    st = res.get("buttons_after_reveal") or res["buttons_before"]
+    if not st.get("publish_exists"):
+        res["ok"] = False
+        res["error"] = "no publish button on the edit page"
+        return res
+    if st.get("publish_disabled") is not False:
+        enabled = await wait_publish_enabled(page, timeout_s=60)
+        res["wait_publish_enabled"] = enabled
+        if not enabled:
+            res["ok"] = False
+            res["error"] = "publish button never enabled on the edit page"
+            return res
+    clicked = await page.evaluate("() => { const p = document.querySelector('#app_bundle_portfolio_publish'); if (!p) return null; p.click(); return (p.innerText || '').trim().slice(0, 60); }")
+    res["publish_clicked"] = clicked
+    await page.wait_for_timeout(3000)
+    await page.screenshot(path=os.path.join(out_dir, "after_publish.png"))
+    res["after_publish_url"] = page.url
+    try:
+        txt = (await page.inner_text("body"))[:2000]
+    except Exception:
+        txt = ""
+    res["after_publish_text"] = txt
+    if any(w in txt for w in ["مطمئن", "تایید می‌کنید", "تایید میکنید", "آیا می‌خواهید"]):
+        confirmed = await page.evaluate("""() => {
+            const btns = [...document.querySelectorAll('button, a, input[type=submit]')].filter(e => e.offsetParent !== null);
+            for (const b of btns) {
+                const t = (b.innerText || b.value || '').trim();
+                if (/^(بله|تایید|تأیید|انتشار|منتشر)/.test(t)) { b.click(); return t; }
+            }
+            return null;
+        }""")
+        res["confirm_clicked"] = confirmed
+        await page.wait_for_timeout(2500)
+        await page.screenshot(path=os.path.join(out_dir, "after_confirm.png"))
+        res["after_confirm_url"] = page.url
+    await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_timeout(2500)
+    await page.screenshot(path=os.path.join(out_dir, "list_after.png"))
+    rows2 = await dump_portfolio_rows(page)
+    res["rows_after"] = rows2
+    after, _ = _find_row_edit(rows2, title, sample_id)
+    if after is None:
+        res["status_after"] = "ROW GONE from list"
+        res["ok"] = False
+        res["note"] = "row no longer on the list after publish"
+    else:
+        res["status_after"] = after["cells"][5] if len(after["cells"]) > 5 else ""
+        res["ok"] = res["status_after"] != "پیش نویس" and res["status_after"] != res["status_before"]
+        res["note"] = ("status changed after publish: " + res["status_after"]) if res["ok"] else "status UNCHANGED after publish"
+    return res
 
 async def verify_portfolio(page, home, out_dir, args):
     """Verify the new samples on the ParsCoders portfolio list. Read-only.
@@ -2464,6 +2589,12 @@ async def main_async(args):
                 ia = await inspect_actions(page, home, out_dir, args)
                 result.update(ia)
                 result["ok"] = bool(ia.get("ok"))
+                return save()
+            if args.mode == "publish":
+                # Publish one draft portfolio sample (user-ordered).
+                pb = await publish_sample(page, home, out_dir, args)
+                result.update(pb)
+                result["ok"] = bool(pb.get("ok"))
                 return save()
             if args.mode == "deactivate":
                 # Deactivate one portfolio sample (user-ordered).
@@ -2780,7 +2911,7 @@ def main():
     ap.add_argument("--description", default="")
     ap.add_argument("--skills", default="",
                     help="Comma-separated skill names from the lead (matched against the live option list).")
-    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag", "verify", "inspect-actions", "deactivate"])
+    ap.add_argument("--mode", required=True, choices=["probe", "inspect", "upload", "attach-test", "service-probe", "service-create", "kar-profile-probe", "kar-ws-tab", "kar-ws-new", "kar-bid-diag", "verify", "inspect-actions", "deactivate", "publish"])
     ap.add_argument("--service-title", default="",
                     help="Short service title for Karlancer (max 30 chars); defaults to --title truncated to 30 chars.")
     ap.add_argument("--price", default="9000000",
