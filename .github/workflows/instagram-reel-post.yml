@@ -108,6 +108,7 @@ jobs:
           NOTION_PAGE_ID_INPUT: ${{ inputs.notion_page_id }}
           SITE_SESSIONS: ${{ secrets.SITE_SESSIONS }}
           SITE_SESSION_INSTAGRAM: ${{ secrets.SITE_SESSION_INSTAGRAM }}
+          INSTAGRAM_WEB_COOKIES: ${{ secrets.INSTAGRAM_WEB_COOKIES }}
           PYTHONPATH: .
         run: |
           python3 -m scripts.site_proposal.instagram_reel_post \
