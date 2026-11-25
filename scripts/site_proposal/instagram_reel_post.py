@@ -1129,15 +1129,16 @@ async def _newest_reel_via_app_api(page, username, log):
 # session handling (mirror of runner.py / upload_sample.py)
 # ---------------------------------------------------------------------------
 def load_session(site="instagram"):
-    """Per-site env wins, else SITE_SESSIONS. -> (session, error)."""
-    one = os.environ.get("SITE_SESSION_" + site.strip().upper(), "").strip()
-    if one:
-        try:
-            sess = json.loads(one)
-            if isinstance(sess, dict) and (sess.get("cookies") or sess.get("localStorage")):
-                return sess, None
-        except Exception:
-            return {}, "SITE_SESSION_INSTAGRAM is not valid JSON"
+    """Fresh mint (INSTAGRAM_WEB_COOKIES, 2026-11-24) wins, else per-site env, else SITE_SESSIONS. -> (session, error)."""
+    for env_name in ("INSTAGRAM_WEB_COOKIES", "SITE_SESSION_" + site.strip().upper()):
+        one = os.environ.get(env_name, "").strip()
+        if one:
+            try:
+                sess = json.loads(one)
+                if isinstance(sess, dict) and (sess.get("cookies") or sess.get("localStorage")):
+                    return sess, None
+            except Exception:
+                return {}, env_name + " is not valid JSON"
     raw = os.environ.get("SITE_SESSIONS", "").strip()
     if not raw:
         return {}, "no Instagram session configured"
