@@ -32,6 +32,11 @@ on:
         required: false
         default: ''
         type: string
+      expected_title:
+        description: 'Title the edit form must show (safety check)'
+        required: false
+        default: 'چت‌بات هوشمند سایت'
+        type: string
 
 run-name: parscoders-sample-edit ${{ inputs.mode }} ${{ inputs.sample_id }}
 
@@ -90,6 +95,7 @@ jobs:
           EDIT_MODE: ${{ inputs.mode }}
           SAMPLE_ID: ${{ inputs.sample_id }}
           NEW_DESCRIPTION: ${{ inputs.description }}
+          EXPECTED_TITLE: ${{ inputs.expected_title }}
         run: python3 scripts/site_proposal/parscoders_sample_edit.py
 
       - name: Commit and push results (private repo)
