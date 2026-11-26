@@ -2,8 +2,6 @@ name: Godot 3D CI & Android Emulator Test
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 5 * * *'
   repository_dispatch:
     types: [godot3d-change, ccp-godot3d, notion-task, tbs-godot3d-ci]
 
