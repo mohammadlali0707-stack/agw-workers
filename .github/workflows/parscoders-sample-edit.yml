@@ -1,11 +1,15 @@
 name: ParsCoders sample edit
 
-# Inspect or edit ONE ParsCoders portfolio sample (test: sample 61734).
-# inspect = read-only form dump; edit = change ONLY the description
-# (title/skills untouched, no file attached) and resubmit once.
-# The description must contain no link/address (the script aborts if it
-# finds anything URL-like). Manual dispatch only. Run logs are public,
-# so the script prints RESULT lines only - never session values.
+# Inspect, edit (description) or replace the image of ONE ParsCoders
+# portfolio sample (test: sample 61734).
+# inspect = read-only form dump + upload-widget dump; edit = change ONLY the
+# description (title/skills untouched, no file attached) and resubmit once;
+# image = attach ONLY the file in `image` (repo path under
+# scripts/site_proposal/assets/), keep title/description/skills untouched,
+# and resubmit once. The description must contain no link/address (the
+# script aborts if it finds anything URL-like). Manual dispatch only. Run
+# logs are public, so the script prints RESULT lines only - never session
+# values.
 
 on:
   workflow_dispatch:
@@ -15,27 +19,33 @@ on:
         required: true
         type: string
       mode:
-        description: 'inspect dumps the form; edit submits the new description'
+        description: 'inspect dumps the form; edit submits the new description; image attaches the file in `image`'
         required: true
         default: 'inspect'
         type: choice
         options:
           - inspect
           - edit
+          - image
       sample_id:
         description: 'Portfolio sample id (default 61734)'
         required: false
         default: '61734'
+        type: string
+      title:
+        description: 'Expected sample title (the form must show it, else abort)'
+        required: false
+        default: ''
         type: string
       description:
         description: 'New description (edit mode only; no links/addresses)'
         required: false
         default: ''
         type: string
-      expected_title:
-        description: 'Title the edit form must show (safety check)'
+      image:
+        description: 'Repo-relative image path to attach (image mode only, e.g. scripts/site_proposal/assets/stars_new.png)'
         required: false
-        default: 'چت‌بات هوشمند سایت'
+        default: ''
         type: string
 
 run-name: parscoders-sample-edit ${{ inputs.mode }} ${{ inputs.sample_id }}
@@ -94,8 +104,9 @@ jobs:
           EDIT_JOB_ID: ${{ inputs.job_id }}
           EDIT_MODE: ${{ inputs.mode }}
           SAMPLE_ID: ${{ inputs.sample_id }}
+          EXPECTED_TITLE: ${{ inputs.title }}
           NEW_DESCRIPTION: ${{ inputs.description }}
-          EXPECTED_TITLE: ${{ inputs.expected_title }}
+          IMAGE_FILE: ${{ inputs.image }}
         run: python3 scripts/site_proposal/parscoders_sample_edit.py
 
       - name: Commit and push results (private repo)
