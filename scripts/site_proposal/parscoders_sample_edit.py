@@ -216,10 +216,22 @@ def main():
                     edit_url = l["href"]
             result["show_url"] = show_url
             result["edit_url"] = edit_url
+            result["edit_url_source"] = "list-link" if edit_url else ""
+            result["portfolio_links"] = [
+                l for l in links if "/resume/portfolio/" in l["href"]][:40]
             print(f"list show_url={show_url} edit_url={edit_url}")
-            if not show_url or not edit_url:
+            if not show_url:
                 print("RESULT sample_links_not_found")
                 return 1
+            if not edit_url:
+                # Under-review samples show NO edit link on the list page
+                # (only rejected ones do). The direct update-new URL may
+                # still open the form — try it, and let the title check
+                # below abort if the site refuses the edit.
+                edit_url = f"/resume/portfolio/{sample_id}/update-new"
+                result["edit_url"] = edit_url
+                result["edit_url_source"] = "constructed-fallback"
+                print(f"list: no edit link; falling back to constructed {edit_url}")
 
             # 3. Show page: rejection reason, current description, images.
             page.goto(SITE + show_url, wait_until="domcontentloaded", timeout=60000)
