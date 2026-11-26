@@ -312,15 +312,28 @@ def main():
                   f"crop={str(old_crop)[:120]!r} widget_imgs={len(widget.get('widget_imgs', []))}")
 
             # Title sanity check: the form must be for the expected sample.
+            # NOTE: check ONLY the form fields, never the whole body text —
+            # the portfolio LIST page also contains the title, and a
+            # redirect back to the list (site blocks edits in this status)
+            # must NOT pass as "the right form". Also require the URL to
+            # still be the update-new page.
             form_text = json.dumps(forms, ensure_ascii=False)
-            title_ok = expected_title in form_text or expected_title in body_text
+            on_edit_page = "update-new" in page.url
+            title_ok = on_edit_page and (expected_title in form_text)
             result["title_matches_expected"] = title_ok
-            if not title_ok:
-                print("RESULT title_mismatch (not the expected sample)")
-                return 1
-
+            result["on_edit_page"] = on_edit_page
+            # Write inspect.json BEFORE the title abort, so a blocked edit
+            # still leaves its evidence (final URL, body, forms) on disk.
             with open(out_dir / "inspect.json", "w", encoding="utf-8") as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
+            if not title_ok:
+                if not on_edit_page:
+                    print("RESULT edit_page_blocked "
+                          "(update-new redirected away — site refuses the edit)")
+                else:
+                    print("RESULT title_mismatch (not the expected sample)")
+                return 1
+
             print("RESULT inspect_ok")
             if mode == "inspect":
                 return 0
