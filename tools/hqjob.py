@@ -156,19 +156,26 @@ async def run_job(c, alias):
             kind = job.get("kind") or "image"
             items = list(cand.generated_videos or []) if kind == "video" else list(cand.generated_images or cand.web_images or [])
             if not items: return result(False, error="no media: " + text[:200])
-            for it in items[:4]:
-                stem = uuid.uuid4().hex
-                fn = stem + (".mp4" if kind == "video" else ".png"); r = None
-                for att in range(40 if kind == "video" else 3):   # video URL answers 403/206 until Veo has finished rendering
-                    try:
-                        kw = {"client": getattr(c, "_live_client", None) or c.client} if att % 2 else {}
-                        r = await asyncio.wait_for(it.save(path=OUT + "/files", filename=fn, **kw), 900); break
-                    except Exception as e:
-                        if att == (39 if kind == "video" else 2) or not any(x in str(e) for x in ("403", "404", "429", "500", "502", "503")): raise
-                        print("media save retry", att, str(e)[:80], file=sys.stderr); await asyncio.sleep(20)
-                if isinstance(r, dict): r = next((v for v in r.values() if str(v).endswith(".mp4")), None) or next(iter(r.values()), None)
-                if isinstance(r, (list, tuple)): r = r[0] if r else None
-                if r and os.path.exists(str(r)): names.append(os.path.basename(str(r)))
+            # owner 2026-11-27: lh3/fife refuse the Oracle Xray exit (403 on every
+            # download, full-size RPC and preview alike). Fetch the bytes direct
+            # from the runner IP instead; generation itself stays on the proxy.
+            direct = _AS(impersonate="chrome145", allow_redirects=True, cookies=getattr(c, "cookies", None))
+            try:
+                for it in items[:4]:
+                    stem = uuid.uuid4().hex
+                    fn = stem + (".mp4" if kind == "video" else ".png"); r = None
+                    for att in range(40 if kind == "video" else 3):   # video URL answers 403/206 until Veo has finished rendering
+                        try:
+                            r = await asyncio.wait_for(it.save(path=OUT + "/files", filename=fn, client=direct), 900); break
+                        except Exception as e:
+                            if att == (39 if kind == "video" else 2) or not any(x in str(e) for x in ("403", "404", "429", "500", "502", "503")): raise
+                            print("media save retry", att, str(e)[:80], file=sys.stderr); await asyncio.sleep(20)
+                    if isinstance(r, dict): r = next((v for v in r.values() if str(v).endswith(".mp4")), None) or next(iter(r.values()), None)
+                    if isinstance(r, (list, tuple)): r = r[0] if r else None
+                    if r and os.path.exists(str(r)): names.append(os.path.basename(str(r)))
+            finally:
+                try: await direct.close()
+                except Exception: pass
             if not names: return result(False, error="media files could not be saved")
         open(OUT + "/answer.txt", "w").write(text)
         return result(True, files=names)
