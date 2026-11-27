@@ -133,7 +133,6 @@ async def run_job(c, alias):
     eng, prompt = job["engine"], job["prompt"]
     if eng == "keepalive": open(OUT + "/answer.txt", "w").write(""); return result(True, files=[])
     wm = job.get("model") or "gemini-flash"; level = int(job.get("level") or 2)
-    if eng == "media": wm = "gemini-flash"
     if wm not in alias: return result(False, error=f"model {wm} not available on this account")
     try:
         files = [fetch_ref(r, i) for i, r in enumerate(job.get("refs") or [])] or None
