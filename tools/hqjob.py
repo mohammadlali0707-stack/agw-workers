@@ -151,26 +151,29 @@ async def run_job(c, alias):
         REQ_OVERRIDES.set(None)
         o = await asyncio.wait_for(c.generate_content(prompt, files=files, model=alias[wm]), 900 if eng == "media" else 300)
         cand = o.candidates[0]; text = cand.text or ""
-        names = []
+        names = []; urls = []
         if eng == "media":
             kind = job.get("kind") or "image"
             items = list(cand.generated_videos or []) if kind == "video" else list(cand.generated_images or cand.web_images or [])
             if not items: return result(False, error="no media: " + text[:200])
+            urls = [getattr(it, "url", "") for it in items]
             if job.get("capture_urls"):
-                urls = [getattr(it, "url", "") for it in items]
                 open(OUT + "/answer.txt", "w").write(chr(10).join(urls))
-                return result(True, files=[], image_urls=urls)
+                if not job.get("auth_download"):
+                    return result(True, files=[], image_urls=urls)
             # owner 2026-11-27: lh3/fife refuse the Oracle Xray exit (403 on every
             # download, full-size RPC and preview alike). Fetch the bytes direct
             # from the runner IP instead; generation itself stays on the proxy.
-            direct = _AS(impersonate="chrome145", allow_redirects=True, cookies=getattr(c, "cookies", None))
+            direct = None if job.get("auth_download") else _AS(impersonate="chrome145", allow_redirects=True, cookies=getattr(c, "cookies", None))
+            live = getattr(c, "_live_client", None) or c.client
+            sess = live if job.get("auth_download") else direct
             try:
                 for it in items[:4]:
                     stem = uuid.uuid4().hex
                     fn = stem + (".mp4" if kind == "video" else ".png"); r = None
                     for att in range(40 if kind == "video" else 3):   # video URL answers 403/206 until Veo has finished rendering
                         try:
-                            r = await asyncio.wait_for(it.save(path=OUT + "/files", filename=fn, client=direct), 900); break
+                            r = await asyncio.wait_for(it.save(path=OUT + "/files", filename=fn, client=sess), 900); break
                         except Exception as e:
                             if att == (39 if kind == "video" else 2) or not any(x in str(e) for x in ("403", "404", "429", "500", "502", "503")): raise
                             print("media save retry", att, str(e)[:80], file=sys.stderr); await asyncio.sleep(20)
@@ -178,11 +181,12 @@ async def run_job(c, alias):
                     if isinstance(r, (list, tuple)): r = r[0] if r else None
                     if r and os.path.exists(str(r)): names.append(os.path.basename(str(r)))
             finally:
-                try: await direct.close()
-                except Exception: pass
-            if not names: return result(False, error="media files could not be saved")
+                if direct:
+                    try: await direct.close()
+                    except Exception: pass
+            if not names: return result(False, error="media files could not be saved", image_urls=urls)
         open(OUT + "/answer.txt", "w").write(text)
-        return result(True, files=names)
+        return result(True, files=names, image_urls=urls if job.get("capture_urls") else None)
     except Exception as e:
         return result(False, error=f"{type(e).__name__}: {str(e)[:200]}")
 sys.exit(asyncio.run(main()))
