@@ -156,6 +156,11 @@ async def run_job(c, alias):
             kind = job.get("kind") or "image"
             items = list(cand.generated_videos or []) if kind == "video" else list(cand.generated_images or cand.web_images or [])
             if not items: return result(False, error="no media: " + text[:200])
+            if job.get("capture_urls"):
+                urls = [getattr(it, "url", "") for it in items]
+                open(OUT + "/answer.txt", "w").write("
+".join(urls))
+                return result(True, files=[], image_urls=urls)
             # owner 2026-11-27: lh3/fife refuse the Oracle Xray exit (403 on every
             # download, full-size RPC and preview alike). Fetch the bytes direct
             # from the runner IP instead; generation itself stays on the proxy.
