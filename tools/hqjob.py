@@ -158,8 +158,7 @@ async def run_job(c, alias):
             if not items: return result(False, error="no media: " + text[:200])
             if job.get("capture_urls"):
                 urls = [getattr(it, "url", "") for it in items]
-                open(OUT + "/answer.txt", "w").write("
-".join(urls))
+                open(OUT + "/answer.txt", "w").write(chr(10).join(urls))
                 return result(True, files=[], image_urls=urls)
             # owner 2026-11-27: lh3/fife refuse the Oracle Xray exit (403 on every
             # download, full-size RPC and preview alike). Fetch the bytes direct
