@@ -1,0 +1,82 @@
+##TBS##{"v":1,"probe":"agw_worker_effect","status":"empty","data":{"tag":"issue-184-acc2-284c8c8e11e0-w03","commits":1,"files_changed":3,"checkout":"/home/runner/work/_temp/agent-repo-46121081145-1-run-agy"}}
+Worker committed 1 commit(s), 3 file(s) changed.
+
+---
+
+Invoking AGY with model: gemini-3.8-flash-high
+### Work Plan
+
+1. **Inspect existing script**: View `scripts/site_proposal/parscoders_profile_probe.py` using `view_file` to analyze existing navigation logic, error handling, retry mechanisms, and current line count.
+2. **Check team board**: Run `python3 /tmp/hqteam.py read` via `run_command` to check for any relevant notes from ACC2 teammates.
+3. **Enhance navigation resilience**: Update `scripts/site_proposal/parscoders_profile_probe.py` using `replace_file_content` to implement robust navigation logic around `page.goto()` with configurable retries, exponential backoff, and handling for transient timeouts (`net::ERR_TIMED_OUT`, `TimeoutError`, etc.), preserving comments/docstrings and ensuring total lines <= 400.
+4. **Author unit test suite**: Create `tests/test_parscoders_profile_probe.py` using `write_to_file` to verify mock timeout recovery and retry behavior offline with no live network dependencies.
+5. **Verify tests**: Run the test suite via `run_command` using `pytest` / `unittest` to ensure all tests pass cleanly offline.
+6. **Peer review**: Submit script enhancements and test suite for peer review via `python3 /tmp/hqteam.py review`. Address any feedback if `CHANGES NEEDED`.
+7. **Generate audit report**: Create `Reports/agy/acc2/parscoders-profile-probe-resilience-audit.md` documenting navigation resilience enhancements, test verification, and audit findings.
+8. **Git commit**: Stage and commit the files (`git add` and `git commit`) inside the repository checkout.
+9. **Post completion**: Post the final status to the team board using `python3 /tmp/hqteam.py post done`.
+### Execution Summary
+
+#### 1. Investigation & Root Cause Analysis
+- **Unhandled Homepage Crashes**: [`scripts/site_proposal/parscoders_profile_probe.py`](file:///home/runner/work/_temp/agent-repo-46121081145-1-run-agy/scripts/site_proposal/parscoders_profile_probe.py) invoked `page.goto(SITE + "/", wait_until="domcontentloaded", timeout=60000)` without exception handling or retry logic. Any transient packet drop or timeout (`net::ERR_TIMED_OUT`, `TimeoutError`) caused an unhandled Python traceback rather than a clean exit code 1.
+- **Profile Candidate Fragility**: Profile page candidates and secondary probes (`probe_portfolio`, `probe_sample_details`, `probe_actions_menu`) immediately surrendered on the first timeout, leaving candidate pages unscraped.
+- **Repository Script Line Budget**: The script previously was 516 lines, exceeding the repository constraint of `<= 400` lines.
+
+---
+
+#### 2. Enhancements Implemented
+- **Resilient Navigation Wrapper ([`goto_with_retry()`](file:///home/runner/work/_temp/agent-repo-46121081145-1-run-agy/scripts/site_proposal/parscoders_profile_probe.py#L68-L101))**:
+  - Implemented configurable retry loops with exponential backoff:
+    $$\text{delay} = \text{initial\_backoff} \times (\text{backoff\_factor}^{\text{attempt}})$$
+  - Configurable parameters with environment variable fallbacks:
+    - `PROBE_NAV_RETRIES` (default `3`)
+    - `PROBE_NAV_INITIAL_BACKOFF` (default `2.0`s)
+    - `PROBE_NAV_BACKOFF` (default `2.0`x)
+    - `PROBE_NAV_TIMEOUT_MS` (default `60000`ms)
+  - Accepts an injectable `sleep_fn` (default `time.sleep`) allowing instantaneous offline unit testing.
+- **Initial Homepage Visit Resilience**:
+  - Homepage navigation is retried up to `max_retries`. If the homepage remains unreachable after all attempts, it logs `RESULT homepage_unreachable`, writes structured diagnostics to `result.json`, and exits with code `1` cleanly.
+- **Profile Page & Probe Resilience**:
+  - Candidate profile visits, portfolio probes, sample details, and actions menu interactions now utilize `goto_with_retry()` to recover transparently from transient network hiccups.
+- **Governance & Comment Preservation**:
+  - Preserved 100% of existing module docstrings, candidate comments, and probe function docstrings.
+  - Reduced `scripts/site_proposal/parscoders_profile_probe.py` to **394 lines** (strictly `<= 400`).
+
+---
+
+#### 3. Automated Test Suite Authoring ([`tests/test_parscoders_profile_probe.py`](file:///home/runner/work/_temp/agent-repo-46121081145-1-run-agy/tests/test_parscoders_profile_probe.py))
+- Authored 13 offline unit tests covering:
+  - `TestCookieSanitization`: Cookie attribute sanitization, domain defaulting, and type enforcement.
+  - `TestGotoWithRetry`: Immediate success, transient `net::ERR_TIMED_OUT` recovery, exponential backoff timing verification, retry exhaustion, and environment variable configuration/fallback.
+  - `TestProbePageHelpers`: DOM evaluation, scrolling, and action menu extraction with mocked Playwright pages.
+  - `TestMainResilience`: Full probe run lifecycle under transient homepage timeout (recovers and completes), permanent homepage timeout (clean exit 1 with `result.json`), and candidate profile timeout (records error and continues).
+- Kept `tests/test_parscoders_profile_probe.py` at **341 lines** (strictly `<= 400`).
+
+---
+
+#### 4. Verification & Validation Results
+- **Unit Test Execution**:
+  ```text
+  $ python3 -m unittest -v tests/test_parscoders_profile_probe.py
+  Ran 13 tests in 0.038s
+  OK
+  ```
+- **Bytecode Compilation**:
+  ```text
+  $ python3 -m py_compile scripts/site_proposal/parscoders_profile_probe.py
+  (clean exit 0)
+  ```
+- **Line Count Audit**:
+  - `scripts/site_proposal/parscoders_profile_probe.py`: 394 lines (<= 400)
+  - `tests/test_parscoders_profile_probe.py`: 341 lines (<= 400)
+  - `Reports/agy/acc2/parscoders-profile-probe-resilience-audit.md`: 134 lines (<= 400)
+- **Workflow Integrity**: `.github/workflows/` untouched (0 modifications).
+
+---
+
+#### 5. Deliverables & Git Commit
+- **Peer Review**: Submitted script and test suite for review via `python3 /tmp/hqteam.py review`.
+- **Audit Verification Report**: Compiled and published at [`Reports/agy/acc2/parscoders-profile-probe-resilience-audit.md`](file:///home/runner/work/_temp/agent-repo-46121081145-1-run-agy/Reports/agy/acc2/parscoders-profile-probe-resilience-audit.md).
+- **Git Commit**: Staged and committed changes in commit `5340cf8`:
+  `parscoders-profile-probe: implement resilient navigation retry logic and offline test suite`
+- **Team Board Notification**: Posted completion via `python3 /tmp/hqteam.py post done`.
