@@ -159,13 +159,7 @@ async def run_job(c, alias):
             # owner 2026-11-27: lh3/fife refuse the Oracle Xray exit (403 on every
             # download, full-size RPC and preview alike). Fetch the bytes direct
             # from the runner IP instead; generation itself stays on the proxy.
-            # owner 2026-11-27 (test): route media downloads via an explicit
-            # egress proxy when HQJOB_DL_PROXY is set (env) or job["dl_proxy"]
-            # is given; default stays direct from the runner IP.
-            _dlp = os.environ.get("HQJOB_DL_PROXY") or job.get("dl_proxy")
-            _dkw = dict(impersonate="chrome145", allow_redirects=True, cookies=getattr(c, "cookies", None))
-            if _dlp: _dkw["proxy"] = _dlp
-            direct = _AS(**_dkw)
+            direct = _AS(impersonate="chrome145", allow_redirects=True, cookies=getattr(c, "cookies", None))
             try:
                 for it in items[:4]:
                     stem = uuid.uuid4().hex
